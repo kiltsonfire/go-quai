@@ -133,6 +133,13 @@ func (sl *Slice) Append(header *types.Header, domTerminus common.Hash, td *big.I
 	// Run Previous Coincident Reference Check (PCRC)
 	domTerminus, newTermini, err := sl.pcrc(batch, block.Header(), domTerminus)
 	if err != nil {
+		if errors.Is(err, ErrSubNotSyncedToDom) && domOrigin {
+			// retry
+			sl.procfutureHeaders()
+		} else if !domOrigin {
+			sl.addfutureHeader(block.Header())
+			return sl.nilPendingHeader, err
+		}
 		return sl.nilPendingHeader, err
 	}
 
@@ -293,7 +300,7 @@ func (sl *Slice) pcrc(batch ethdb.Batch, header *types.Header, domTerminus commo
 	termini := sl.hc.GetTerminiByHash(header.ParentHash())
 
 	if len(termini) != 4 {
-		return common.Hash{}, []common.Hash{}, errors.New("length of termini not equal to 4")
+		return common.Hash{}, []common.Hash{}, ErrSubNotSyncedToDom
 	}
 
 	newTermini := make([]common.Hash, len(termini))
