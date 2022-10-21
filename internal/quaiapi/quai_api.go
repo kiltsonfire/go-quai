@@ -577,3 +577,7 @@ func (s *PublicBlockChainQuaiAPI) GetPendingHeader(ctx context.Context) (map[str
 	marshaledPh := RPCMarshalHeader(pendingHeader)
 	return marshaledPh, nil
 }
+
+func (s *PublicBlockChainQuaiAPI) ReadyToAppend(ctx context.Context) error {
+	return s.b.ReadyToAppend()
+}

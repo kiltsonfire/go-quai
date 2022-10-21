@@ -51,12 +51,19 @@ func (c *Core) InsertChain(blocks types.Blocks) (int, error) {
 				if err == consensus.ErrFutureBlock {
 					c.sl.addfutureHeader(block.Header())
 				}
+				if err.Error() == "sub not synced to dom" {
+					return i, nil
+				}
 				log.Info("InsertChain", "err in Append core: ", err)
 				return i, err
 			}
 		} else {
 			domWait = true
-			c.sl.addfutureHeader(block.Header())
+
+			if c.StartUp() {
+				// Let the dom know that I am ready to append
+				c.sl.SignalDomReadyToAppend()
+			}
 		}
 	}
 	return len(blocks), nil
@@ -66,6 +73,12 @@ func (c *Core) InsertChain(blocks types.Blocks) (int, error) {
 // except for seal verification, seal verification is omitted
 func (c *Core) InsertChainWithoutSealVerification(block *types.Block) (int, error) {
 	return 0, nil
+}
+
+func (c *Core) ReadyToAppend() error {
+	// proc the future headers when the sub tells dom that its ready to append.
+	go c.sl.procfutureHeaders()
+	return nil
 }
 
 func (c *Core) Processor() *StateProcessor {
@@ -113,6 +126,14 @@ func (c *Core) SubRelayPendingHeader(slPendingHeader types.PendingHeader, reorg 
 
 func (c *Core) GetPendingHeader() (*types.Header, error) {
 	return c.sl.GetPendingHeader()
+}
+
+func (c *Core) SubscribeDownloaderWait(ch chan<- bool) event.Subscription {
+	return c.sl.SubscribeDownloaderWait(ch)
+}
+
+func (c *Core) StartUp() bool {
+	return c.sl.startUp
 }
 
 //---------------------//

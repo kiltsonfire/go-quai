@@ -16,6 +16,7 @@ import (
 	"github.com/dominant-strategies/go-quai/core/types"
 	"github.com/dominant-strategies/go-quai/core/vm"
 	"github.com/dominant-strategies/go-quai/ethdb"
+	"github.com/dominant-strategies/go-quai/event"
 	"github.com/dominant-strategies/go-quai/log"
 	"github.com/dominant-strategies/go-quai/params"
 	"github.com/dominant-strategies/go-quai/quaiclient"
@@ -23,7 +24,7 @@ import (
 )
 
 const (
-	maxFutureHeaders        = 256
+	maxFutureHeaders        = 32
 	maxTimeFutureHeaders    = 30
 	pendingHeaderCacheLimit = 500
 	pendingHeaderGCTime     = 5
@@ -49,6 +50,9 @@ type Slice struct {
 	domUrl     string
 	subClients []*quaiclient.Client
 
+	scope              event.SubscriptionScope
+	downloaderWaitFeed event.Feed
+
 	futureHeaders *lru.Cache
 
 	phCachemu sync.RWMutex
@@ -56,18 +60,24 @@ type Slice struct {
 	nilHeader        *types.Header
 	nilPendingHeader types.PendingHeader
 
+	startUp bool
+
 	pendingHeader common.Hash
 	phCache       map[common.Hash]types.PendingHeader
+
+	knotHeaders []*types.Header
 }
 
 func NewSlice(db ethdb.Database, config *Config, txConfig *TxPoolConfig, isLocalBlock func(block *types.Header) bool, chainConfig *params.ChainConfig, domClientUrl string, subClientUrls []string, engine consensus.Engine, cacheConfig *CacheConfig, vmConfig vm.Config, genesis *Genesis) (*Slice, error) {
 	nodeCtx := common.NodeLocation.Context()
 	sl := &Slice{
-		config:  chainConfig,
-		engine:  engine,
-		sliceDb: db,
-		domUrl:  domClientUrl,
-		quit:    make(chan struct{}),
+		config:      chainConfig,
+		engine:      engine,
+		sliceDb:     db,
+		domUrl:      domClientUrl,
+		quit:        make(chan struct{}),
+		startUp:     false,
+		knotHeaders: make([]*types.Header, 0),
 	}
 
 	futureHeaders, _ := lru.New(maxFutureHeaders)
@@ -106,6 +116,8 @@ func NewSlice(db ethdb.Database, config *Config, txConfig *TxPoolConfig, isLocal
 		return nil, err
 	}
 
+	go sl.KnotAppended()
+
 	go sl.updateFutureHeaders()
 	go sl.updatePendingHeadersCache()
 
@@ -115,14 +127,26 @@ func NewSlice(db ethdb.Database, config *Config, txConfig *TxPoolConfig, isLocal
 // Append takes a proposed header and constructs a local block and attempts to hierarchically append it to the block graph.
 // If this is called from a dominant context a domTerminus must be provided else a common.Hash{} should be used and domOrigin should be set to true.
 func (sl *Slice) Append(header *types.Header, domTerminus common.Hash, td *big.Int, domOrigin bool, reorg bool) (types.PendingHeader, error) {
+
 	nodeCtx := common.NodeLocation.Context()
 	location := header.Location()
+
+	// Don't append the block which already exists in the database.
+	if sl.hc.HasHeader(header.Hash(), header.NumberU64()) {
+		// Remove the header from the future headers cache
+		sl.futureHeaders.Remove(header.Hash())
+
+		log.Warn("Block has already been appended: ", "Hash: ", header.Hash())
+		return sl.nilPendingHeader, nil
+	}
+
+	// Pause the downloader at the start of append
+	sl.downloaderWaitFeed.Send(true)
 
 	// Construct the block locally
 	block := sl.ConstructLocalBlock(header)
 	if block == nil {
-		// add the block to the future header cache
-		sl.addfutureHeader(header)
+		// TODO: add the block to the future header cache?
 		return sl.nilPendingHeader, errors.New("could not find the tx and uncle data to match the header root hash")
 	}
 
@@ -133,12 +157,20 @@ func (sl *Slice) Append(header *types.Header, domTerminus common.Hash, td *big.I
 	// Run Previous Coincident Reference Check (PCRC)
 	domTerminus, newTermini, err := sl.pcrc(batch, block.Header(), domTerminus)
 	if err != nil {
-		if errors.Is(err, ErrSubNotSyncedToDom) && domOrigin {
-			// retry
-			sl.procfutureHeaders()
-		} else if !domOrigin {
-			sl.addfutureHeader(block.Header())
-			return sl.nilPendingHeader, err
+		if err.Error() == "sub not synced to dom" {
+			if domOrigin {
+				// This means we are not in sync with dom, so get more blocks from
+				// the downloader.
+				sl.downloaderWaitFeed.Send(false)
+				// If dom tries to append the block and sub is not in sync.
+				// proc the future header cache.
+				go sl.procfutureHeaders()
+			} else {
+				// If we are not synced and we get a future block add it to the future
+				// header cache.
+				sl.addfutureHeader(block.Header())
+				return sl.nilPendingHeader, err
+			}
 		}
 		return sl.nilPendingHeader, err
 	}
@@ -164,6 +196,17 @@ func (sl *Slice) Append(header *types.Header, domTerminus common.Hash, td *big.I
 	if nodeCtx != common.ZONE_CTX {
 		subPendingHeader, err = sl.subClients[location.SubLocation()].Append(context.Background(), block.Header(), domTerminus, td, true, reorg)
 		if err != nil {
+			// Since the error is coming from the sub client we cannot compare pointers
+			// we have to compare the string value of the error until the error codes
+			// are in place
+			if err.Error() == "sub not synced to dom" {
+				// check if the block is not dom origin before adding it to the future header cache.
+				if !domOrigin {
+					sl.addfutureHeader(block.Header())
+				} else if !domOrigin && nodeCtx == common.PRIME_CTX {
+					sl.downloaderWaitFeed.Send(true)
+				}
+			}
 			return sl.nilPendingHeader, err
 		}
 	}
@@ -207,6 +250,9 @@ func (sl *Slice) Append(header *types.Header, domTerminus common.Hash, td *big.I
 	log.Info("Appended new block", "number", block.Header().Number(), "hash", block.Hash(),
 		"uncles", len(block.Uncles()), "txs", len(block.Transactions()), "gas", block.GasUsed(),
 		"root", block.Root())
+
+	// If we have reached here, the append was successful, so we can resume the downloader.
+	sl.downloaderWaitFeed.Send(false)
 
 	return pendingHeader, nil
 }
@@ -429,7 +475,6 @@ func (sl *Slice) updatePhCache(externPendingHeader types.PendingHeader) {
 	if externPendingHeader.Header.NumberU64() > localPendingHeader.Header.NumberU64() {
 		localPendingHeader.Header = sl.combinePendingHeader(externPendingHeader.Header, localPendingHeader.Header, nodeCtx)
 		localPendingHeader.Termini = externPendingHeader.Termini
-
 		sl.setCurrentPendingHeader(localPendingHeader)
 		sl.phCache[hash] = localPendingHeader
 	}
@@ -483,19 +528,47 @@ func (sl *Slice) genesisInit(genesis *Genesis) error {
 					if err != nil {
 						log.Warn("Failed to append block", "hash:", block.Hash(), "Number:", block.Number(), "Location:", block.Header().Location(), "error:", err)
 					}
+					// append knot headers
+					sl.knotHeaders = append(sl.knotHeaders, block.Header())
 				} else if location.Region() == common.NodeLocation.Region() && len(common.NodeLocation) == common.REGION_CTX {
 					rawdb.WritePendingBlockBody(sl.sliceDb, block.Root(), block.Body())
+					// append knot headers
+					sl.knotHeaders = append(sl.knotHeaders, block.Header())
 				} else if bytes.Equal(location, common.NodeLocation) {
 					rawdb.WritePendingBlockBody(sl.sliceDb, block.Root(), block.Body())
+					// append knot headers
+					sl.knotHeaders = append(sl.knotHeaders, block.Header())
 				}
 			}
 		}
+
 	} else { // load the phCache and slice current pending header hash
 		if err := sl.loadLastState(); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// knotAppended returns true if the knot is appended.
+func (sl *Slice) KnotAppended() {
+
+	isKnotAppended := func() bool {
+		count := 0
+		for _, header := range sl.knotHeaders {
+			if sl.hc.HasHeader(header.Hash(), header.NumberU64()) {
+				count++
+			}
+		}
+		return count == len(sl.knotHeaders)
+	}
+
+	appended := false
+	for !appended {
+		appended = isKnotAppended()
+	}
+
+	sl.startUp = true
 }
 
 // setCurrentPendingHeader compares the externPh parent td to the sl.pendingHeader parent td and sets sl.pendingHeader to the exterPh if the td is greater
@@ -536,6 +609,13 @@ func (sl *Slice) combinePendingHeader(header *types.Header, slPendingHeader *typ
 	slPendingHeader.SetBloom(header.Bloom(index), index)
 
 	return slPendingHeader
+}
+
+// SignalDomReadyToAppend lets the dom know that sub is ready to append.
+func (sl *Slice) SignalDomReadyToAppend() {
+	if sl.domClient != nil {
+		sl.domClient.ReadyToAppend(context.Background())
+	}
 }
 
 // MakeDomClient creates the quaiclient for the given domurl
@@ -581,7 +661,13 @@ func (sl *Slice) procfutureHeaders() {
 
 		for i := range headers {
 			var nilHash common.Hash
-			sl.Append(headers[i], nilHash, big.NewInt(0), false, false)
+			_, err := sl.Append(headers[i], nilHash, big.NewInt(0), false, false)
+			if err != nil {
+				if err.Error() != "sub not synced to dom" {
+					// Remove the header from the future headers cache
+					sl.futureHeaders.Remove(headers[i].Hash())
+				}
+			}
 		}
 	}
 }
@@ -640,6 +726,7 @@ func (sl *Slice) Stop() {
 	// Write the ph cache to the dd.
 	rawdb.WritePhCache(sl.sliceDb, sl.phCache)
 
+	sl.scope.Close()
 	close(sl.quit)
 
 	sl.hc.Stop()
@@ -656,6 +743,10 @@ func (sl *Slice) HeaderChain() *HeaderChain { return sl.hc }
 func (sl *Slice) TxPool() *TxPool { return sl.txPool }
 
 func (sl *Slice) Miner() *Miner { return sl.miner }
+
+func (sl *Slice) SubscribeDownloaderWait(ch chan<- bool) event.Subscription {
+	return sl.scope.Track(sl.downloaderWaitFeed.Subscribe(ch))
+}
 
 func (sl *Slice) PendingBlockBody(hash common.Hash) *types.Body {
 	return rawdb.ReadPendingBlockBody(sl.sliceDb, hash)
