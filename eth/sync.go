@@ -246,16 +246,27 @@ func (cs *chainSyncer) nextSyncOp() *chainSyncOp {
 		return nil
 	}
 	// We have enough peers, check TD
-	peer := cs.handler.peers.peerWithHighestNumber()
-	if peer == nil {
+	// peer := cs.handler.peers.peerWithHighestNumber()
+	peers := cs.handler.peers.peers
+	if peers == nil {
 		return nil
 	}
-	mode, ourNumber := cs.modeAndLocalHead()
-	op := peerToSyncOp(mode, peer)
-	if op.number <= ourNumber {
-		return nil // We're in sync.
+	for _, peer := range peers {
+		// check if we have the peerHead in the db.
+		hash, number := peer.Head()
+		if cs.handler.core.HasHeader(hash, number) {
+			continue
+		}
+
+		op := peerToSyncOp(downloader.FullSync, peer.Peer)
+
+		if op.number <= cs.handler.core.GetHorizon() {
+			return nil // We're in sync.
+		}
+		return op
 	}
-	return op
+	// If there is no peer, nothing to sync.
+	return nil
 }
 
 func peerToSyncOp(mode downloader.SyncMode, p *eth.Peer) *chainSyncOp {
