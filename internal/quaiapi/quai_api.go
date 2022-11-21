@@ -524,32 +524,28 @@ func (s *PublicBlockChainQuaiAPI) ReceiveMinedHeader(ctx context.Context, raw js
 }
 
 type tdBlock struct {
-	Td          *big.Int    `json:"td"`
-	DomTerminus common.Hash `json:"domTerminus"`
-	DomOrigin   bool        `json:"domOrigin"`
-	Reorg       bool        `json:"reorg"`
+	Header        *types.Header `json:"header"`
+	PendingHeader *types.Header `json:"pendingHeader"`
+	Td            *big.Int      `json:"td"`
+	DomTerminus   common.Hash   `json:"domTerminus"`
+	DomOrigin     bool          `json:"domOrigin"`
+	Reorg         bool          `json:"reorg"`
 }
 
-func (s *PublicBlockChainQuaiAPI) Append(ctx context.Context, raw json.RawMessage) (map[string]interface{}, error) {
+func (s *PublicBlockChainQuaiAPI) Append(ctx context.Context, raw json.RawMessage) error {
 	// Decode header and transactions.
-	var head *types.Header
 	var body tdBlock
-	if err := json.Unmarshal(raw, &head); err != nil {
-		return nil, err
-	}
+
 	if err := json.Unmarshal(raw, &body); err != nil {
-		return nil, err
+		return err
 	}
 
-	pendingHeader, err := s.b.Append(head, body.DomTerminus, body.Td, body.DomOrigin, body.Reorg)
+	err := s.b.Append(body.Header, body.PendingHeader, body.DomTerminus, body.Td, body.DomOrigin, body.Reorg)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	// Marshal the output for decoding
-	fields := RPCMarshalHeader(pendingHeader.Header)
-	fields["termini"] = pendingHeader.Termini
 
-	return fields, nil
+	return nil
 }
 
 type SubRelay struct {
