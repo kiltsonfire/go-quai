@@ -53,8 +53,8 @@ type Slice struct {
 
 	phCachemu sync.RWMutex
 
-	pendingHeader common.Hash
-	phCache       map[common.Hash]types.PendingHeader
+	pendingHeaderHeadHash common.Hash
+	phCache               map[common.Hash]types.PendingHeader
 }
 
 func NewSlice(db ethdb.Database, config *Config, txConfig *TxPoolConfig, isLocalBlock func(block *types.Header) bool, chainConfig *params.ChainConfig, domClientUrl string, subClientUrls []string, engine consensus.Engine, cacheConfig *CacheConfig, vmConfig vm.Config, genesis *Genesis) (*Slice, error) {
@@ -207,13 +207,13 @@ func (sl *Slice) relayPh(updateMiner bool, reorg bool, domOrigin bool, location 
 
 	if nodeCtx == common.ZONE_CTX {
 		if updateMiner {
-			sl.phCache[sl.pendingHeader].Header.SetLocation(common.NodeLocation)
-			sl.miner.worker.pendingHeaderFeed.Send(sl.phCache[sl.pendingHeader].Header)
+			sl.phCache[sl.pendingHeaderHeadHash].Header.SetLocation(common.NodeLocation)
+			sl.miner.worker.pendingHeaderFeed.Send(sl.phCache[sl.pendingHeaderHeadHash].Header)
 			return
 		}
 	} else if !domOrigin {
 		for i := range sl.subClients {
-			sl.subClients[i].SubRelayPendingHeader(context.Background(), sl.phCache[sl.pendingHeader], reorg, location)
+			sl.subClients[i].SubRelayPendingHeader(context.Background(), sl.phCache[sl.pendingHeaderHeadHash], reorg, location)
 		}
 	}
 }
@@ -314,7 +314,7 @@ func (sl *Slice) calcTd(header *types.Header) (*big.Int, error) {
 
 // GetPendingHeader is used by the miner to request the current pending header
 func (sl *Slice) GetPendingHeader() (*types.Header, error) {
-	return sl.phCache[sl.pendingHeader].Header, nil
+	return sl.phCache[sl.pendingHeaderHeadHash].Header, nil
 }
 
 // SubRelayPendingHeader takes a pending header from the sender (ie dominant), updates the phCache with a composited header and relays result to subordinates
@@ -337,7 +337,7 @@ func (sl *Slice) SubRelayPendingHeader(pendingHeader types.PendingHeader, reorg 
 		// the pendingHeader update has already been sent to the miner for the given location in relayPh.
 		if !bytes.Equal(location, common.NodeLocation) {
 			sl.updatePhCacheFromDom(pendingHeader, common.NodeLocation.Zone(), []int{common.PRIME_CTX, common.REGION_CTX}, reorg)
-			bestPh, exists := sl.phCache[sl.pendingHeader]
+			bestPh, exists := sl.phCache[sl.pendingHeaderHeadHash]
 			if exists {
 				sl.miner.worker.pendingHeaderFeed.Send(bestPh.Header)
 			}
@@ -376,7 +376,7 @@ func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, termini
 
 	if !exists { //GENESIS ESCAPE
 		sl.phCache[hash] = pendingHeader
-		sl.pendingHeader = hash
+		sl.pendingHeaderHeadHash = hash
 		return
 	} else {
 		for _, i := range indices {
@@ -387,7 +387,7 @@ func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, termini
 	}
 
 	if reorg {
-		sl.pendingHeader = hash
+		sl.pendingHeaderHeadHash = hash
 	}
 
 }
@@ -400,7 +400,7 @@ func (sl *Slice) writeToPhCache(pendingHeaderWithTermini types.PendingHeader) {
 // pickPhCacheHead determines if the provided pendingHeader should be selected and returns true if selected
 func (sl *Slice) pickPhCacheHead(reorg bool, externPendingHeaderWithTermini types.PendingHeader) bool {
 	if reorg {
-		sl.pendingHeader = externPendingHeaderWithTermini.Termini[terminiIndex]
+		sl.pendingHeaderHeadHash = externPendingHeaderWithTermini.Termini[terminiIndex]
 		return true
 	}
 
@@ -415,10 +415,10 @@ func (sl *Slice) pickPhCacheHead(reorg bool, externPendingHeaderWithTermini type
 // setCurrentPendingHeader compares the externPh parent td to the sl.pendingHeader parent td and sets sl.pendingHeader to the exterPh if the td is greater
 func (sl *Slice) setCurrentPendingHeader(externPendingHeader types.PendingHeader) {
 	externTd := sl.hc.GetTdByHash(externPendingHeader.Header.ParentHash())
-	currentTd := sl.hc.GetTdByHash(sl.phCache[sl.pendingHeader].Header.ParentHash())
-	log.Debug("setCurrentPendingHeader:", "currentParent:", sl.phCache[sl.pendingHeader].Header.ParentHash(), "currentTd:", currentTd, "externParent:", externPendingHeader.Header.ParentHash(), "externTd:", externTd)
+	currentTd := sl.hc.GetTdByHash(sl.phCache[sl.pendingHeaderHeadHash].Header.ParentHash())
+	log.Debug("setCurrentPendingHeader:", "currentParent:", sl.phCache[sl.pendingHeaderHeadHash].Header.ParentHash(), "currentTd:", currentTd, "externParent:", externPendingHeader.Header.ParentHash(), "externTd:", externTd)
 	if currentTd.Cmp(externTd) < 0 {
-		sl.pendingHeader = externPendingHeader.Termini[terminiIndex]
+		sl.pendingHeaderHeadHash = externPendingHeader.Termini[terminiIndex]
 	}
 }
 
@@ -431,7 +431,7 @@ func (sl *Slice) init(genesis *Genesis) error {
 		// Initialize slice state for genesis knot
 		genesisHash := sl.Config().GenesisHash
 		genesisTermini := []common.Hash{genesisHash, genesisHash, genesisHash, genesisHash}
-		sl.pendingHeader = genesisHash
+		sl.pendingHeaderHeadHash = genesisHash
 		rawdb.WriteTermini(sl.sliceDb, genesisHash, genesisTermini)
 
 		// Append each of the knot blocks
@@ -617,14 +617,14 @@ func (sl *Slice) updatePendingHeadersCache() {
 // loadLastState loads the phCache and the slice pending header hash from the db.
 func (sl *Slice) loadLastState() error {
 	sl.phCache = rawdb.ReadPhCache(sl.sliceDb)
-	sl.pendingHeader = rawdb.ReadCurrentPendingHeaderHash(sl.sliceDb)
+	sl.pendingHeaderHeadHash = rawdb.ReadCurrentPendingHeaderHash(sl.sliceDb)
 	return nil
 }
 
 // Stop stores the phCache and the sl.pendingHeader hash value to the db.
 func (sl *Slice) Stop() {
 	// write the ph head hash to the db.
-	rawdb.WriteCurrentPendingHeaderHash(sl.sliceDb, sl.pendingHeader)
+	rawdb.WriteCurrentPendingHeaderHash(sl.sliceDb, sl.pendingHeaderHeadHash)
 	// Write the ph cache to the dd.
 	rawdb.WritePhCache(sl.sliceDb, sl.phCache)
 
