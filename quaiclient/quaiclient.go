@@ -153,10 +153,11 @@ func (ec *Client) Append(ctx context.Context, header *types.Header, pendingHeade
 	return nil
 }
 
-func (ec *Client) SubRelayPendingHeader(ctx context.Context, pendingHeader types.PendingHeader, reorg bool) error {
+func (ec *Client) SubRelayPendingHeader(ctx context.Context, pendingHeader types.PendingHeader, reorg bool, location common.Location) error {
 	data := map[string]interface{}{"Header": RPCMarshalHeader(pendingHeader.Header)}
 	data["Termini"] = pendingHeader.Termini
 	data["Reorg"] = reorg
+	data["Location"] = location
 
 	err := ec.c.CallContext(ctx, nil, "quai_subRelayPendingHeader", data)
 	if err != nil {
