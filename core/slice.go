@@ -185,7 +185,7 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	updateMiner := sl.pickPhCacheHead(reorg, pendingHeaderWithTermini)
 
 	// Relay the new pendingHeader
-	sl.relayPh(updateMiner, reorg, domOrigin, block.Header().Location())
+	sl.relayPh(pendingHeaderWithTermini, updateMiner, reorg, domOrigin, block.Header().Location())
 
 	// Remove the header from the future headers cache
 	sl.futureHeaders.Remove(block.Hash())
@@ -201,8 +201,8 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	return nil
 }
 
-// updateCacheAndRelay updates the pending headers cache and sends pending headers to subordinates
-func (sl *Slice) relayPh(updateMiner bool, reorg bool, domOrigin bool, location common.Location) {
+// relayPh sends pendingHeaderWithTermini to subordinates
+func (sl *Slice) relayPh(pendingHeaderWithTermini types.PendingHeader, updateMiner bool, reorg bool, domOrigin bool, location common.Location) {
 	nodeCtx := common.NodeLocation.Context()
 
 	if nodeCtx == common.ZONE_CTX {
@@ -213,7 +213,7 @@ func (sl *Slice) relayPh(updateMiner bool, reorg bool, domOrigin bool, location 
 		}
 	} else if !domOrigin {
 		for i := range sl.subClients {
-			sl.subClients[i].SubRelayPendingHeader(context.Background(), sl.phCache[sl.pendingHeaderHeadHash], reorg, location)
+			sl.subClients[i].SubRelayPendingHeader(context.Background(), pendingHeaderWithTermini, reorg, location)
 		}
 	}
 }
@@ -270,10 +270,11 @@ func (sl *Slice) pcrc(batch ethdb.Batch, header *types.Header, domTerminus commo
 		newTermini[terminiIndex] = termini[terminiIndex]
 	}
 
-	// Check for a graph twist
+	// Check for a graph acyclic reference
 	if isCoincident {
 		if termini[terminiIndex] != domTerminus {
-			return common.Hash{}, []common.Hash{}, errors.New("termini do not match, block rejected due to a twist")
+			log.Warn("Acyclic Block:", "block number", header.NumberArray(), "hash", header.Hash(), "terminus", domTerminus, "termini", termini)
+			return common.Hash{}, []common.Hash{}, errors.New("termini do not match, block rejected due to acyclic reference")
 		}
 	}
 
@@ -318,7 +319,7 @@ func (sl *Slice) GetPendingHeader() (*types.Header, error) {
 }
 
 // SubRelayPendingHeader takes a pending header from the sender (ie dominant), updates the phCache with a composited header and relays result to subordinates
-func (sl *Slice) SubRelayPendingHeader(pendingHeader types.PendingHeader, reorg bool, location common.Location) error {
+func (sl *Slice) SubRelayPendingHeader(pendingHeader types.PendingHeader, reorg bool, location common.Location) {
 	sl.phCachemu.Lock()
 	defer sl.phCachemu.Unlock()
 	nodeCtx := common.NodeLocation.Context()
@@ -326,10 +327,7 @@ func (sl *Slice) SubRelayPendingHeader(pendingHeader types.PendingHeader, reorg 
 	if nodeCtx == common.REGION_CTX {
 		sl.updatePhCacheFromDom(pendingHeader, common.NodeLocation.Region(), []int{common.PRIME_CTX}, reorg)
 		for i := range sl.subClients {
-			err := sl.subClients[i].SubRelayPendingHeader(context.Background(), sl.phCache[pendingHeader.Termini[common.NodeLocation.Region()]], reorg, location)
-			if err != nil {
-				log.Warn("SubRelayPendingHeader", "err:", err)
-			}
+			sl.subClients[i].SubRelayPendingHeader(context.Background(), sl.phCache[pendingHeader.Termini[common.NodeLocation.Region()]], reorg, location)
 		}
 	} else {
 		// This check prevents a double send to the miner.
@@ -343,7 +341,6 @@ func (sl *Slice) SubRelayPendingHeader(pendingHeader types.PendingHeader, reorg 
 			}
 		}
 	}
-	return nil
 }
 
 // computePhCache takes in an externPendingHeader and updates the pending header on the same terminus if the number is greater
@@ -374,22 +371,19 @@ func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, termini
 	hash := pendingHeader.Termini[terminiIndex]
 	localPendingHeader, exists := sl.phCache[hash]
 
-	if !exists { //GENESIS ESCAPE
-		sl.phCache[hash] = pendingHeader
-		sl.pendingHeaderHeadHash = hash
-		return
-	} else {
+	if exists {
 		for _, i := range indices {
 			localPendingHeader.Header = sl.combinePendingHeader(pendingHeader.Header, localPendingHeader.Header, i)
 		}
 		localPendingHeader.Header.SetLocation(common.NodeLocation)
 		sl.phCache[hash] = localPendingHeader
-	}
 
-	if reorg {
-		sl.pendingHeaderHeadHash = hash
+		if reorg {
+			sl.pendingHeaderHeadHash = hash
+		}
+		return
 	}
-
+	log.Warn("no pending header found for", "terminus", hash)
 }
 
 // writePhCache dom writes a given pendingHeaderWithTermini to the cache with the terminus used as the key.
