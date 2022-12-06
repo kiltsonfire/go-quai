@@ -111,15 +111,22 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	nodeCtx := common.NodeLocation.Context()
 	location := header.Location()
 
+	// Don't append the block which already exists in the database.
+	if sl.hc.HasHeader(header.Hash(), header.NumberU64()) {
+		// Remove the header from the future headers cache
+		sl.futureHeaders.Remove(header.Hash())
+
+		log.Warn("Block has already been appended: ", "Hash: ", header.Hash())
+		return nil
+	}
+
 	// Construct the block locally
 	block := sl.ConstructLocalBlock(header)
 	if block == nil {
-		// add the block to the future header cache
-		sl.addfutureHeader(header)
 		return errors.New("could not find the tx and uncle data to match the header root hash")
 	}
 
-	log.Info("Starting slice append", "hash", block.Hash(), "number", block.Number(), "location", block.Header().Location())
+	log.Info("Starting slice append", "hash", block.Hash(), "number", block.Header().NumberArray(), "location", block.Header().Location(), "parent hash", block.ParentHash())
 
 	batch := sl.sliceDb.NewBatch()
 
@@ -145,15 +152,15 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 		reorg = sl.hlcr(td)
 	}
 
+	// The compute and write of the phCache is split starting here so we need to get the lock
+	sl.phCachemu.Lock()
+	defer sl.phCachemu.Unlock()
+
 	// Upate the local pending header
 	localPendingHeader, err := sl.miner.worker.GeneratePendingHeader(block)
 	if err != nil {
 		return err
 	}
-
-	// The compute and write of the phCache is split starting here so we need to get the lock
-	sl.phCachemu.Lock()
-	defer sl.phCachemu.Unlock()
 
 	// Combine subordinates pending header with local pending header
 	pendingHeaderWithTermini := sl.computePhCache(types.PendingHeader{Header: localPendingHeader, Termini: newTermini}, domPendingHeader, domOrigin)
@@ -325,9 +332,11 @@ func (sl *Slice) SubRelayPendingHeader(pendingHeader types.PendingHeader, reorg 
 	nodeCtx := common.NodeLocation.Context()
 
 	if nodeCtx == common.REGION_CTX {
-		err := sl.updatePhCacheFromDom(pendingHeader, common.NodeLocation.Region(), []int{common.PRIME_CTX}, reorg)
-		if err != nil {
-			return
+		if location.Region() != int(common.NodeLocation[0]) {
+			err := sl.updatePhCacheFromDom(pendingHeader, common.NodeLocation.Region(), []int{common.PRIME_CTX}, reorg)
+			if err != nil {
+				return
+			}
 		}
 		for i := range sl.subClients {
 			sl.subClients[i].SubRelayPendingHeader(context.Background(), sl.phCache[pendingHeader.Termini[common.NodeLocation.Region()]], reorg, location)
