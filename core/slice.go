@@ -576,9 +576,11 @@ func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, termini
 		}
 		localPendingHeader.Header.SetLocation(common.NodeLocation)
 		sl.phCache[hash] = localPendingHeader
+		log.Debug("Setting the phCache After combine in SubRelay", "Hash (Termini)", hash, "Number", localPendingHeader.Header.NumberArray())
 
 		if reorg {
 			sl.pendingHeaderHeadHash = hash
+			log.Debug("Setting the pendingHeaderHash in updatePhCacheFromDom", "Hash", sl.pendingHeaderHeadHash, "Reorg", reorg)
 		}
 		return nil
 	}
@@ -589,12 +591,14 @@ func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, termini
 // writePhCache dom writes a given pendingHeaderWithTermini to the cache with the terminus used as the key.
 func (sl *Slice) writeToPhCache(pendingHeaderWithTermini types.PendingHeader) {
 	sl.phCache[pendingHeaderWithTermini.Termini[terminiIndex]] = pendingHeaderWithTermini
+	log.Debug("Writing to Ph cache", "Hash", pendingHeaderWithTermini.Termini[terminiIndex], "Number", pendingHeaderWithTermini.Header.NumberArray())
 }
 
 // pickPhCacheHead determines if the provided pendingHeader should be selected and returns true if selected
 func (sl *Slice) pickPhCacheHead(reorg bool, externPendingHeaderWithTermini types.PendingHeader, domOrigin bool) bool {
 	if reorg {
 		sl.pendingHeaderHeadHash = externPendingHeaderWithTermini.Termini[terminiIndex]
+		log.Debug("Setting the PendingHeaderHash: ", "Hash", sl.pendingHeaderHeadHash, "Reorg", reorg)
 		return true
 	}
 
@@ -623,6 +627,7 @@ func (sl *Slice) updateCurrentPendingHeader(externPendingHeader types.PendingHea
 	if currentTd != nil && externTd != nil {
 		if currentTd.Cmp(externTd) < 0 {
 			sl.pendingHeaderHeadHash = externPendingHeader.Termini[terminiIndex]
+			log.Debug("Setting the PendingHeaderHash: ", "Hash", sl.pendingHeaderHeadHash)
 		}
 	} else {
 		log.Warn("updateCurrentPendingHeader:", "currentParent:", sl.phCache[sl.pendingHeaderHeadHash].Header.ParentHash(), "currentTd:", currentTd, "externParent:", externPendingHeader.Header.ParentHash(), "externTd:", externTd)
