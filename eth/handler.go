@@ -41,6 +41,9 @@ const (
 	// The number is referenced from the size of tx pool.
 	txChanSize = 4096
 
+	// missingBodyChanSize is the size of channel listening to missingBodyEvent.
+	missingBodyChanSize = 10
+
 	// minPeerSend is the threshold for sending the block updates. If
 	// sqrt of len(peers) is less than 5 we make the block announcement
 	// to as much as minPeerSend peers otherwise send it to sqrt of len(peers).
@@ -99,10 +102,12 @@ type handler struct {
 	txFetcher    *fetcher.TxFetcher
 	peers        *peerSet
 
-	eventMux      *event.TypeMux
-	txsCh         chan core.NewTxsEvent
-	txsSub        event.Subscription
-	minedBlockSub *event.TypeMuxSubscription
+	eventMux       *event.TypeMux
+	txsCh          chan core.NewTxsEvent
+	txsSub         event.Subscription
+	minedBlockSub  *event.TypeMuxSubscription
+	missingBodyCh  chan *types.Header
+	missingBodySub event.Subscription
 
 	whitelist map[uint64]common.Hash
 
@@ -279,11 +284,17 @@ func (h *handler) Start(maxPeers int) {
 	h.wg.Add(2)
 	go h.chainSync.loop()
 	go h.txsyncLoop64() // TODO(karalabe): Legacy initial tx echange, drop with eth/64.
+
+	h.wg.Add(1)
+	h.missingBodyCh = make(chan *types.Header, missingBodyChanSize)
+	h.missingBodySub = h.core.SubscribeMissingBody(h.missingBodyCh)
+	go h.missingBodyLoop()
 }
 
 func (h *handler) Stop() {
-	h.txsSub.Unsubscribe()        // quits txBroadcastLoop
-	h.minedBlockSub.Unsubscribe() // quits blockBroadcastLoop
+	h.txsSub.Unsubscribe()         // quits txBroadcastLoop
+	h.minedBlockSub.Unsubscribe()  // quits blockBroadcastLoop
+	h.missingBodySub.Unsubscribe() // quits missingBodyLoop
 
 	// Quit chainSync and txsync64.
 	// After this is done, no new peers will be accepted.
@@ -395,6 +406,31 @@ func (h *handler) txBroadcastLoop() {
 		case event := <-h.txsCh:
 			h.BroadcastTransactions(event.Txs)
 		case <-h.txsSub.Err():
+			return
+		}
+	}
+}
+
+// missingBodyLoop listens to the MissingBody event in Slice and calls the blockAnnounces.
+func (h *handler) missingBodyLoop() {
+	defer h.wg.Done()
+	for {
+		select {
+		case header := <-h.missingBodyCh:
+			// Check if any of the peers have the body
+			for _, peer := range h.peers.peers {
+				if peer.KnownBlock(header.Hash()) {
+					log.Debug("Fetching the missing body from", "peer", peer.ID(), "hash", header.Hash(), "number", header.NumberU64())
+					h.blockFetcher.Notify(peer.ID(), header.Hash(), header.NumberU64(), time.Now(), peer.RequestOneHeader, peer.RequestBodies)
+					continue
+				}
+			}
+			// If none of the peers have the block, we can ask the peer with highest number for the body
+			highestPeer := h.peers.peerWithHighestNumber()
+			log.Debug("Fetching the missing body from", "peer", highestPeer.ID(), "hash", header.Hash(), "number", header.NumberU64())
+			h.blockFetcher.Notify(highestPeer.ID(), header.Hash(), header.NumberU64(), time.Now(), highestPeer.RequestOneHeader, highestPeer.RequestBodies)
+
+		case <-h.missingBodySub.Err():
 			return
 		}
 	}
