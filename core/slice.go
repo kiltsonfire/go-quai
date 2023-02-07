@@ -251,7 +251,7 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 		return nil, err
 	}
 
-	sl.writeToPhCache(pendingHeaderWithTermini)
+	sl.writeToPhCache(pendingHeaderWithTermini, true)
 	sl.pickPhCacheHead(reorg, pendingHeaderWithTermini)
 
 	// Relay the new pendingHeader
@@ -600,7 +600,8 @@ func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, termini
 			localPendingHeader.Header = sl.combinePendingHeader(pendingHeader.Header, localPendingHeader.Header, i)
 		}
 		localPendingHeader.Header.SetLocation(common.NodeLocation)
-		sl.phCache[hash] = localPendingHeader
+
+		sl.writeToPhCache(localPendingHeader, false)
 
 		sl.pickPhCacheHead(reorg, localPendingHeader)
 
@@ -610,9 +611,39 @@ func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, termini
 	return errors.New("no pending header found in cache")
 }
 
+// updateCurrentPendingHeader compares the externPh parent td to the sl.pendingHeader parent td and sets sl.pendingHeader to the exterPh if the td is greater
+func (sl *Slice) updatePendingHeader(externPendingHeader types.PendingHeader, local bool) bool {
+	externTd := sl.hc.GetTdByHash(externPendingHeader.Header.ParentHash())
+	currentTd := sl.hc.GetTdByHash(sl.phCache[sl.pendingHeaderHeadHash].Header.ParentHash())
+	log.Debug("updateCurrentPendingHeader:", "currentParent:", sl.phCache[sl.pendingHeaderHeadHash].Header.ParentHash(), "currentTd:", currentTd, "externParent:", externPendingHeader.Header.ParentHash(), "externTd:", externTd)
+	if currentTd != nil && externTd != nil {
+		if local {
+			if currentTd.Cmp(externTd) < 0 {
+				return true
+			}
+		} else {
+			if currentTd.Cmp(externTd) <= 0 {
+				return true
+			}
+		}
+	} else {
+		log.Warn("updateCurrentPendingHeader:", "currentParent:", sl.phCache[sl.pendingHeaderHeadHash].Header.ParentHash(), "currentTd:", currentTd, "externParent:", externPendingHeader.Header.ParentHash(), "externTd:", externTd)
+		return false
+	}
+	return false
+}
+
 // writePhCache dom writes a given pendingHeaderWithTermini to the cache with the terminus used as the key.
-func (sl *Slice) writeToPhCache(pendingHeaderWithTermini types.PendingHeader) {
-	sl.phCache[pendingHeaderWithTermini.Termini[terminiIndex]] = pendingHeaderWithTermini
+func (sl *Slice) writeToPhCache(pendingHeaderWithTermini types.PendingHeader, local bool) {
+	_, exist := sl.phCache[pendingHeaderWithTermini.Termini[terminiIndex]]
+	if !exist {
+		sl.phCache[pendingHeaderWithTermini.Termini[terminiIndex]] = pendingHeaderWithTermini
+		return
+	}
+	//Only write iff our context is better than current ie > td
+	if sl.updatePendingHeader(pendingHeaderWithTermini, local) {
+		sl.phCache[pendingHeaderWithTermini.Termini[terminiIndex]] = pendingHeaderWithTermini
+	}
 }
 
 // pickPhCacheHead determines if the provided pendingHeader should be selected and returns true if selected
@@ -622,25 +653,9 @@ func (sl *Slice) pickPhCacheHead(reorg bool, externPendingHeaderWithTermini type
 		sl.pendingHeaderHeadHash = externPendingHeaderWithTermini.Termini[terminiIndex]
 		return
 	}
-	if sl.updateCurrentPendingHeader(externPendingHeaderWithTermini) {
+	if reorg {
 		sl.pendingHeaderHeadHash = externPendingHeaderWithTermini.Termini[terminiIndex]
 	}
-}
-
-// updateCurrentPendingHeader compares the externPh parent td to the sl.pendingHeader parent td and sets sl.pendingHeader to the exterPh if the td is greater
-func (sl *Slice) updateCurrentPendingHeader(externPendingHeader types.PendingHeader) bool {
-	externTd := sl.hc.GetTdByHash(externPendingHeader.Header.ParentHash())
-	currentTd := sl.hc.GetTdByHash(sl.phCache[sl.pendingHeaderHeadHash].Header.ParentHash())
-	log.Debug("updateCurrentPendingHeader:", "currentParent:", sl.phCache[sl.pendingHeaderHeadHash].Header.ParentHash(), "currentTd:", currentTd, "externParent:", externPendingHeader.Header.ParentHash(), "externTd:", externTd)
-	if currentTd != nil && externTd != nil {
-		if currentTd.Cmp(externTd) < 0 {
-			sl.pendingHeaderHeadHash = externPendingHeader.Termini[terminiIndex]
-		}
-	} else {
-		log.Warn("updateCurrentPendingHeader:", "currentParent:", sl.phCache[sl.pendingHeaderHeadHash].Header.ParentHash(), "currentTd:", currentTd, "externParent:", externPendingHeader.Header.ParentHash(), "externTd:", externTd)
-		return false
-	}
-	return true
 }
 
 // init checks if the headerchain is empty and if it's empty appends the Knot
