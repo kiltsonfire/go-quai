@@ -270,11 +270,16 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 func (sl *Slice) relayPh(pendingHeaderWithTermini types.PendingHeader, updateMiner bool, reorg bool, domOrigin bool, location common.Location) {
 	nodeCtx := common.NodeLocation.Context()
 
+	log.Info("relayPh", "!domOrigin", !domOrigin)
 	if nodeCtx == common.ZONE_CTX {
 		if updateMiner {
-			sl.phCache[sl.pendingHeaderHeadHash].Header.SetLocation(common.NodeLocation)
-			sl.miner.worker.pendingHeaderFeed.Send(sl.phCache[sl.pendingHeaderHeadHash].Header)
-			return
+			bestPh, exists := sl.phCache[sl.pendingHeaderHeadHash]
+			if exists {
+				bestPh.Header.SetLocation(common.NodeLocation)
+				log.Info("relayPh", "number:", bestPh.Header.NumberArray(), "parents:", bestPh.Header.ParentHashArray(), "terminus:", bestPh.Termini, "hash:", sl.pendingHeaderHeadHash)
+				sl.miner.worker.pendingHeaderFeed.Send(bestPh.Header)
+				return
+			}
 		}
 	} else if !domOrigin {
 		for i := range sl.subClients {
@@ -544,6 +549,7 @@ func (sl *Slice) SubRelayPendingHeader(pendingHeader types.PendingHeader, reorg 
 			}
 			bestPh, exists := sl.phCache[sl.pendingHeaderHeadHash]
 			if exists {
+				log.Info("SubRelayPendingHeader", "number:", bestPh.Header.NumberArray(), "parents:", bestPh.Header.ParentHashArray(), "terminus:", bestPh.Termini, "hash:", sl.pendingHeaderHeadHash)
 				sl.miner.worker.pendingHeaderFeed.Send(bestPh.Header)
 			}
 		}
@@ -578,6 +584,7 @@ func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, termini
 	hash := pendingHeader.Termini[terminiIndex]
 	localPendingHeader, exists := sl.phCache[hash]
 
+	log.Info("updatedPhCacheFromDom", "exists", exists)
 	if exists {
 		for _, i := range indices {
 			localPendingHeader.Header = sl.combinePendingHeader(pendingHeader.Header, localPendingHeader.Header, i)
@@ -585,13 +592,20 @@ func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, termini
 		localPendingHeader.Header.SetLocation(common.NodeLocation)
 		sl.phCache[hash] = localPendingHeader
 
+		log.Info("updatedPhCacheFromDom", "reorg", reorg)
 		if reorg {
-			sl.pendingHeaderHeadHash = hash
+			sl.setPendingHeaderHeadHash(hash, localPendingHeader)
 		}
 		return nil
 	}
 	log.Warn("no pending header found for", "terminus", hash)
 	return errors.New("no pending header found in cache")
+}
+
+// setPendingHeaderHeadHash sets the best pending header hash
+func (sl *Slice) setPendingHeaderHeadHash(hash common.Hash, pendingHeader types.PendingHeader) {
+	log.Info("setPendingHeaderHeadHash", "number:", pendingHeader.Header.NumberArray(), "parents:", pendingHeader.Header.ParentHashArray(), "terminus:", pendingHeader.Termini, "hash:", hash)
+	sl.pendingHeaderHeadHash = hash
 }
 
 // writePhCache dom writes a given pendingHeaderWithTermini to the cache with the terminus used as the key.
@@ -603,10 +617,12 @@ func (sl *Slice) writeToPhCache(pendingHeaderWithTermini types.PendingHeader) {
 func (sl *Slice) pickPhCacheHead(reorg bool, externPendingHeaderWithTermini types.PendingHeader, domOrigin bool) bool {
 	localPendingHeader, exists := sl.phCache[sl.pendingHeaderHeadHash]
 
+	log.Info("pickPhCacheHead", "reorg", reorg)
 	if reorg {
 		// Knot exscape
+		log.Info("pickPhCacheHead", "!exist", !exists)
 		if !exists {
-			sl.pendingHeaderHeadHash = externPendingHeaderWithTermini.Termini[terminiIndex]
+			sl.setPendingHeaderHeadHash(externPendingHeaderWithTermini.Termini[terminiIndex], externPendingHeaderWithTermini)
 			return true
 		}
 
@@ -615,13 +631,16 @@ func (sl *Slice) pickPhCacheHead(reorg bool, externPendingHeaderWithTermini type
 		for i := 0; i < common.NodeLocation.Context(); i++ {
 			localCacheReorg = (externPendingHeaderWithTermini.Header.NumberArray()[i].Cmp(localPendingHeader.Header.NumberArray()[i]) >= 0) && localCacheReorg
 		}
+
+		log.Info("pickPhCacheHead", "localCacheReorg", localCacheReorg)
 		if localCacheReorg {
-			sl.pendingHeaderHeadHash = externPendingHeaderWithTermini.Termini[terminiIndex]
+			sl.setPendingHeaderHeadHash(externPendingHeaderWithTermini.Termini[terminiIndex], externPendingHeaderWithTermini)
 			return true
 		}
 		return false
 	}
 
+	log.Info("pickPhCacheHead", "domOrigin", domOrigin)
 	if domOrigin {
 		//calc local cache head reorg
 		localCacheReorg := true
@@ -629,7 +648,9 @@ func (sl *Slice) pickPhCacheHead(reorg bool, externPendingHeaderWithTermini type
 			localCacheReorg = (externPendingHeaderWithTermini.Header.NumberArray()[i].Cmp(localPendingHeader.Header.NumberArray()[i]) >= 0) && localCacheReorg
 		}
 
+		log.Info("pickPhCacheHead", "exists", exists, "localChacheReorg:", localCacheReorg, "externNumber", externPendingHeaderWithTermini.Header.NumberU64(), "localNumber:", localPendingHeader.Header.NumberU64())
 		if exists && localCacheReorg && (externPendingHeaderWithTermini.Header.NumberU64() > localPendingHeader.Header.NumberU64()) {
+			log.Info("639 check")
 			return sl.updateCurrentPendingHeader(externPendingHeaderWithTermini)
 		}
 	}
@@ -641,10 +662,10 @@ func (sl *Slice) pickPhCacheHead(reorg bool, externPendingHeaderWithTermini type
 func (sl *Slice) updateCurrentPendingHeader(externPendingHeader types.PendingHeader) bool {
 	externTd := sl.hc.GetTdByHash(externPendingHeader.Header.ParentHash())
 	currentTd := sl.hc.GetTdByHash(sl.phCache[sl.pendingHeaderHeadHash].Header.ParentHash())
-	log.Debug("updateCurrentPendingHeader:", "currentParent:", sl.phCache[sl.pendingHeaderHeadHash].Header.ParentHash(), "currentTd:", currentTd, "externParent:", externPendingHeader.Header.ParentHash(), "externTd:", externTd)
+	log.Info("updateCurrentPendingHeader:", "currentParent:", sl.phCache[sl.pendingHeaderHeadHash].Header.ParentHash(), "currentTd:", currentTd, "externParent:", externPendingHeader.Header.ParentHash(), "externTd:", externTd)
 	if currentTd != nil && externTd != nil {
 		if currentTd.Cmp(externTd) < 0 {
-			sl.pendingHeaderHeadHash = externPendingHeader.Termini[terminiIndex]
+			sl.setPendingHeaderHeadHash(externPendingHeader.Termini[terminiIndex], externPendingHeader)
 		}
 	} else {
 		log.Warn("updateCurrentPendingHeader:", "currentParent:", sl.phCache[sl.pendingHeaderHeadHash].Header.ParentHash(), "currentTd:", currentTd, "externParent:", externPendingHeader.Header.ParentHash(), "externTd:", externTd)
