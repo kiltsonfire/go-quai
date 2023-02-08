@@ -122,7 +122,6 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 
 	nodeCtx := common.NodeLocation.Context()
 	location := header.Location()
-	isDomCoincident := sl.engine.IsDomCoincident(header)
 
 	// Don't append the block which already exists in the database.
 	if sl.hc.HasHeader(header.Hash(), header.NumberU64()) {
@@ -156,23 +155,6 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 		return nil, err
 	}
 
-	// If this was a coincident block, our dom will be passing us a set of newly confirmed ETXs
-	// If this is not a coincident block, we need to build up the list of confirmed ETXs using the subordinate manifest
-	subRollup := types.Transactions{}
-	if !isDomCoincident {
-		newInboundEtxs, subRollup, err = sl.CollectNewlyConfirmedEtxs(block, block.Location())
-		if err != nil {
-			log.Debug("Error collecting newly confirmed etxs: ", "err", err)
-			return nil, ErrSubNotSyncedToDom
-		}
-	} else if nodeCtx < common.ZONE_CTX {
-		subRollups, err := sl.CollectSubRollups(block)
-		if err != nil {
-			return nil, err
-		}
-		subRollup = subRollups[nodeCtx+1]
-	}
-
 	// Append the new block
 	err = sl.hc.Append(batch, block, newInboundEtxs.FilterToLocation(common.NodeLocation))
 	if err != nil {
@@ -196,46 +178,15 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	// Combine subordinates pending header with local pending header
 	pendingHeaderWithTermini := sl.computePendingHeader(types.PendingHeader{Header: localPendingHeader, Termini: newTermini}, domPendingHeader, domOrigin)
 
-	// Call my sub to append the block, and collect the rolled up ETXs from that sub
-	localPendingEtxs := []types.Transactions{types.Transactions{}, types.Transactions{}, types.Transactions{}}
-	subPendingEtxs := []types.Transactions{types.Transactions{}, types.Transactions{}, types.Transactions{}}
 	if nodeCtx != common.ZONE_CTX {
 		// How to get the sub pending etxs if not running the full node?.
 		if sl.subClients[location.SubIndex()] != nil {
-			subPendingEtxs, err = sl.subClients[location.SubIndex()].Append(context.Background(), block.Header(), pendingHeaderWithTermini.Header, domTerminus, td, true, reorg, newInboundEtxs)
+			_, err = sl.subClients[location.SubIndex()].Append(context.Background(), block.Header(), pendingHeaderWithTermini.Header, domTerminus, td, true, reorg, newInboundEtxs)
 			if err != nil {
 				return nil, err
 			}
-			// Cache the subordinate's pending ETXs
-			pEtxs := types.PendingEtxs{block.Header(), subPendingEtxs}
-			if !pEtxs.IsValid(trie.NewStackTrie(nil)) {
-				return nil, errors.New("sub pending ETXs faild validation")
-			}
-			sl.AddPendingEtxs(pEtxs)
 		}
 	}
-
-	// Combine sub's pending ETXs, sub rollup, and our local ETXs into localPendingEtxs
-	// e.g. localPendingEtxs[ctx]:
-	// * for 'ctx' is dom: empty
-	// * for 'ctx' is local: ETXs emitted in this block
-	// * for 'ctx' is direct sub: replace sub pending ETXs with sub rollup ETXs
-	// * for 'ctx' is indirect sub: copy sub pending ETXs (sub's sub has already been rolled up)
-	//
-	// We get this in the following three steps:
-	// 1) Copy the rollup set for any subordinates of my subordinate (i.e. ctx >= nodeCtx+1)
-	// 2) Compute the rollup of my subordinate and assign to ctx = nodeCtx+1
-	// 3) Assign local pending ETXs to ctx = nodeCtx
-	for ctx := nodeCtx + 2; ctx < common.HierarchyDepth; ctx++ {
-		localPendingEtxs[ctx] = make(types.Transactions, len(subPendingEtxs[ctx]))
-		copy(localPendingEtxs[ctx], subPendingEtxs[ctx]) // copy pending for each indirect sub
-	}
-	if nodeCtx < common.ZONE_CTX {
-		localPendingEtxs[nodeCtx+1] = make(types.Transactions, len(subRollup))
-		copy(localPendingEtxs[nodeCtx+1], subRollup) // overwrite direct sub with sub rollup
-	}
-	localPendingEtxs[nodeCtx] = make(types.Transactions, len(block.ExtTransactions()))
-	copy(localPendingEtxs[nodeCtx], block.ExtTransactions()) // Assign our new ETXs without rolling up
 
 	// WriteTd
 	rawdb.WriteTd(batch, block.Header().Hash(), block.NumberU64(), td)
@@ -261,7 +212,7 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 		"uncles", len(block.Uncles()), "txs", len(block.Transactions()), "etxs", len(block.ExtTransactions()), "gas", block.GasUsed(),
 		"root", block.Root())
 
-	return localPendingEtxs, nil
+	return nil, nil
 }
 
 // backfillPETXs collects any missing PendingETX objects needed to process the
@@ -756,11 +707,9 @@ func (sl *Slice) ConstructLocalBlock(header *types.Header) (*types.Block, error)
 		subManifest[i] = blockHash
 	}
 	block := types.NewBlockWithHeader(header).WithBody(txs, uncles, etxs, subManifest)
-	if err := sl.validator.ValidateBody(block); err != nil {
-		return block, err
-	} else {
-		return block, nil
-	}
+
+	return block, nil
+
 }
 
 // constructLocalMinedBlock takes a header and construct the Block locally by getting the block
@@ -797,11 +746,9 @@ func (sl *Slice) ConstructLocalMinedBlock(header *types.Header) (*types.Block, e
 		subManifest[i] = blockHash
 	}
 	block := types.NewBlockWithHeader(header).WithBody(txs, uncles, etxs, subManifest)
-	if err := sl.validator.ValidateBody(block); err != nil {
-		return block, err
-	} else {
-		return block, nil
-	}
+
+	return block, nil
+
 }
 
 // combinePendingHeader updates the pending header at the given index with the value from given header.

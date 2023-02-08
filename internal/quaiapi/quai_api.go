@@ -584,26 +584,13 @@ func (s *PublicBlockChainQuaiAPI) fillSubordinateManifest(b *types.Block) (*type
 
 // ReceiveMinedHeader will run checks on the block and add to canonical chain if valid.
 func (s *PublicBlockChainQuaiAPI) ReceiveMinedHeader(ctx context.Context, raw json.RawMessage) error {
-	nodeCtx := common.NodeLocation.Context()
+
 	// Decode header and transactions.
 	var header *types.Header
 	if err := json.Unmarshal(raw, &header); err != nil {
 		return err
 	}
-	block, err := s.b.ConstructLocalMinedBlock(header)
-	if err == core.ErrBadSubManifest && nodeCtx < common.ZONE_CTX {
-		log.Info("filling sub manifest")
-		// If we just mined this block, and we have a subordinate chain, its possible
-		// the subordinate manifest in our block body is incorrect. If so, ask our sub
-		// for the correct manifest and reconstruct the block.
-		var err error
-		block, err = s.fillSubordinateManifest(block)
-		if err != nil {
-			return err
-		}
-	} else if err != nil {
-		return err
-	}
+	block, _ := s.b.ConstructLocalMinedBlock(header)
 
 	// Broadcast the block and announce chain insertion event
 	if block.Header() != nil {
