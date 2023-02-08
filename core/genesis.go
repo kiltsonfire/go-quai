@@ -390,7 +390,7 @@ func DefaultGardenGenesisBlock() *Genesis {
 		Nonce:      67,
 		ExtraData:  hexutil.MustDecode("0x3535353535353535353535353535353535353535353535353535353535353535"),
 		GasLimit:   []uint64{1000000, 1000000, 1000000},
-		Difficulty: []*big.Int{big.NewInt(32048576), big.NewInt(8048576), big.NewInt(2048576)},
+		Difficulty: []*big.Int{big.NewInt(162048576), big.NewInt(18048576), big.NewInt(2048576)},
 		Alloc:      decodePrealloc(gardenAllocData),
 	}
 }
