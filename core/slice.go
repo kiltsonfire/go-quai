@@ -555,9 +555,9 @@ func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, termini
 		}
 		combinedPendingHeader.SetLocation(common.NodeLocation)
 
-		sl.writeToPhCache(types.PendingHeader{Header: combinedPendingHeader, Termini: localPendingHeader.Termini}, false, terminiIndex)
+		sl.writeToPhCache(types.PendingHeader{Header: combinedPendingHeader, Termini: localPendingHeader.Termini}, false, 3)
 
-		sl.pickPhCacheHead(reorg, types.PendingHeader{Header: combinedPendingHeader, Termini: localPendingHeader.Termini}, terminiIndex)
+		sl.pickPhCacheHead(reorg, types.PendingHeader{Header: combinedPendingHeader, Termini: localPendingHeader.Termini}, 3)
 
 		return nil
 	}
