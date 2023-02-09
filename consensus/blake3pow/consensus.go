@@ -339,8 +339,12 @@ func (blake3pow *Blake3pow) CalcDifficulty(chain consensus.ChainHeaderReader, pa
 	if x.Cmp(params.MinimumDifficulty[nodeCtx]) < 0 {
 		x.Set(params.MinimumDifficulty[nodeCtx])
 	}
+	if parent.NumberU64() > 10 {
+		return parent.Difficulty()
+	} else {
+		return x
+	}
 
-	return x
 }
 
 func (blake3pow *Blake3pow) IsDomCoincident(header *types.Header) bool {
