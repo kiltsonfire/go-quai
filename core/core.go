@@ -101,6 +101,7 @@ func (c *Core) InsertChain(blocks types.Blocks) (int, error) {
 				err.Error() == ErrDomClientNotUp.Error() {
 				log.Info("Cannot append yet.", "hash", block.Hash())
 				c.addFutureBlock(block)
+				fmt.Println(block.Header())
 				return idx, ErrPendingBlock
 			} else if err.Error() != ErrKnownBlock.Error() {
 				log.Info("Append failed.", "hash", block.Hash(), "err", err)
@@ -145,6 +146,7 @@ func (c *Core) serviceFutureBlock(block *types.Block) {
 		}
 		if block != nil {
 			c.futureBlocks.ContainsOrAdd(block.Hash(), block)
+			fmt.Println(block.Header())
 		} else {
 			log.Warn("addFutureBlock attempt to add nil block to futureBlocks")
 		}
@@ -159,6 +161,7 @@ func (c *Core) addFutureBlock(block *types.Block) error {
 	}
 	if block != nil {
 		c.futureBlocks.ContainsOrAdd(block.Hash(), block)
+		fmt.Println(block.Header())
 	} else {
 		log.Warn("addFutureBlock attempt to add nil block to futureBlocks")
 	}
