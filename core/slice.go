@@ -186,7 +186,11 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	}
 
 	fmt.Println("DeltaS: ", deltaS)
+	rawdb.WriteS(batch, block.Header().Hash(), block.NumberU64(), s)
 	rawdb.WriteDeltaS(batch, header.Hash(), header.NumberU64(), deltaS)
+
+	rawdb.WriteSubDeltaS(sl.sliceDb, header.Hash(), header.NumberU64(), []*big.Float{big.NewFloat(10), big.NewFloat(0), big.NewFloat(0)})
+	fmt.Println("SubDeltaS", rawdb.ReadSubDeltaS(sl.sliceDb, header.Hash(), header.NumberU64()))
 
 	reorg = sl.poem(s)
 
@@ -241,7 +245,6 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	copy(localPendingEtxs[nodeCtx], block.ExtTransactions()) // Assign our new ETXs without rolling up
 
 	// WriteTd
-	rawdb.WriteS(batch, block.Header().Hash(), block.NumberU64(), s)
 	rawdb.WriteTd(batch, block.Header().Hash(), block.NumberU64(), big.NewInt(0))
 
 	//Append has succeeded write the batch

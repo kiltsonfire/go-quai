@@ -475,6 +475,13 @@ func (hc *HeaderChain) GetDeltaS(hash common.Hash, number uint64) *big.Float {
 	return deltaS
 }
 
+// GetSubDeltaS retrieves a sub chain block's change in entropy since the last dom in the canonical chain from the
+// database by hash and number, caching it if found.
+func (hc *HeaderChain) GetSubDeltaS(hash common.Hash, number uint64) []*big.Float {
+	deltaS := rawdb.ReadSubDeltaS(hc.headerDb, hash, number)
+	return deltaS
+}
+
 // GetTdByHash retrieves a block's total difficulty in the canonical chain from the
 // database by hash, caching it if found.
 func (hc *HeaderChain) GetTdByHash(hash common.Hash) *big.Int {
