@@ -178,21 +178,23 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 		return nil, nil, err
 	}
 
+	var subEntropyArray []*big.Float
 	// Calc entropy
-	s, deltaS, err := sl.calcS(block.Header(), domS, domOrigin)
-	fmt.Println("Block Entropy: ", s)
-	if err != nil {
-		return nil, nil, err
+	if nodeCtx == common.ZONE_CTX {
+		s, deltaS, err := sl.calcS(block.Header(), domS, domOrigin)
+		fmt.Println("Block Entropy: ", s)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		fmt.Println("DeltaS: ", deltaS)
+		rawdb.WriteDeltaS(batch, header.Hash(), header.NumberU64(), deltaS)
+		rawdb.WriteS(batch, block.Header().Hash(), block.NumberU64(), s)
+
+		reorg = sl.poem(s)
+	} else {
+		subEntropyArray = sl.hc.GetSubDeltaS(header.ParentHash(), header.NumberU64()-1)
 	}
-
-	fmt.Println("DeltaS: ", deltaS)
-	rawdb.WriteS(batch, block.Header().Hash(), block.NumberU64(), s)
-	rawdb.WriteDeltaS(batch, header.Hash(), header.NumberU64(), deltaS)
-
-	rawdb.WriteSubDeltaS(sl.sliceDb, header.Hash(), header.NumberU64(), []*big.Float{big.NewFloat(10), big.NewFloat(0), big.NewFloat(0)})
-	fmt.Println("SubDeltaS", rawdb.ReadSubDeltaS(sl.sliceDb, header.Hash(), header.NumberU64()))
-
-	reorg = sl.poem(s)
 
 	// Upate the local pending header
 	localPendingHeader, err := sl.miner.worker.GeneratePendingHeader(block)
@@ -206,10 +208,11 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	// Call my sub to append the block, and collect the rolled up ETXs from that sub
 	localPendingEtxs := []types.Transactions{types.Transactions{}, types.Transactions{}, types.Transactions{}}
 	subPendingEtxs := []types.Transactions{types.Transactions{}, types.Transactions{}, types.Transactions{}}
+	var deltaS *big.Float
 	if nodeCtx != common.ZONE_CTX {
 		// How to get the sub pending etxs if not running the full node?.
 		if sl.subClients[location.SubIndex()] != nil {
-			subPendingEtxs, s, err = sl.subClients[location.SubIndex()].Append(context.Background(), block.Header(), pendingHeaderWithTermini.Header, domTerminus, s, true, reorg, newInboundEtxs)
+			subPendingEtxs, deltaS, err = sl.subClients[location.SubIndex()].Append(context.Background(), block.Header(), pendingHeaderWithTermini.Header, domTerminus, subEntropyArray[header.Location().SubIndex()], true, reorg, newInboundEtxs)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -219,6 +222,13 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 				return nil, nil, errors.New("sub pending ETXs faild validation")
 			}
 			sl.AddPendingEtxs(pEtxs)
+			for i, _ := range subEntropyArray {
+				if i != header.Location().SubIndex() {
+					subEntropyArray[i].Add(subEntropyArray[i], deltaS)
+				} else {
+					subEntropyArray[i].Set(big.NewFloat(0))
+				}
+			}
 		}
 	}
 
@@ -245,6 +255,7 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	copy(localPendingEtxs[nodeCtx], block.ExtTransactions()) // Assign our new ETXs without rolling up
 
 	// WriteTd
+	rawdb.WriteSubDeltaS(batch, header.Hash(), header.NumberU64(), subEntropyArray)
 	rawdb.WriteTd(batch, block.Header().Hash(), block.NumberU64(), big.NewInt(0))
 
 	//Append has succeeded write the batch
