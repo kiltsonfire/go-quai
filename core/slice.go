@@ -128,7 +128,7 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	location := header.Location()
 
 	// Don't append the block which already exists in the database.
-	if sl.hc.HasHeader(header.Hash(), header.NumberU64()) && (sl.hc.GetTd(header.Hash(), header.NumberU64()) != nil) {
+	if sl.hc.HasHeader(header.Hash(), header.NumberU64()) && (sl.hc.GetS(header.Hash(), header.NumberU64()) != nil) {
 		log.Warn("Block has already been appended: ", "Hash: ", header.Hash())
 		return nil, nil, ErrKnownBlock
 	}
@@ -179,11 +179,16 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	}
 
 	// Calc entropy
-	s, err := sl.calcS(block.Header(), domS, domOrigin)
-	if !domOrigin {
-		// POEM
-		reorg = sl.poem(s)
+	s, deltaS, err := sl.calcS(block.Header(), domS, domOrigin)
+	fmt.Println("Block Entropy: ", s)
+	if err != nil {
+		return nil, nil, err
 	}
+
+	fmt.Println("DeltaS: ", deltaS)
+	rawdb.WriteDeltaS(batch, header.Hash(), header.NumberU64(), deltaS)
+
+	reorg = sl.poem(s)
 
 	// Upate the local pending header
 	localPendingHeader, err := sl.miner.worker.GeneratePendingHeader(block)
@@ -237,6 +242,7 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 
 	// WriteTd
 	rawdb.WriteS(batch, block.Header().Hash(), block.NumberU64(), s)
+	rawdb.WriteTd(batch, block.Header().Hash(), block.NumberU64(), big.NewInt(0))
 
 	//Append has succeeded write the batch
 	if err := batch.Write(); err != nil {
@@ -461,39 +467,48 @@ func (sl *Slice) poem(externS *big.Float) bool {
 }
 
 // CalcS calculates the entropy of the given header
-func (sl *Slice) calcS(header *types.Header, domS *big.Float, domOrigin bool) (*big.Float, error) {
+func (sl *Slice) calcS(header *types.Header, domS *big.Float, domOrigin bool) (*big.Float, *big.Float, error) {
 	var priorS *big.Float
+	var priorDeltaS *big.Float
 	if header.ParentHash() == sl.config.GenesisHash {
 		priorS = big.NewFloat(0)
+		priorDeltaS = big.NewFloat(0)
+		fmt.Println("Parent Hash is genesis")
 	} else {
 		priorS = sl.hc.GetS(header.ParentHash(), header.NumberU64()-1)
+		priorDeltaS = sl.hc.GetDeltaS(header.ParentHash(), header.NumberU64()-1)
+		fmt.Println("Parent S: ", priorS)
 	}
 
 	if priorS == nil {
-		return nil, consensus.ErrFutureBlock
+		return nil, nil, consensus.ErrFutureBlock
 	}
 
-	S := priorS.Add(priorS, sl.calcIntrinsicS(header.Hash()))
+	intrinsicS := sl.calcIntrinsicS(header.Hash())
+	fmt.Println("Intrinsic block S: ", intrinsicS)
+
+	S := priorS.Add(priorS, intrinsicS)
+	deltaS := priorDeltaS.Add(priorDeltaS, intrinsicS)
 
 	if domOrigin {
-		deltaS := sl.hc.GetDeltaS(header.ParentHash(), header.NumberU64()-1)
 		// If its a dom block we need to add deltaS to domS
-		return domS.Add(domS, deltaS), nil
+		return domS.Add(domS, deltaS), big.NewFloat(0), nil
 	}
 
-	return S, nil
+	return S, deltaS, nil
 }
 
 // calcIntrinsicS
 func (sl *Slice) calcIntrinsicS(hash common.Hash) *big.Float {
-	const mantBits = 16
+	const mantBits = 257
 	x := new(big.Int).SetBytes(hash.Bytes())
+	fmt.Println("X: ", x)
 	c, m := logmath.BinaryLog(x, mantBits)
+	fmt.Println("C, M: ", c, m)
 	f := big.NewFloat(0).SetPrec(mantBits).SetInt(m)
 	f = f.SetMantExp(f, -mantBits)
 	f.Add(f, big.NewFloat(float64(c)))
-	f.Quo(f, big.NewFloat(4))
-	return f
+	return f.Sub(big.NewFloat(256), f)
 }
 
 // GetPendingHeader is used by the miner to request the current pending header
@@ -659,6 +674,8 @@ func (sl *Slice) init(genesis *Genesis) error {
 		// Initialize slice state for genesis knot
 		genesisTermini := []common.Hash{genesisHash, genesisHash, genesisHash, genesisHash}
 		rawdb.WriteTermini(sl.sliceDb, genesisHash, genesisTermini)
+		rawdb.WriteS(sl.sliceDb, genesisHash, 0, big.NewFloat(0))
+		rawdb.WriteDeltaS(sl.sliceDb, genesisHash, 0, big.NewFloat(0))
 
 		// Append each of the knot blocks
 

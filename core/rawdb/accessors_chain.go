@@ -722,7 +722,7 @@ func ReadS(db ethdb.Reader, hash common.Hash, number uint64) *big.Float {
 		return nil
 	}
 	s := new(big.Float)
-	if err := rlp.Decode(bytes.NewReader(data), s); err != nil {
+	if err := s.GobDecode(data); err != nil {
 		log.Error("Invalid block total entropy RLP", "hash", hash, "err", err)
 		return nil
 	}
@@ -731,7 +731,7 @@ func ReadS(db ethdb.Reader, hash common.Hash, number uint64) *big.Float {
 
 // WriteS stores the total entropy of a block into the database.
 func WriteS(db ethdb.KeyValueWriter, hash common.Hash, number uint64, S *big.Float) {
-	data, err := rlp.EncodeToBytes(S)
+	data, err := S.GobEncode()
 	if err != nil {
 		log.Crit("Failed to RLP encode block total entropy", "err", err)
 	}
@@ -754,8 +754,8 @@ func ReadDeltaS(db ethdb.Reader, hash common.Hash, number uint64) *big.Float {
 		return nil
 	}
 	deltaS := new(big.Float)
-	if err := rlp.Decode(bytes.NewReader(data), deltaS); err != nil {
-		log.Error("Invalid block total entropy RLP", "hash", hash, "err", err)
+	if err := deltaS.GobDecode(data); err != nil {
+		log.Error("Invalid block total entropy", "hash", hash, "err", err)
 		return nil
 	}
 	return deltaS
@@ -763,7 +763,7 @@ func ReadDeltaS(db ethdb.Reader, hash common.Hash, number uint64) *big.Float {
 
 // WriteDeltaS stores the change in entropy of a block into the database.
 func WriteDeltaS(db ethdb.KeyValueWriter, hash common.Hash, number uint64, deltaS *big.Float) {
-	data, err := rlp.EncodeToBytes(deltaS)
+	data, err := deltaS.GobEncode()
 	if err != nil {
 		log.Crit("Failed to RLP encode block delta entropy", "err", err)
 	}
