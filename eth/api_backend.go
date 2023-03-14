@@ -354,8 +354,8 @@ func (b *QuaiAPIBackend) SyncProgress() quai.SyncProgress {
 	return b.eth.Downloader().Progress()
 }
 
-func (b *QuaiAPIBackend) Append(header *types.Header, domPendingHeader *types.Header, domTerminus common.Hash, td *big.Int, domOrigin bool, reorg bool, newInboundEtxs types.Transactions) ([]types.Transactions, error) {
-	return b.eth.core.Append(header, domPendingHeader, domTerminus, td, domOrigin, reorg, newInboundEtxs)
+func (b *QuaiAPIBackend) Append(header *types.Header, domPendingHeader *types.Header, domTerminus common.Hash, domS *big.Float, domOrigin bool, reorg bool, newInboundEtxs types.Transactions) ([]types.Transactions, *big.Float, error) {
+	return b.eth.core.Append(header, domPendingHeader, domTerminus, domS, domOrigin, reorg, newInboundEtxs)
 }
 
 func (b *QuaiAPIBackend) ConstructLocalMinedBlock(header *types.Header) (*types.Block, error) {
