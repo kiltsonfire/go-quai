@@ -482,6 +482,35 @@ func (sl *Slice) calcTd(header *types.Header, domTd *big.Int, domOrigin bool) (*
 	return Td, nil
 }
 
+// CalcS calculates the entropy of the given header
+func (sl *Slice) calcS(header *types.Header, domTd *big.Int, domOrigin bool) (*big.Int, error) {
+	var priorS *big.Int
+	if header.ParentHash() == sl.config.GenesisHash {
+		priorS = common.Big0
+	} else {
+		priorS = sl.hc.GetS(header.ParentHash(), header.NumberU64()-1)
+	}
+
+	if priorS == nil {
+		return nil, consensus.ErrFutureBlock
+	}
+
+	S := priorS.Add(priorS, header.Difficulty())
+
+	if domOrigin {
+		// If its a dom block we don't compute the td, instead just return the
+		// td given by dom
+		return domTd, nil
+	}
+
+	return Td, nil
+}
+
+// calcIntrinsicS
+func (sl *Slice) calcIntrinsicS(hash common.Hash) *big.Int {
+	new(big.Int).SetBytes(hash.Bytes())
+}
+
 // GetPendingHeader is used by the miner to request the current pending header
 func (sl *Slice) GetPendingHeader() (*types.Header, error) {
 	if ph := sl.phCache[sl.bestPhKey].Header; ph != nil {

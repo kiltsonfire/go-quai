@@ -461,6 +461,13 @@ func (hc *HeaderChain) GetTd(hash common.Hash, number uint64) *big.Int {
 	return td
 }
 
+// GetS retrieves a block's total entropy in the canonical chain from the
+// database by hash and number, caching it if found.
+func (hc *HeaderChain) GetS(hash common.Hash, number uint64) *big.Int {
+	td := rawdb.ReadS(hc.headerDb, hash, number)
+	return td
+}
+
 // GetTdByHash retrieves a block's total difficulty in the canonical chain from the
 // database by hash, caching it if found.
 func (hc *HeaderChain) GetTdByHash(hash common.Hash) *big.Int {
