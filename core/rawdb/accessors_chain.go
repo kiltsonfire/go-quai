@@ -715,6 +715,70 @@ func DeleteTd(db ethdb.KeyValueWriter, hash common.Hash, number uint64) {
 	}
 }
 
+// ReadS retrieves a block's total entropy corresponding to the hash.
+func ReadS(db ethdb.Reader, hash common.Hash, number uint64) *big.Int {
+	data, _ := db.Get(headerSKey(number, hash))
+	if len(data) == 0 {
+		return nil
+	}
+	s := new(big.Int)
+	if err := rlp.Decode(bytes.NewReader(data), s); err != nil {
+		log.Error("Invalid block total entropy RLP", "hash", hash, "err", err)
+		return nil
+	}
+	return s
+}
+
+// WriteS stores the total entropy of a block into the database.
+func WriteS(db ethdb.KeyValueWriter, hash common.Hash, number uint64, S *big.Int) {
+	data, err := rlp.EncodeToBytes(S)
+	if err != nil {
+		log.Crit("Failed to RLP encode block total entropy", "err", err)
+	}
+	if err := db.Put(headerSKey(number, hash), data); err != nil {
+		log.Crit("Failed to store block total entropy", "err", err)
+	}
+}
+
+// DeleteS removes all block total entropy data associated with a hash.
+func DeleteS(db ethdb.KeyValueWriter, hash common.Hash, number uint64) {
+	if err := db.Delete(headerSKey(number, hash)); err != nil {
+		log.Crit("Failed to delete block total entropy", "err", err)
+	}
+}
+
+// ReadDeltaS retrieves a block's change in entropy corresponding to the hash.
+func ReadDeltaS(db ethdb.Reader, hash common.Hash, number uint64) *big.Int {
+	data, _ := db.Get(headerDeltaSKey(number, hash))
+	if len(data) == 0 {
+		return nil
+	}
+	deltaS := new(big.Int)
+	if err := rlp.Decode(bytes.NewReader(data), deltaS); err != nil {
+		log.Error("Invalid block total entropy RLP", "hash", hash, "err", err)
+		return nil
+	}
+	return deltaS
+}
+
+// WriteDeltaS stores the change in entropy of a block into the database.
+func WriteDeltaS(db ethdb.KeyValueWriter, hash common.Hash, number uint64, deltaS *big.Int) {
+	data, err := rlp.EncodeToBytes(deltaS)
+	if err != nil {
+		log.Crit("Failed to RLP encode block delta entropy", "err", err)
+	}
+	if err := db.Put(headerDeltaSKey(number, hash), data); err != nil {
+		log.Crit("Failed to store block delta entropy", "err", err)
+	}
+}
+
+// DeleteDeltaS removes all block change in entropy data associated with a hash.
+func DeleteDeltaS(db ethdb.KeyValueWriter, hash common.Hash, number uint64) {
+	if err := db.Delete(headerDeltaSKey(number, hash)); err != nil {
+		log.Crit("Failed to delete block delta entropy", "err", err)
+	}
+}
+
 // HasReceipts verifies the existence of all the transaction receipts belonging
 // to a block.
 func HasReceipts(db ethdb.Reader, hash common.Hash, number uint64) bool {
