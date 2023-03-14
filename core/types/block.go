@@ -31,11 +31,13 @@ import (
 	"github.com/dominant-strategies/go-quai/common/hexutil"
 	"github.com/dominant-strategies/go-quai/log"
 	"github.com/dominant-strategies/go-quai/rlp"
+	mathutil "modernc.org/mathutil"
 )
 
 var (
 	EmptyRootHash  = common.HexToHash("56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421")
 	EmptyUncleHash = RlpHash([]*Header(nil))
+	big2e256       = new(big.Int).Exp(big.NewInt(2), big.NewInt(256), nil) // 2^256
 )
 
 const C_mantBits = 64
@@ -652,6 +654,90 @@ func (h *Header) EmptyReceipts() bool {
 	return h.ReceiptHash() == EmptyRootHash
 }
 
+func (h *Header) CalcS() *big.Int {
+	order := h.CalcOrder()
+	intrinsicS := h.CalcIntrinsicS()
+	switch order {
+	case common.PRIME_CTX:
+		totalS := big.NewInt(0).Add(h.ParentEntropy(common.PRIME_CTX), h.ParentDeltaS(common.REGION_CTX))
+		totalS.Add(totalS, h.ParentDeltaS(common.ZONE_CTX))
+		totalS.Add(totalS, intrinsicS)
+		return totalS
+	case common.REGION_CTX:
+		totalS := big.NewInt(0).Add(h.ParentEntropy(common.REGION_CTX), h.ParentDeltaS(common.ZONE_CTX))
+		totalS.Add(totalS, intrinsicS)
+		return totalS
+	case common.ZONE_CTX:
+		totalS := big.NewInt(0).Add(h.ParentEntropy(common.ZONE_CTX), intrinsicS)
+		return totalS
+	}
+	if h.NumberU64() == 0 {
+		return big.NewInt(0)
+	}
+	return nil
+}
+
+func (h *Header) CalcDeltaS() *big.Int {
+	order := h.CalcOrder()
+	intrinsicS := h.CalcIntrinsicS()
+	switch order {
+	case common.PRIME_CTX:
+		return big.NewInt(0)
+	case common.REGION_CTX:
+		totalDeltaS := big.NewInt(0).Add(h.ParentDeltaS(common.REGION_CTX), h.ParentDeltaS(common.ZONE_CTX))
+		totalDeltaS = big.NewInt(0).Add(totalDeltaS, intrinsicS)
+		return totalDeltaS
+	case common.ZONE_CTX:
+		totalDeltaS := big.NewInt(0).Add(h.ParentDeltaS(common.ZONE_CTX), intrinsicS)
+		return totalDeltaS
+	}
+	return nil
+}
+
+func (h *Header) CalcOrder() int {
+	intrinsicS := h.CalcIntrinsicS()
+	// PRIME case
+	totalDeltaS := big.NewInt(0).Add(h.ParentDeltaS(common.REGION_CTX), h.ParentDeltaS(common.ZONE_CTX))
+	totalDeltaS.Add(totalDeltaS, intrinsicS)
+
+	// This is the updated the threshold calculation based on the zone difficulty threshold
+	timeFactor := big.NewInt(7)
+	zoneThresholdS := h.CalcIntrinsicS(common.BytesToHash(new(big.Int).Div(big2e256, h.Difficulty(common.ZONE_CTX)).Bytes()))
+	regionEntropyThreshold := big.NewInt(0).Mul(timeFactor, big.NewInt(common.HierarchyDepth))
+	regionEntropyThreshold = big.NewInt(0).Mul(regionEntropyThreshold, zoneThresholdS)
+
+	primeEntropyThreshold := big.NewInt(0).Mul(regionEntropyThreshold, big.NewInt(common.HierarchyDepth))
+	primeEntropyThreshold = big.NewInt(0).Mul(primeEntropyThreshold, timeFactor)
+
+	if totalDeltaS.Cmp(primeEntropyThreshold) > 0 {
+		return common.PRIME_CTX
+	}
+	// Region case
+	totalDeltaS = big.NewInt(0).Add(h.ParentDeltaS(2), intrinsicS)
+	if totalDeltaS.Cmp(regionEntropyThreshold) > 0 {
+		return common.REGION_CTX
+	}
+	// Zone case
+	if intrinsicS.Cmp(zoneThresholdS) > 0 {
+		return common.ZONE_CTX
+	}
+	return -1
+}
+
+// calcIntrinsicS
+func (h *Header) CalcIntrinsicS(args ...common.Hash) *big.Int {
+	hash := h.Hash()
+	if len(args) > 0 {
+		hash = args[0]
+	}
+	x := new(big.Int).SetBytes(hash.Bytes())
+	d := big.NewInt(0).Div(big2e256, x)
+	c, m := mathutil.BinaryLog(d, C_mantBits)
+	bigBits := big.NewInt(0).Mul(big.NewInt(int64(c)), big.NewInt(0).Exp(big.NewInt(2), big.NewInt(C_mantBits), nil))
+	bigBits = big.NewInt(0).Add(bigBits, m)
+	return bigBits
+}
+
 // Body is a simple (mutable, non-safe) data container for storing and moving
 // a block's data contents (transactions and uncles) together.
 type Body struct {
@@ -961,6 +1047,7 @@ type Blocks []*Block
 type PendingHeader struct {
 	Header  *Header
 	Termini []common.Hash
+	Entropy *big.Int
 }
 
 // BlockManifest is a list of block hashes, which implements DerivableList
@@ -983,4 +1070,83 @@ func (m BlockManifest) Size() common.StorageSize {
 type HashAndNumber struct {
 	Hash   common.Hash
 	Number uint64
+}
+
+type BestPhKey struct {
+	key       common.Hash
+	entropy   []*big.Int
+	blockHash common.Hash
+}
+
+func NewBestPhKey(key common.Hash, entropy []*big.Int, blockHash common.Hash) BestPhKey {
+	newBestPhKey := BestPhKey{}
+	newBestPhKey.SetKey(key)
+	newBestPhKey.SetEntropyArray(entropy)
+	newBestPhKey.SetBlockHash(blockHash)
+	return newBestPhKey
+}
+
+func (b *BestPhKey) SetKey(key common.Hash) {
+	b.key = key
+}
+
+func (b *BestPhKey) SetEntropyArray(entropy []*big.Int) {
+	newEntropy := make([]*big.Int, common.HierarchyDepth)
+	for i := 0; i < common.HierarchyDepth; i++ {
+		newEntropy[i] = entropy[i]
+	}
+	b.entropy = newEntropy
+}
+
+func (h *BestPhKey) SetEntropy(val *big.Int, args ...int) {
+	nodeCtx := common.NodeLocation.Context()
+	if len(args) > 0 {
+		nodeCtx = args[0]
+	}
+	h.entropy[nodeCtx] = val
+}
+
+func (b *BestPhKey) SetBlockHash(blockHash common.Hash) {
+	b.blockHash = blockHash
+}
+
+func (b *BestPhKey) Key() common.Hash {
+	return b.key
+}
+
+func (b *BestPhKey) Entropy(index int) *big.Int {
+	return b.entropy[index]
+}
+
+func (b *BestPhKey) EntropyArray() []*big.Int {
+	return b.entropy
+}
+
+func (b *BestPhKey) BlockHash() common.Hash {
+	return b.blockHash
+}
+
+type extBestPhKey struct {
+	Key       common.Hash
+	Entropy   []*big.Int
+	BlockHash common.Hash
+}
+
+// DecodeRLP decodes the Ethereum
+func (b *BestPhKey) DecodeRLP(s *rlp.Stream) error {
+	var eb extBestPhKey
+	if err := s.Decode(&eb); err != nil {
+		return err
+	}
+	b.key, b.entropy, b.blockHash = eb.Key, eb.Entropy, eb.BlockHash
+	return nil
+}
+
+// EncodeRLP serializes b into the Ethereum RLP block format.
+func (b *BestPhKey) EncodeRLP(w io.Writer) error {
+	return rlp.Encode(w, extBestPhKey{
+		Key:       b.key,
+		Entropy:   b.entropy,
+		BlockHash: b.blockHash,
+	})
 }

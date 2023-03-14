@@ -226,7 +226,9 @@ func (hc *HeaderChain) SetCurrentHeader(head *types.Header) error {
 	defer hc.headermu.Unlock()
 
 	prevHeader := hc.CurrentHeader()
-
+	if prevHeader.Hash() == head.Hash() {
+		return nil
+	}
 	//Find a common header
 	commonHeader := hc.findCommonAncestor(head)
 	newHeader := head

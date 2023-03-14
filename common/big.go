@@ -28,3 +28,12 @@ var (
 	Big256 = big.NewInt(256)
 	Big257 = big.NewInt(257)
 )
+
+// This is a helper function to copy a given big int array
+func CopyBigIntArray(original []*big.Int) []*big.Int {
+	output := make([]*big.Int, 0)
+	for _, val := range original {
+		output = append(output, val)
+	}
+	return output
+}
