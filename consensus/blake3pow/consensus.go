@@ -13,6 +13,7 @@ import (
 	"github.com/dominant-strategies/go-quai/consensus/misc"
 	"github.com/dominant-strategies/go-quai/core/state"
 	"github.com/dominant-strategies/go-quai/core/types"
+	"github.com/dominant-strategies/go-quai/log"
 	"github.com/dominant-strategies/go-quai/params"
 	"github.com/dominant-strategies/go-quai/rlp"
 	"github.com/dominant-strategies/go-quai/trie"
@@ -248,6 +249,7 @@ func (blake3pow *Blake3pow) verifyHeader(chain consensus.ChainHeaderReader, head
 		return errDifficultyCrossover
 	}
 	// Verify the block's difficulty based on its timestamp and parent's difficulty
+	fmt.Println("parent:", parent.Hash(), "genesis:", params.LocalGenesisHash, "difficulty:", parent.Difficulty())
 	expected := blake3pow.CalcDifficulty(chain, parent)
 	if expected.Cmp(header.Difficulty()) != 0 {
 		return fmt.Errorf("invalid difficulty: have %v, want %v", header.Difficulty(), expected)
@@ -339,7 +341,7 @@ func (blake3pow *Blake3pow) CalcDifficulty(chain consensus.ChainHeaderReader, pa
 		x.Set(params.MinimumDifficulty[nodeCtx])
 	}
 
-	return x
+	return parent.Difficulty()
 }
 
 func (blake3pow *Blake3pow) IsDomCoincident(header *types.Header) bool {
@@ -405,6 +407,16 @@ func (blake3pow *Blake3pow) Finalize(chain consensus.ChainHeaderReader, header *
 	// Accumulate any block and uncle rewards and commit the final state root
 	accumulateRewards(chain.Config(), state, header, uncles)
 	header.SetRoot(state.IntermediateRoot(chain.Config().IsEIP158(header.Number())))
+}
+
+// FinalizeAtIndex implements consensus.Engine, accumulating the block and uncle rewards,
+// setting the final state on the header at an index.
+func (blake3pow *Blake3pow) FinalizeAtIndex(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header, index int) {
+	// Accumulate any block and uncle rewards and commit the final state root
+	accumulateRewardsAtIndex(chain.Config(), state, header, uncles, index)
+	root := state.IntermediateRoot(chain.Config().IsEIP158(header.Number(index)))
+	fmt.Println("State root", root)
+	header.SetRoot(root, index)
 }
 
 // FinalizeAndAssemble implements consensus.Engine, accumulating the block and
@@ -519,4 +531,36 @@ func accumulateRewards(config *params.ChainConfig, state *state.StateDB, header 
 		reward.Add(reward, r)
 	}
 	state.AddBalance(*coinbase, reward)
+}
+
+// accumulateRewardsAtIndex credits the coinbase of the given block with the mining
+// reward. The total reward consists of the static block reward and rewards for
+// included uncles. The coinbase of each uncle block is also rewarded.
+func accumulateRewardsAtIndex(config *params.ChainConfig, state *state.StateDB, header *types.Header, uncles []*types.Header, index int) {
+
+	// Select the correct block reward based on chain progression
+	blockReward := misc.CalculateRewardWithIndex(index)
+	// Accumulate the rewards for the miner and any included uncles
+	reward := new(big.Int).Set(blockReward)
+	r := new(big.Int)
+	for _, uncle := range uncles {
+		r.Add(uncle.Number(index), big8)
+		r.Sub(r, header.Number(index))
+		r.Mul(r, blockReward)
+		r.Div(r, big8)
+		uncleAddr, err := uncle.Coinbase(index).InternalAddress()
+		if err != nil {
+			continue
+		}
+		state.AddBalance(*uncleAddr, r)
+
+		r.Div(blockReward, big32)
+		reward.Add(reward, r)
+	}
+	addr, err := header.Coinbase(index).InternalAddress()
+	if err != nil {
+		log.Warn("Out of scope coinbase")
+		return
+	}
+	state.AddBalance(*addr, reward)
 }

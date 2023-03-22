@@ -38,6 +38,8 @@ var (
 	EmptyUncleHash = RlpHash([]*Header(nil))
 )
 
+const C_mantBits = 64
+
 // A BlockNonce is a 64-bit hash which proves (combined with the
 // mix-hash) that a sufficient amount of computation has been carried
 // out on a block.
