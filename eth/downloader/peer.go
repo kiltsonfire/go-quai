@@ -21,6 +21,7 @@ package downloader
 
 import (
 	"errors"
+	"math/big"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -69,7 +70,7 @@ type peerConnection struct {
 
 // LightPeer encapsulates the methods required to synchronise with a remote light peer.
 type LightPeer interface {
-	Head() (common.Hash, uint64)
+	Head() (common.Hash, *big.Int)
 	RequestHeadersByHash(common.Hash, int, uint64, bool, bool) error
 	RequestHeadersByNumber(uint64, int, uint64, uint64, bool, bool) error
 }

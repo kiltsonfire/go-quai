@@ -18,6 +18,7 @@ package eth
 
 import (
 	"errors"
+	"math/big"
 	"math/rand"
 	"sync"
 
@@ -76,8 +77,8 @@ type Peer struct {
 	rw        p2p.MsgReadWriter // Input/output streams for snap
 	version   uint              // Protocol version negotiated
 
-	head   common.Hash // Latest advertised head block hash
-	number uint64      // Latest advertised head block number
+	head    common.Hash // Latest advertised head block hash
+	entropy *big.Int    // Latest advertised head block entropy
 
 	knownBlocks     mapset.Set             // Set of block hashes known to be known by this peer
 	queuedBlocks    chan *blockPropagation // Queue of blocks to broadcast to the peer
@@ -139,21 +140,21 @@ func (p *Peer) Version() uint {
 }
 
 // Head retrieves the current head hash and head number of the peer.
-func (p *Peer) Head() (hash common.Hash, number uint64) {
+func (p *Peer) Head() (hash common.Hash, entropy *big.Int) {
 	p.lock.RLock()
 	defer p.lock.RUnlock()
 
 	copy(hash[:], p.head[:])
-	return hash, p.number
+	return hash, p.entropy
 }
 
 // SetHead updates the head hash and head number of the peer.
-func (p *Peer) SetHead(hash common.Hash, number uint64) {
+func (p *Peer) SetHead(hash common.Hash, entropy *big.Int) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
 	copy(p.head[:], hash[:])
-	p.number = number
+	p.entropy = entropy
 }
 
 // KnownBlock returns whether peer is known to already have a block.

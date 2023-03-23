@@ -192,9 +192,9 @@ func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, block *types.Block) er
 		}
 	}
 
-	_, number := peer.Head()
-	if (block.NumberU64() - 1) > number {
-		peer.SetHead(block.ParentHash(), block.NumberU64()-1)
+	_, peerEntropy := peer.Head()
+	if peerEntropy.Cmp(block.Header().ParentEntropy()) < 0 {
+		peer.SetHead(block.Hash(), block.Header().CalcS())
 		h.chainSync.handlePeerEvent(peer)
 	}
 	return nil
