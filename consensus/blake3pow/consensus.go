@@ -354,11 +354,7 @@ func (blake3pow *Blake3pow) IsDomCoincident(header *types.Header) bool {
 }
 
 func (blake3pow *Blake3pow) IsPrime(header *types.Header) bool {
-	blockhash := blake3pow.SealHash(header)
-
-	// Just compare the prime difficulty.
-	target := new(big.Int).Div(big2e256, header.Difficulty(common.PRIME_CTX))
-	return new(big.Int).SetBytes(blockhash.Bytes()).Cmp(target) <= 0
+	return header.CalcOrder() == common.PRIME_CTX
 }
 
 // verifySeal checks whether a block satisfies the PoW difficulty requirements,
