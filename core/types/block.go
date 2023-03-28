@@ -83,7 +83,7 @@ type Header struct {
 	manifestHash  []common.Hash    `json:"manifestHash"         gencodec:"required"`
 	receiptHash   []common.Hash    `json:"receiptsRoot"         gencodec:"required"`
 	bloom         []Bloom          `json:"logsBloom"            gencodec:"required"`
-	difficulty    []*big.Int       `json:"difficulty"           gencodec:"required"`
+	difficulty    *big.Int         `json:"difficulty"           gencodec:"required"`
 	parentEntropy []*big.Int       `json:"parentEntropy"		gencodec:"required"`
 	parentDeltaS  []*big.Int       `json:"parentDeltaS"			gencodec:"required"`
 	number        []*big.Int       `json:"number"               gencodec:"required"`
@@ -98,7 +98,7 @@ type Header struct {
 
 // field type overrides for gencodec
 type headerMarshaling struct {
-	Difficulty    []*hexutil.Big
+	Difficulty    *hexutil.Big
 	Number        []*hexutil.Big
 	GasLimit      []hexutil.Uint64
 	GasUsed       []hexutil.Uint64
@@ -122,7 +122,7 @@ type extheader struct {
 	ManifestHash  []common.Hash
 	ReceiptHash   []common.Hash
 	Bloom         []Bloom
-	Difficulty    []*big.Int
+	Difficulty    *big.Int
 	ParentEntropy []*big.Int
 	ParentDeltaS  []*big.Int
 	Number        []*big.Int
@@ -148,13 +148,13 @@ func EmptyHeader() *Header {
 	h.manifestHash = make([]common.Hash, common.HierarchyDepth)
 	h.receiptHash = make([]common.Hash, common.HierarchyDepth)
 	h.bloom = make([]Bloom, common.HierarchyDepth)
-	h.difficulty = make([]*big.Int, common.HierarchyDepth)
 	h.parentEntropy = make([]*big.Int, common.HierarchyDepth)
 	h.parentDeltaS = make([]*big.Int, common.HierarchyDepth)
 	h.number = make([]*big.Int, common.HierarchyDepth)
 	h.gasLimit = make([]uint64, common.HierarchyDepth)
 	h.gasUsed = make([]uint64, common.HierarchyDepth)
 	h.baseFee = make([]*big.Int, common.HierarchyDepth)
+	h.difficulty = big.NewInt(0)
 
 	for i := 0; i < common.HierarchyDepth; i++ {
 		h.root[i] = EmptyRootHash
@@ -164,7 +164,6 @@ func EmptyHeader() *Header {
 		h.etxRollupHash[i] = EmptyRootHash
 		h.manifestHash[i] = EmptyRootHash
 		h.uncleHash[i] = EmptyUncleHash
-		h.difficulty[i] = big.NewInt(0)
 		h.parentEntropy[i] = big.NewInt(0)
 		h.parentDeltaS[i] = big.NewInt(0)
 		h.number[i] = big.NewInt(0)
@@ -319,12 +318,8 @@ func (h *Header) Bloom(args ...int) Bloom {
 	}
 	return h.bloom[nodeCtx]
 }
-func (h *Header) Difficulty(args ...int) *big.Int {
-	nodeCtx := common.NodeLocation.Context()
-	if len(args) > 0 {
-		nodeCtx = args[0]
-	}
-	return h.difficulty[nodeCtx]
+func (h *Header) Difficulty() *big.Int {
+	return h.difficulty
 }
 func (h *Header) Number(args ...int) *big.Int {
 	nodeCtx := common.NodeLocation.Context()
@@ -454,12 +449,8 @@ func (h *Header) SetBloom(val Bloom, args ...int) {
 	}
 	h.bloom[nodeCtx] = val
 }
-func (h *Header) SetDifficulty(val *big.Int, args ...int) {
-	nodeCtx := common.NodeLocation.Context()
-	if len(args) > 0 {
-		nodeCtx = args[0]
-	}
-	h.difficulty[nodeCtx] = new(big.Int).Set(val)
+func (h *Header) SetDifficulty(val *big.Int) {
+	h.difficulty = new(big.Int).Set(val)
 }
 func (h *Header) SetNumber(val *big.Int, args ...int) {
 	nodeCtx := common.NodeLocation.Context()
@@ -510,7 +501,6 @@ func (h *Header) EtxRollupHashArray() []common.Hash { return h.etxRollupHash }
 func (h *Header) ManifestHashArray() []common.Hash  { return h.manifestHash }
 func (h *Header) ReceiptHashArray() []common.Hash   { return h.receiptHash }
 func (h *Header) BloomArray() []Bloom               { return h.bloom }
-func (h *Header) DifficultyArray() []*big.Int       { return h.difficulty }
 func (h *Header) NumberArray() []*big.Int           { return h.number }
 func (h *Header) GasLimitArray() []uint64           { return h.gasLimit }
 func (h *Header) GasUsedArray() []uint64            { return h.gasUsed }
@@ -538,7 +528,7 @@ var headerSize = common.StorageSize(reflect.TypeOf(Header{}).Size())
 // Size returns the approximate memory used by all internal contents. It is used
 // to approximate and limit the memory consumption of various caches.
 func (h *Header) Size() common.StorageSize {
-	return headerSize + common.StorageSize(len(h.extra)+(totalBitLen(h.difficulty)+totalBitLen(h.number))/8)
+	return headerSize + common.StorageSize(len(h.extra)+(h.difficulty.BitLen()+totalBitLen(h.number))/8)
 }
 
 // SanityCheck checks a few basic things -- these checks are way beyond what
@@ -573,7 +563,7 @@ func (h *Header) SanityCheck() error {
 	if h.bloom == nil || len(h.bloom) != common.HierarchyDepth {
 		return fmt.Errorf("field cannot be `nil`: bloom")
 	}
-	if h.difficulty == nil || len(h.difficulty) != common.HierarchyDepth {
+	if h.difficulty == nil {
 		return fmt.Errorf("field cannot be `nil`: difficulty")
 	}
 	if h.number == nil || len(h.number) != common.HierarchyDepth {
@@ -601,15 +591,15 @@ func (h *Header) SanityCheck() error {
 		if h.number[i] != nil && !h.number[i].IsUint64() {
 			return fmt.Errorf("too large block number[%d]: bitlen %d", i, h.number[i].BitLen())
 		}
-		if h.difficulty[i] != nil {
-			if diffLen := h.difficulty[i].BitLen(); diffLen > 80 {
-				return fmt.Errorf("too large block difficulty[%d]: bitlen %d", i, diffLen)
-			}
-		}
 		if h.baseFee[i] != nil {
 			if bfLen := h.baseFee[i].BitLen(); bfLen > 256 {
 				return fmt.Errorf("too large base fee: bitlen %d", bfLen)
 			}
+		}
+	}
+	if h.difficulty != nil {
+		if diffLen := h.difficulty.BitLen(); diffLen > 80 {
+			return fmt.Errorf("too large block difficulty: bitlen %d", diffLen)
 		}
 	}
 	if eLen := len(h.extra); eLen > 100*1024 {
@@ -702,7 +692,7 @@ func (h *Header) CalcOrder() int {
 
 	// This is the updated the threshold calculation based on the zone difficulty threshold
 	timeFactor := big.NewInt(7)
-	zoneThresholdS := h.CalcIntrinsicS(common.BytesToHash(new(big.Int).Div(big2e256, h.Difficulty(common.ZONE_CTX)).Bytes()))
+	zoneThresholdS := h.CalcIntrinsicS(common.BytesToHash(new(big.Int).Div(big2e256, h.Difficulty()).Bytes()))
 	regionEntropyThreshold := big.NewInt(0).Mul(timeFactor, big.NewInt(common.HierarchyDepth))
 	regionEntropyThreshold = big.NewInt(0).Mul(regionEntropyThreshold, zoneThresholdS)
 
@@ -854,7 +844,6 @@ func CopyHeader(h *Header) *Header {
 	cpy.manifestHash = make([]common.Hash, common.HierarchyDepth)
 	cpy.receiptHash = make([]common.Hash, common.HierarchyDepth)
 	cpy.bloom = make([]Bloom, common.HierarchyDepth)
-	cpy.difficulty = make([]*big.Int, common.HierarchyDepth)
 	cpy.parentEntropy = make([]*big.Int, common.HierarchyDepth)
 	cpy.parentDeltaS = make([]*big.Int, common.HierarchyDepth)
 	cpy.number = make([]*big.Int, common.HierarchyDepth)
@@ -872,7 +861,6 @@ func CopyHeader(h *Header) *Header {
 		cpy.SetManifestHash(h.ManifestHash(i), i)
 		cpy.SetReceiptHash(h.ReceiptHash(i), i)
 		cpy.SetBloom(h.Bloom(i), i)
-		cpy.SetDifficulty(h.Difficulty(i), i)
 		cpy.SetParentEntropy(h.ParentEntropy(i), i)
 		cpy.SetParentDeltaS(h.ParentDeltaS(i), i)
 		cpy.SetNumber(h.Number(i), i)
@@ -884,6 +872,7 @@ func CopyHeader(h *Header) *Header {
 		cpy.extra = make([]byte, len(h.extra))
 		copy(cpy.extra, h.extra)
 	}
+	cpy.SetDifficulty(h.Difficulty())
 	cpy.SetLocation(h.location)
 	cpy.SetTime(h.time)
 	cpy.SetNonce(h.nonce)
@@ -924,7 +913,7 @@ func (b *Block) EtxRollupHash(args ...int) common.Hash { return b.header.EtxRoll
 func (b *Block) ManifestHash(args ...int) common.Hash  { return b.header.ManifestHash(args...) }
 func (b *Block) ReceiptHash(args ...int) common.Hash   { return b.header.ReceiptHash(args...) }
 func (b *Block) Bloom(args ...int) Bloom               { return b.header.Bloom(args...) }
-func (b *Block) Difficulty(args ...int) *big.Int       { return b.header.Difficulty(args...) }
+func (b *Block) Difficulty(args ...int) *big.Int       { return b.header.Difficulty() }
 func (b *Block) ParentEntropy(args ...int) *big.Int    { return b.header.ParentEntropy(args...) }
 func (b *Block) ParentDeltaS(args ...int) *big.Int     { return b.header.ParentDeltaS(args...) }
 func (b *Block) Number(args ...int) *big.Int           { return b.header.Number(args...) }
