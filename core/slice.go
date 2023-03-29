@@ -30,6 +30,8 @@ const (
 	pendingHeaderGCTime     = 5
 	TerminusIndex           = 3
 	c_startingPrintLimit    = 10
+	c_regionRelayProc       = 3
+	c_primeRelayProc        = 10
 )
 
 type Slice struct {
@@ -106,6 +108,10 @@ func NewSlice(db ethdb.Database, config *Config, txConfig *TxPoolConfig, isLocal
 	}
 
 	go sl.updatePendingHeadersCache()
+
+	if nodeCtx != common.ZONE_CTX {
+		go sl.procRelayPh()
+	}
 
 	return sl, nil
 }
@@ -185,6 +191,7 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 
 	// Combine subordinates pending header with local pending header
 	pendingHeaderWithTermini := sl.computePendingHeader(types.PendingHeader{Header: localPendingHeader, Termini: newTermini}, domPendingHeader, domOrigin)
+	pendingHeaderWithTermini.Header.SetLocation(header.Location())
 
 	s := header.CalcS()
 
@@ -303,6 +310,29 @@ func (sl *Slice) relayPh(pendingHeaderWithTermini types.PendingHeader, s *big.In
 			if sl.subClients[i] != nil {
 				sl.subClients[i].SubRelayPendingHeader(context.Background(), pendingHeaderWithTermini, s, location, originCtx)
 			}
+		}
+	}
+}
+
+// procRelayPh on a ticker calls relayPh on the best PhKey
+func (sl *Slice) procRelayPh() {
+	nodeCtx := common.NodeLocation.Context()
+	var relayTimer *time.Ticker
+	if nodeCtx == common.REGION_CTX {
+		relayTimer = time.NewTicker(c_regionRelayProc * time.Second)
+	} else {
+		relayTimer = time.NewTicker(c_primeRelayProc * time.Second)
+	}
+	defer relayTimer.Stop()
+	for {
+		select {
+		case <-relayTimer.C:
+			sl.phCachemu.Lock()
+			header := sl.hc.GetHeaderByHash(sl.phCache[sl.bestPhKey.Key()].Header.ParentHash())
+			sl.relayPh(sl.phCache[sl.bestPhKey.Key()], header.CalcS(), false, sl.phCache[sl.bestPhKey.Key()].Header.Location(), nodeCtx)
+			sl.phCachemu.Unlock()
+		case <-sl.quit:
+			return
 		}
 	}
 }
@@ -524,13 +554,9 @@ func (sl *Slice) SubRelayPendingHeader(pendingHeader types.PendingHeader, s *big
 	var err error
 	if nodeCtx == common.REGION_CTX {
 		// Adding a guard on the region that was already updated in the synchronous path.
-		if location.Region() != common.NodeLocation.Region() {
-			newS, err = sl.updatePhCacheFromDom(pendingHeader, common.NodeLocation.Region(), []int{common.PRIME_CTX}, s, originCtx)
-			if err != nil {
-				return
-			}
-		} else {
-			newS = s
+		newS, err = sl.updatePhCacheFromDom(pendingHeader, common.NodeLocation.Region(), []int{common.PRIME_CTX}, s, originCtx)
+		if err != nil {
+			return
 		}
 		for i := range sl.subClients {
 			if sl.subClients[i] != nil {
