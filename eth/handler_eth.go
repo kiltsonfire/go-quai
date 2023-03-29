@@ -182,6 +182,7 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, block *types.Block) error {
 	// Schedule the block for import
 	h.blockFetcher.Enqueue(peer.ID(), block)
+	log.Info("Received a block braodcast", "hash", block.Hash(), "number", block.Header().NumberArray())
 
 	blockS := block.Header().CalcS()
 	_, peerEntropy := peer.Head()
