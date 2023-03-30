@@ -25,13 +25,14 @@ import (
 )
 
 const (
-	maxPendingEtxBlocks     = 256
-	pendingHeaderCacheLimit = 500
-	pendingHeaderGCTime     = 5
-	TerminusIndex           = 3
-	c_startingPrintLimit    = 10
-	c_regionRelayProc       = 3
-	c_primeRelayProc        = 10
+	maxPendingEtxBlocks               = 256
+	c_pendingHeaderCacheLimit         = 100
+	c_pendingHeaderChacheBufferFactor = 2
+	pendingHeaderGCTime               = 5
+	TerminusIndex                     = 3
+	c_startingPrintLimit              = 10
+	c_regionRelayProc                 = 3
+	c_primeRelayProc                  = 10
 )
 
 type Slice struct {
@@ -753,10 +754,21 @@ func (sl *Slice) init(genesis *Genesis) error {
 
 // gcPendingHeader goes through the phCache and deletes entries older than the pendingHeaderCacheLimit
 func (sl *Slice) gcPendingHeaders() {
+	nodeCtx := common.NodeLocation.Context()
+	var localCacheLimit uint64
+	switch nodeCtx {
+	case common.PRIME_CTX:
+		localCacheLimit = c_pendingHeaderCacheLimit
+	case common.REGION_CTX:
+		localCacheLimit = c_pendingHeaderCacheLimit * common.NumRegionsInPrime * c_pendingHeaderChacheBufferFactor
+	case common.ZONE_CTX:
+		localCacheLimit = c_pendingHeaderCacheLimit * common.NumZonesInRegion * c_pendingHeaderChacheBufferFactor
+	}
 	sl.phCachemu.Lock()
 	defer sl.phCachemu.Unlock()
+
 	for hash, pendingHeader := range sl.phCache {
-		if pendingHeader.Header.NumberU64()+pendingHeaderCacheLimit < sl.hc.CurrentHeader().NumberU64() {
+		if pendingHeader.Header.NumberU64()+localCacheLimit < sl.hc.CurrentHeader().NumberU64() {
 			delete(sl.phCache, hash)
 		}
 	}
