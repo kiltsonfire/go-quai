@@ -430,6 +430,77 @@ func DeleteBody(db ethdb.KeyValueWriter, hash common.Hash, number uint64) {
 	}
 }
 
+// ReadPbCacheBody retrieves the block body corresponding to the hash.
+func ReadPbCacheBody(db ethdb.Reader, hash common.Hash) *types.Body {
+	data, err := db.Get(pbBodyKey(hash))
+	if err != nil {
+		log.Error("Failed to read block body", "hash", hash, "err", err)
+		return nil
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	body := new(types.Body)
+	if err := rlp.Decode(bytes.NewReader(data), body); err != nil {
+		log.Error("Invalid pending block body RLP", "hash", hash, "err", err)
+		return nil
+	}
+	return body
+}
+
+// WritePbCacheBody stores a block body into the database.
+func WritePbCacheBody(db ethdb.KeyValueWriter, hash common.Hash, body *types.Body) {
+	data, err := rlp.EncodeToBytes(body)
+	if err != nil {
+		log.Crit("Failed to RLP encode body", "err", err)
+	}
+	if err := db.Put(pbBodyKey(hash), data); err != nil {
+		log.Crit("Failed to write phBodyKey", "err", err)
+	}
+}
+
+// DeletePbCacheBody removes all block body data associated with a hash.
+func DeletePbCacheBody(db ethdb.KeyValueWriter, hash common.Hash) {
+	if err := db.Delete(pbBodyKey(hash)); err != nil {
+		log.Crit("Failed to delete ph cache body", "err", err)
+	}
+}
+
+// ReadPbBodyKeys retreive's the phBodyKeys of thew worker
+func ReadPbBodyKeys(db ethdb.Reader) []common.Hash {
+	key := pbBodyHashKey()
+	data, _ := db.Get(key)
+	if len(data) == 0 {
+		return []common.Hash{}
+	}
+	keys := []common.Hash{}
+	if err := rlp.DecodeBytes(data, &keys); err != nil {
+		return []common.Hash{}
+	}
+	return keys
+}
+
+// WritePbBodyKeys writes the workers pendingHeaderBody keys to the db
+func WritePbBodyKeys(db ethdb.KeyValueWriter, hashes []common.Hash) {
+	key := pbBodyHashKey()
+	data, err := rlp.EncodeToBytes(hashes)
+	if err != nil {
+		log.Crit("Failed to RLP encode pending block body keys", "err", err)
+	}
+	if err := db.Put(key, data); err != nil {
+		log.Crit("Failed to store pending block body keys", "err", err)
+	}
+}
+
+// DeletePbBodyKeys writes the pendingHeaderBody keys to the db
+func DeletePbBodyKeys(db ethdb.KeyValueWriter, hash common.Hash) {
+	key := pbBodyHashKey()
+
+	if err := db.Delete(key); err != nil {
+		log.Crit("Failed to delete pending block body keys", "err", err)
+	}
+}
+
 // ReadTdRLP retrieves a block's total difficulty corresponding to the hash in RLP encoding.
 func ReadTdRLP(db ethdb.Reader, hash common.Hash, number uint64) rlp.RawValue {
 	// First try to look up the data in ancient database. Extra hash
