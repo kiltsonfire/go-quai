@@ -634,40 +634,66 @@ func (sl *Slice) writeToPhCacheAndPickPhHead(inSlice bool, reorg bool, s *big.In
 	nodeCtx := common.NodeLocation.Context()
 	deepCopyPendingHeaderWithTermini := types.PendingHeader{Header: types.CopyHeader(pendingHeaderWithTermini.Header), Termini: pendingHeaderWithTermini.Termini}
 	oldPh, exist := sl.phCache[pendingHeaderWithTermini.Termini[terminiIndex]]
+	fmt.Println("writeToPhCacheAndPickPhHeader incoming, s:", s, "domEntropy", pendingHeaderWithTermini.DomEntropy, "entropy", pendingHeaderWithTermini.Entropy, "deltaS:", pendingHeaderWithTermini.Header.ParentDeltaS(), "Number:", pendingHeaderWithTermini.Header.NumberArray(), "parentHash:", pendingHeaderWithTermini.Header.ParentHash())
 	if !exist {
 		deepCopyPendingHeaderWithTermini.Entropy = s
-	} else {
-		deepCopyPendingHeaderWithTermini.Entropy = oldPh.Entropy
-	}
+		deepCopyPendingHeaderWithTermini.DomEntropy = s
+		if nodeCtx != common.PRIME_CTX {
+			terminiHeader := sl.hc.GetHeaderByHash(pendingHeaderWithTermini.Termini[terminiIndex])
+			priorTermini := sl.hc.GetTerminiByHash(terminiHeader.ParentHash())
+			priorPh, exist := sl.phCache[priorTermini[terminiIndex]]
+			if exist {
+				if priorPh.DomEntropy.Cmp(s) > 0 {
+					fmt.Println("writeToPhCacheAndPickPhHeader carry DomEntropy, priorPh.DomEntropy:", priorPh.DomEntropy, "s:", s, "priorTermini[terminiIndex]:", priorTermini[terminiIndex])
+					deepCopyPendingHeaderWithTermini.DomEntropy = priorPh.DomEntropy
+					deepCopyPendingHeaderWithTermini.Entropy = priorPh.DomEntropy
+				}
+			}
+		}
 
-	var coordFutureS *big.Int
-	//Only write iff our context is better than current ie > td
-	log.Info("Updating PhCache and Pick Head", "S:", s, "Entropy", deepCopyPendingHeaderWithTermini.Entropy, "bestPhKey.Entropy", sl.bestPhKey.EntropyArray())
-	if inSlice {
-		if reorg {
-			sl.phCache[pendingHeaderWithTermini.Termini[terminiIndex]] = deepCopyPendingHeaderWithTermini
-		}
-		coordFutureS = big.NewInt(0).Add(deepCopyPendingHeaderWithTermini.Entropy, deepCopyPendingHeaderWithTermini.Header.ParentDeltaS())
-	} else {
-		coordFutureS = big.NewInt(0).Add(s, deepCopyPendingHeaderWithTermini.Header.ParentDeltaS())
-		if sl.poem(coordFutureS, oldPh.Entropy) {
-			deepCopyPendingHeaderWithTermini.Entropy = s
-			sl.phCache[pendingHeaderWithTermini.Termini[terminiIndex]] = deepCopyPendingHeaderWithTermini
-		}
-	}
-	if nodeCtx == common.ZONE_CTX {
-		if sl.poem(coordFutureS, sl.bestPhKey.Entropy(nodeCtx)) {
-			sl.bestPhKey.SetKey(pendingHeaderWithTermini.Termini[terminiIndex])
-			sl.bestPhKey.SetBlockHash(pendingHeaderWithTermini.Header.ParentHash())
-			sl.bestPhKey.SetEntropy(coordFutureS, nodeCtx)
-			log.Info("Choosing new pending header from coord update", "Ph Number:", pendingHeaderWithTermini.Header.NumberArray())
-		}
-	}
-
-	if !exist {
 		sl.phCache[pendingHeaderWithTermini.Termini[terminiIndex]] = deepCopyPendingHeaderWithTermini
+		if sl.poem(deepCopyPendingHeaderWithTermini.Entropy, sl.bestPhKey.Entropy(nodeCtx)) {
+			sl.bestPhKey.SetKey(deepCopyPendingHeaderWithTermini.Termini[terminiIndex])
+			sl.bestPhKey.SetBlockHash(deepCopyPendingHeaderWithTermini.Header.ParentHash())
+			sl.bestPhKey.SetEntropy(deepCopyPendingHeaderWithTermini.Entropy, nodeCtx)
+			fmt.Println("Choosing new pending header from !exist update externEntropy:", deepCopyPendingHeaderWithTermini.Entropy, "bestEntropy:", sl.bestPhKey.Entropy(nodeCtx), "Ph Number:", pendingHeaderWithTermini.Header.NumberArray())
+
+			//Reset the current head to align with the coord
+			header := sl.hc.GetHeaderByHash(deepCopyPendingHeaderWithTermini.Header.ParentHash())
+			sl.hc.SetCurrentHeader(header)
+		}
+		return deepCopyPendingHeaderWithTermini.Entropy
+	} else {
+		fmt.Println("writeToPhCacheAndPickPhHeader old, s:", oldPh.Entropy, "domEntropy:", oldPh.DomEntropy, "Number:", oldPh.Header.NumberArray(), "parentHash:", oldPh.Header.ParentHash())
+		if originCtx < nodeCtx {
+			if oldPh.Entropy.Cmp(s) > 0 {
+				fmt.Println("writeToPhCacheAndPickPhHeader 670, oldPh.DomEntropy:", oldPh.DomEntropy)
+				deepCopyPendingHeaderWithTermini.DomEntropy = oldPh.DomEntropy
+			} else {
+				fmt.Println("writeToPhCacheAndPickPhHeader 673, s:", s)
+				deepCopyPendingHeaderWithTermini.DomEntropy = s
+			}
+		} else {
+			fmt.Println("writeToPhCacheAndPickPhHeader 677, oldPh.DomEntropy:", oldPh.DomEntropy)
+			deepCopyPendingHeaderWithTermini.DomEntropy = oldPh.DomEntropy
+		}
+		deepCopyPendingHeaderWithTermini.Entropy = big.NewInt(0).Add(deepCopyPendingHeaderWithTermini.DomEntropy, deepCopyPendingHeaderWithTermini.Header.ParentDeltaS())
 	}
-	return s
+	if deepCopyPendingHeaderWithTermini.Entropy.Cmp(oldPh.Entropy) >= 0 {
+		sl.phCache[pendingHeaderWithTermini.Termini[terminiIndex]] = deepCopyPendingHeaderWithTermini
+		if sl.poem(deepCopyPendingHeaderWithTermini.Entropy, sl.bestPhKey.Entropy(nodeCtx)) {
+			sl.bestPhKey.SetKey(deepCopyPendingHeaderWithTermini.Termini[terminiIndex])
+			sl.bestPhKey.SetBlockHash(deepCopyPendingHeaderWithTermini.Header.ParentHash())
+			sl.bestPhKey.SetEntropy(deepCopyPendingHeaderWithTermini.Entropy, nodeCtx)
+			fmt.Println("Choosing new pending header from coord update externEntropy:", deepCopyPendingHeaderWithTermini.Entropy, "bestEntropy:", sl.bestPhKey.Entropy(nodeCtx), "Ph Number:", pendingHeaderWithTermini.Header.NumberArray())
+
+			//Reset the current head to align with the coord
+			header := sl.hc.GetHeaderByHash(deepCopyPendingHeaderWithTermini.Header.ParentHash())
+			sl.hc.SetCurrentHeader(header)
+		}
+	}
+
+	return deepCopyPendingHeaderWithTermini.Entropy
 }
 
 // init checks if the headerchain is empty and if it's empty appends the Knot
@@ -740,7 +766,7 @@ func (sl *Slice) init(genesis *Genesis) error {
 		sl.engine.FinalizeAtIndex(sl.hc, pendingHeader, zonedb, nil, nil, common.ZONE_CTX)
 
 		sl.miner.worker.AddPendingBlockBody(pendingHeader, &types.Body{})
-		sl.phCache[genesisHash] = types.PendingHeader{Header: pendingHeader, Termini: genesisTermini, Entropy: big.NewInt(0)}
+		sl.phCache[genesisHash] = types.PendingHeader{Header: pendingHeader, Termini: genesisTermini, Entropy: big.NewInt(0), DomEntropy: big.NewInt(0)}
 	} else { // load the phCache and slice current pending header hash
 		if err := sl.loadLastState(); err != nil {
 			return err

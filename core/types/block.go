@@ -688,7 +688,7 @@ func (h *Header) CalcOrder() int {
 	intrinsicS := h.CalcIntrinsicS()
 
 	// This is the updated the threshold calculation based on the zone difficulty threshold
-	timeFactor := big.NewInt(7)
+	timeFactor := big.NewInt(4)
 	zoneThresholdS := h.CalcIntrinsicS(common.BytesToHash(new(big.Int).Div(big2e256, h.Difficulty()).Bytes()))
 
 	// PRIME case
@@ -1047,9 +1047,10 @@ type Blocks []*Block
 
 // PendingHeader stores the header and termini value associated with the header.
 type PendingHeader struct {
-	Header  *Header
-	Termini []common.Hash
-	Entropy *big.Int
+	Header     *Header
+	Termini    []common.Hash
+	Entropy    *big.Int
+	DomEntropy *big.Int
 }
 
 // BlockManifest is a list of block hashes, which implements DerivableList
