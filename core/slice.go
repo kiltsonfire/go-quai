@@ -108,7 +108,7 @@ func NewSlice(db ethdb.Database, config *Config, txConfig *TxPoolConfig, isLocal
 		return nil, err
 	}
 
-	go sl.updatePendingHeadersCache()
+	// go sl.updatePendingHeadersCache()
 
 	if nodeCtx != common.ZONE_CTX {
 		go sl.procRelayPh()
