@@ -329,8 +329,11 @@ func (sl *Slice) procRelayPh() {
 		select {
 		case <-relayTimer.C:
 			sl.phCachemu.Lock()
-			header := sl.hc.GetHeaderByHash(sl.phCache[sl.bestPhKey.Key()].Header.ParentHash())
-			sl.relayPh(sl.phCache[sl.bestPhKey.Key()], header.CalcS(), false, sl.phCache[sl.bestPhKey.Key()].Header.Location(), nodeCtx)
+			header, exists := sl.phCache[sl.bestPhKey.Key()]
+			if exists {
+				parentHeader := sl.hc.GetHeaderByHash(header.Header.ParentHash())
+				sl.relayPh(header, parentHeader.CalcS(), false, header.Header.Location(), nodeCtx)
+			}
 			sl.phCachemu.Unlock()
 		case <-sl.quit:
 			return
