@@ -497,7 +497,7 @@ func (sl *Slice) pcrc(batch ethdb.Batch, header *types.Header, domTerminus commo
 
 // POEM compares externS to the currentHead S and returns true if externS is greater
 func (sl *Slice) poem(externS *big.Int, currentS *big.Int) bool {
-	log.Debug("POEM:", "Header hash:", sl.hc.CurrentHeader().Hash(), "currentS:", currentS, "externS:", externS)
+	log.Info("POEM:", "Header hash:", sl.hc.CurrentHeader().Hash(), "currentS:", currentS, "externS:", externS)
 	reorg := currentS.Cmp(externS) < 0
 	return reorg
 }
@@ -632,41 +632,35 @@ func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, termini
 // writePhCache dom writes a given pendingHeaderWithTermini to the cache with the terminus used as the key.
 func (sl *Slice) writeToPhCacheAndPickPhHead(inSlice bool, reorg bool, s *big.Int, pendingHeaderWithTermini types.PendingHeader, local bool, terminiIndex int, originCtx int) *big.Int {
 	nodeCtx := common.NodeLocation.Context()
-	deepCopyPendingHeaderWithTermini := types.PendingHeader{Header: types.CopyHeader(pendingHeaderWithTermini.Header), Termini: pendingHeaderWithTermini.Termini, Entropy: s}
+	deepCopyPendingHeaderWithTermini := types.PendingHeader{Header: types.CopyHeader(pendingHeaderWithTermini.Header), Termini: pendingHeaderWithTermini.Termini}
 	oldPh, exist := sl.phCache[pendingHeaderWithTermini.Termini[terminiIndex]]
+	if !exist {
+		deepCopyPendingHeaderWithTermini.Entropy = s
+	} else {
+		deepCopyPendingHeaderWithTermini.Entropy = oldPh.Entropy
+	}
+
+	var coordFutureS *big.Int
 	//Only write iff our context is better than current ie > td
-	log.Info("Updating PhCache and Pick Head", "S:", s, "bestPhKey.Entropy", sl.bestPhKey.EntropyArray())
+	log.Info("Updating PhCache and Pick Head", "S:", s, "Entropy", deepCopyPendingHeaderWithTermini.Entropy, "bestPhKey.Entropy", sl.bestPhKey.EntropyArray())
 	if inSlice {
 		if reorg {
 			sl.phCache[pendingHeaderWithTermini.Termini[terminiIndex]] = deepCopyPendingHeaderWithTermini
-			if nodeCtx == common.ZONE_CTX {
-				newEntropy := common.CopyBigIntArray(sl.bestPhKey.EntropyArray())
-				for i := originCtx; i < common.HierarchyDepth; i++ {
-					newEntropy[originCtx] = s
-				}
-				sl.bestPhKey = types.NewBestPhKey(pendingHeaderWithTermini.Termini[terminiIndex], newEntropy, pendingHeaderWithTermini.Header.ParentHash())
-				log.Info("Choosing new pending header from slice", "Ph Number:", pendingHeaderWithTermini.Header.NumberArray())
-			}
 		}
+		coordFutureS = big.NewInt(0).Add(deepCopyPendingHeaderWithTermini.Entropy, deepCopyPendingHeaderWithTermini.Header.ParentDeltaS())
 	} else {
-		if exist {
-			if sl.poem(s, oldPh.Entropy) {
-				sl.phCache[pendingHeaderWithTermini.Termini[terminiIndex]] = deepCopyPendingHeaderWithTermini
-			}
+		coordFutureS = big.NewInt(0).Add(s, deepCopyPendingHeaderWithTermini.Header.ParentDeltaS())
+		if sl.poem(coordFutureS, oldPh.Entropy) {
+			deepCopyPendingHeaderWithTermini.Entropy = s
+			sl.phCache[pendingHeaderWithTermini.Termini[terminiIndex]] = deepCopyPendingHeaderWithTermini
 		}
-		coordFutureS := big.NewInt(0).Add(s, pendingHeaderWithTermini.Header.ParentDeltaS())
-		if sl.poem(coordFutureS, sl.bestPhKey.Entropy(originCtx)) {
-			newEntropy := common.CopyBigIntArray(sl.bestPhKey.EntropyArray())
-			for i := originCtx; i < nodeCtx; i++ {
-				newEntropy[originCtx] = coordFutureS
-			}
-			newEntropy[nodeCtx] = pendingHeaderWithTermini.Header.ParentEntropy()
-			//Reset the current head to align with the coord
-			header := sl.hc.GetHeaderByHash(pendingHeaderWithTermini.Header.ParentHash())
-			sl.bestPhKey = types.NewBestPhKey(pendingHeaderWithTermini.Termini[terminiIndex], newEntropy, pendingHeaderWithTermini.Header.ParentHash())
-			sl.hc.SetCurrentHeader(header)
+	}
+	if nodeCtx == common.ZONE_CTX {
+		if sl.poem(coordFutureS, sl.bestPhKey.Entropy(nodeCtx)) {
+			sl.bestPhKey.SetKey(pendingHeaderWithTermini.Termini[terminiIndex])
+			sl.bestPhKey.SetBlockHash(pendingHeaderWithTermini.Header.ParentHash())
+			sl.bestPhKey.SetEntropy(coordFutureS, nodeCtx)
 			log.Info("Choosing new pending header from coord update", "Ph Number:", pendingHeaderWithTermini.Header.NumberArray())
-			return coordFutureS
 		}
 	}
 
