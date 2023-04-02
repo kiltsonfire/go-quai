@@ -686,7 +686,7 @@ func ReadPhCache(db ethdb.Reader) map[common.Hash]types.PendingHeader {
 		header := ReadPendingHeader(db, hash)
 		termini := ReadPhCacheTermini(db, hash)
 		entropy := ReadPhCacheEntropy(db, hash)
-		pendingHeader := types.PendingHeader{Header: header, Termini: termini, Entropy: entropy}
+		pendingHeader := types.PendingHeader{Header: header, Termini: termini, TerminusEntropy: entropy}
 		phCache[hash] = pendingHeader
 	}
 	return phCache
@@ -699,7 +699,7 @@ func WritePhCache(db ethdb.KeyValueWriter, phCache map[common.Hash]types.Pending
 		hashes = append(hashes, hash)
 		WritePendingHeader(db, hash, pendingHeader.Header)
 		WritePhCacheTermini(db, hash, pendingHeader.Termini)
-		WritePhCacheEntropy(db, hash, pendingHeader.Entropy)
+		WritePhCacheEntropy(db, hash, pendingHeader.TerminusEntropy)
 	}
 
 	data, err := rlp.EncodeToBytes(hashes)

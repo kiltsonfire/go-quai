@@ -382,6 +382,18 @@ func (loc Location) SubIndex() int {
 	}
 }
 
+// SubIndex returns the index of the subordinate chain for a given location
+func (loc Location) Index() int {
+	switch NodeLocation.Context() {
+	case PRIME_CTX:
+		return -1
+	case REGION_CTX:
+		return loc.Region()
+	default:
+		return loc.Zone()
+	}
+}
+
 // SubInSlice returns the location of the subordinate chain within the specified
 // slice. For example:
 //   - if prime calls SubInSlice(Location{0,0}) the result will be Location{0},

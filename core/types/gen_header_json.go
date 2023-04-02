@@ -29,6 +29,7 @@ func (h Header) MarshalJSON() ([]byte, error) {
 		Difficulty    		*hexutil.Big   	    `json:"difficulty"          gencodec:"required"`
 		ParentEntropy    	[]*hexutil.Big 		`json:"parentEntropy"		gencodec:"required"`
 		ParentDeltaS     	[]*hexutil.Big 		`json:"parentDeltaS"		gencodec:"required"`
+		ParentSubDeltaS		[]*hexutil.Big		`json:"parentSubDeltaS"		gencodec:"required"`
 		Number        		[]*hexutil.Big   	`json:"number"              gencodec:"required"`
 		GasLimit      		[]hexutil.Uint64 	`json:"gasLimit"            gencodec:"required"`
 		GasUsed       		[]hexutil.Uint64 	`json:"gasUsed"             gencodec:"required"`
@@ -42,6 +43,7 @@ func (h Header) MarshalJSON() ([]byte, error) {
 	// Initialize the enc struct
 	enc.ParentEntropy = make([]*hexutil.Big, common.HierarchyDepth)
 	enc.ParentDeltaS = make([]*hexutil.Big, common.HierarchyDepth)
+	enc.ParentSubDeltaS = make([]*hexutil.Big, common.NumRegionsInPrime)
 	enc.Number = make([]*hexutil.Big, common.HierarchyDepth)
 	enc.GasLimit= make([]hexutil.Uint64, common.HierarchyDepth)
 	enc.GasUsed= make([]hexutil.Uint64, common.HierarchyDepth)
@@ -64,6 +66,9 @@ func (h Header) MarshalJSON() ([]byte, error) {
 		enc.GasLimit[i] = hexutil.Uint64(h.GasLimit(i))
 		enc.GasUsed[i] = hexutil.Uint64(h.GasUsed(i))
 		enc.BaseFee[i] = (*hexutil.Big)(h.BaseFee(i))
+	}
+	for i :=0; i < common.NumRegionsInPrime; i++ {
+		enc.ParentSubDeltaS[i] = (*hexutil.Big)(h.ParentSubDeltaS(i))
 	}
 	enc.Difficulty = (*hexutil.Big)(h.Difficulty())
 	enc.Location = h.Location()
@@ -90,6 +95,7 @@ func (h *Header) UnmarshalJSON(input []byte) error {
 		Difficulty    		*hexutil.Big    	`json:"difficulty"         	gencodec:"required"`
 		ParentEntropy    	[]*hexutil.Big 		`json:"parentEntropy"	   	gencodec:"required"`
 		ParentDeltaS     	[]*hexutil.Big 		`json:"parentDeltaS"	   	gencodec:"required"`
+		ParentSubDeltaS     []*hexutil.Big 		`json:"parentSubDeltaS"	   	gencodec:"required"`
 		Number        		[]*hexutil.Big    	`json:"number"             	gencodec:"required"`
 		GasLimit      		[]hexutil.Uint64 	`json:"gasLimit"            gencodec:"required"`
 		GasUsed       		[]hexutil.Uint64 	`json:"gasUsed"             gencodec:"required"`
@@ -141,6 +147,9 @@ func (h *Header) UnmarshalJSON(input []byte) error {
 	if dec.ParentDeltaS == nil {
 		return errors.New("missing required field 'parentDeltaS' for Header")
 	}
+	if dec.ParentSubDeltaS == nil {
+		return errors.New("missing required field 'parentSubDeltaS' for Header")
+	}
 	if dec.Number == nil {
 		return errors.New("missing required field 'number' for Header")
 	}
@@ -169,6 +178,7 @@ func (h *Header) UnmarshalJSON(input []byte) error {
 	h.bloom = make([]Bloom, common.HierarchyDepth)
 	h.parentEntropy = make([]*big.Int, common.HierarchyDepth)
 	h.parentDeltaS = make([]*big.Int, common.HierarchyDepth)
+	h.parentSubDeltaS = make([]*big.Int, common.NumRegionsInPrime)
 	h.number = make([]*big.Int, common.HierarchyDepth)
 	h.gasLimit = make([]uint64, common.HierarchyDepth)
 	h.gasUsed = make([]uint64, common.HierarchyDepth)
@@ -189,12 +199,12 @@ func (h *Header) UnmarshalJSON(input []byte) error {
 			return errors.New("missing required field 'parentEntropy' for Header")
 		}
 		h.SetParentEntropy((*big.Int)(dec.ParentEntropy[i]), i)
-		if dec.ParentEntropy[i] == nil {
-			return errors.New("missing required field 'parentEntropy' for Header")
-		}
-		h.SetParentDeltaS((*big.Int)(dec.ParentDeltaS[i]), i)
 		if dec.ParentDeltaS[i] == nil {
 			return errors.New("missing required field 'parentDeltaS' for Header")
+		}
+		h.SetParentDeltaS((*big.Int)(dec.ParentDeltaS[i]), i)
+		if dec.Number[i] == nil {
+			return errors.New("missing required field 'number' for Header")
 		}
 		h.SetNumber((*big.Int)(dec.Number[i]), i)
 		h.SetGasLimit(uint64(dec.GasLimit[i]), i)
@@ -203,6 +213,12 @@ func (h *Header) UnmarshalJSON(input []byte) error {
 			return errors.New("missing required field 'baseFeePerGas' for Header")
 		}
 		h.SetBaseFee((*big.Int)(dec.BaseFee[i]), i)
+	}
+	for i := 0; i < common.NumRegionsInPrime; i++ {
+		if dec.ParentSubDeltaS[i] == nil {
+			return errors.New("missing require field 'parentSubDeltaS' for Header")
+		}	
+		h.SetParentSubDeltaS((*big.Int)(dec.ParentSubDeltaS[i]),i)
 	}
 	h.SetDifficulty((*big.Int)(dec.Difficulty))
 	h.SetLocation(dec.Location)

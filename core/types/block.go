@@ -304,12 +304,8 @@ func (h *Header) ParentDeltaS(args ...int) *big.Int {
 	return h.parentDeltaS[nodeCtx]
 }
 
-func (h *Header) ParentSubDeltaS(args ...int) *big.Int {
-	nodeCtx := common.NodeLocation.Context()
-	if len(args) > 0 {
-		nodeCtx = args[0]
-	}
-	return h.parentSubDeltaS[nodeCtx]
+func (h *Header) ParentSubDeltaS(loc int) *big.Int {
+	return h.parentSubDeltaS[loc]
 }
 
 func (h *Header) ManifestHash(args ...int) common.Hash {
@@ -443,12 +439,14 @@ func (h *Header) SetParentDeltaS(val *big.Int, args ...int) {
 	h.parentDeltaS[nodeCtx] = val
 }
 
-func (h *Header) SetParentSubDeltaS(val *big.Int, args ...int) {
-	nodeCtx := common.NodeLocation.Context()
-	if len(args) > 0 {
-		nodeCtx = args[0]
+func (h *Header) SetParentSubDeltaS(val *big.Int, loc int) {
+	if loc < common.NumRegionsInPrime {
+		h.parentSubDeltaS[loc] = val
 	}
-	h.parentSubDeltaS[nodeCtx] = val
+}
+
+func (h *Header) SetParentSubDeltaSArray(val []*big.Int) {
+	h.parentSubDeltaS = val
 }
 
 func (h *Header) SetManifestHash(val common.Hash, args ...int) {
@@ -672,15 +670,18 @@ func (h *Header) CalcS() *big.Int {
 	intrinsicS := h.CalcIntrinsicS()
 	switch order {
 	case common.PRIME_CTX:
+		fmt.Println("CalcS, h.ParentEntropy:", common.BigBitsToBits(h.ParentEntropy(common.PRIME_CTX)), "h.parentDeltaS(REGION):", common.BigBitsToBits(h.ParentDeltaS(common.REGION_CTX)), "h.ParentDeltaS(ZONE):", common.BigBitsToBits(h.ParentDeltaS(common.ZONE_CTX)), "intrinsic:", common.BigBitsToBits(intrinsicS))
 		totalS := big.NewInt(0).Add(h.ParentEntropy(common.PRIME_CTX), h.ParentDeltaS(common.REGION_CTX))
 		totalS.Add(totalS, h.ParentDeltaS(common.ZONE_CTX))
 		totalS.Add(totalS, intrinsicS)
 		return totalS
 	case common.REGION_CTX:
+		fmt.Println("CalcS, h.ParentEntropy:", common.BigBitsToBits(h.ParentEntropy(common.REGION_CTX)), "h.parentDeltaS(ZONE):", common.BigBitsToBits(h.ParentDeltaS(common.ZONE_CTX)), "intrinsic:", common.BigBitsToBits(intrinsicS))
 		totalS := big.NewInt(0).Add(h.ParentEntropy(common.REGION_CTX), h.ParentDeltaS(common.ZONE_CTX))
 		totalS.Add(totalS, intrinsicS)
 		return totalS
 	case common.ZONE_CTX:
+		fmt.Println("CalcS, h.ParentEntropy:", common.BigBitsToBits(h.ParentEntropy(common.ZONE_CTX)), "intrinsic:", common.BigBitsToBits(intrinsicS))
 		totalS := big.NewInt(0).Add(h.ParentEntropy(common.ZONE_CTX), intrinsicS)
 		return totalS
 	}
@@ -709,6 +710,7 @@ func (h *Header) CalcDeltaS() *big.Int {
 
 func (h *Header) CalcSubDeltaS(args ...int) []*big.Int {
 	ctx := common.NodeLocation.Context()
+	intrinsicS := h.CalcIntrinsicS()
 	if len(args) > 0 {
 		ctx = args[0]
 	}
@@ -716,7 +718,8 @@ func (h *Header) CalcSubDeltaS(args ...int) []*big.Int {
 	if ctx != common.ZONE_CTX {
 		for i := 0; i < 3; i++ {
 			if i != int(h.Location().Region()) {
-				subDeltaS[i] = big.NewInt(0).Add(h.ParentSubDeltaS(), h.ParentDeltaS(ctx+1))
+				subDeltaS[i] = big.NewInt(0).Add(h.ParentSubDeltaS(i), h.ParentDeltaS(ctx+1))
+				subDeltaS[i] = big.NewInt(0).Add(subDeltaS[i], intrinsicS)
 			} else {
 				subDeltaS[i] = big.NewInt(0)
 			}
@@ -920,7 +923,6 @@ func CopyHeader(h *Header) *Header {
 		cpy.SetBloom(h.Bloom(i), i)
 		cpy.SetParentEntropy(h.ParentEntropy(i), i)
 		cpy.SetParentDeltaS(h.ParentDeltaS(i), i)
-		cpy.SetParentSubDeltaS(h.ParentSubDeltaS(i), i)
 		cpy.SetNumber(h.Number(i), i)
 		cpy.SetGasLimit(h.GasLimit(i), i)
 		cpy.SetGasUsed(h.GasUsed(i), i)
@@ -929,6 +931,9 @@ func CopyHeader(h *Header) *Header {
 	if len(h.extra) > 0 {
 		cpy.extra = make([]byte, len(h.extra))
 		copy(cpy.extra, h.extra)
+	}
+	for i := 0; i < common.NumRegionsInPrime; i++ {
+		cpy.SetParentSubDeltaS(h.ParentSubDeltaS(i), i)
 	}
 	cpy.SetDifficulty(h.Difficulty())
 	cpy.SetLocation(h.location)
@@ -974,7 +979,7 @@ func (b *Block) Bloom(args ...int) Bloom               { return b.header.Bloom(a
 func (b *Block) Difficulty(args ...int) *big.Int       { return b.header.Difficulty() }
 func (b *Block) ParentEntropy(args ...int) *big.Int    { return b.header.ParentEntropy(args...) }
 func (b *Block) ParentDeltaS(args ...int) *big.Int     { return b.header.ParentDeltaS(args...) }
-func (b *Block) ParentSubDeltaS(args ...int) *big.Int  { return b.header.ParentSubDeltaS(args...) }
+func (b *Block) ParentSubDeltaS(loc int) *big.Int      { return b.header.ParentSubDeltaS(loc) }
 func (b *Block) Number(args ...int) *big.Int           { return b.header.Number(args...) }
 func (b *Block) NumberU64(args ...int) uint64          { return b.header.NumberU64(args...) }
 func (b *Block) GasLimit(args ...int) uint64           { return b.header.GasLimit(args...) }
@@ -1093,9 +1098,10 @@ type Blocks []*Block
 
 // PendingHeader stores the header and termini value associated with the header.
 type PendingHeader struct {
-	Header  *Header
-	Termini []common.Hash
-	Entropy *big.Int
+	Header          *Header
+	Termini         []common.Hash
+	TerminusEntropy *big.Int
+	FutureEntropy   *big.Int
 }
 
 // BlockManifest is a list of block hashes, which implements DerivableList
@@ -1122,14 +1128,14 @@ type HashAndNumber struct {
 
 type BestPhKey struct {
 	key       common.Hash
-	entropy   []*big.Int
+	entropy   *big.Int
 	blockHash common.Hash
 }
 
-func NewBestPhKey(key common.Hash, entropy []*big.Int, blockHash common.Hash) BestPhKey {
+func NewBestPhKey(key common.Hash, entropy *big.Int, blockHash common.Hash) BestPhKey {
 	newBestPhKey := BestPhKey{}
 	newBestPhKey.SetKey(key)
-	newBestPhKey.SetEntropyArray(entropy)
+	newBestPhKey.SetEntropy(entropy)
 	newBestPhKey.SetBlockHash(blockHash)
 	return newBestPhKey
 }
@@ -1138,20 +1144,8 @@ func (b *BestPhKey) SetKey(key common.Hash) {
 	b.key = key
 }
 
-func (b *BestPhKey) SetEntropyArray(entropy []*big.Int) {
-	newEntropy := make([]*big.Int, common.HierarchyDepth)
-	for i := 0; i < common.HierarchyDepth; i++ {
-		newEntropy[i] = entropy[i]
-	}
-	b.entropy = newEntropy
-}
-
-func (h *BestPhKey) SetEntropy(val *big.Int, args ...int) {
-	nodeCtx := common.NodeLocation.Context()
-	if len(args) > 0 {
-		nodeCtx = args[0]
-	}
-	h.entropy[nodeCtx] = val
+func (h *BestPhKey) SetEntropy(val *big.Int) {
+	h.entropy = val
 }
 
 func (b *BestPhKey) SetBlockHash(blockHash common.Hash) {
@@ -1162,11 +1156,7 @@ func (b *BestPhKey) Key() common.Hash {
 	return b.key
 }
 
-func (b *BestPhKey) Entropy(index int) *big.Int {
-	return b.entropy[index]
-}
-
-func (b *BestPhKey) EntropyArray() []*big.Int {
+func (b *BestPhKey) Entropy() *big.Int {
 	return b.entropy
 }
 
@@ -1176,7 +1166,7 @@ func (b *BestPhKey) BlockHash() common.Hash {
 
 type extBestPhKey struct {
 	Key       common.Hash
-	Entropy   []*big.Int
+	Entropy   *big.Int
 	BlockHash common.Hash
 }
 

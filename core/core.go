@@ -67,7 +67,7 @@ func (c *Core) InsertChain(blocks types.Blocks) (int, error) {
 		// chain. If it is dom coincident, then the dom chain node in our slice needs
 		// to initiate the append.
 		if block.Header().CalcOrder() == nodeCtx {
-			newPendingEtxs, _, err := c.sl.Append(block.Header(), types.EmptyHeader(), common.Hash{}, nil, false, true, nil)
+			newPendingEtxs, _, err := c.sl.Append(block.Header(), types.EmptyHeader(), common.Hash{}, big.NewInt(0), false, true, nil)
 			if err == nil {
 				// If we have a dom, send the dom any pending ETXs which will become
 				// referencable by this block. When this block is referenced in the dom's
