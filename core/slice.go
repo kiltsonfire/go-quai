@@ -320,9 +320,7 @@ func (sl *Slice) relayPh(pendingHeaderWithTermini types.PendingHeader, s []*big.
 	} else if !domOrigin {
 		for i := range sl.subClients {
 			if sl.subClients[i] != nil {
-				if location.SubIndex() != i {
-					sl.subClients[i].SubRelayPendingHeader(context.Background(), pendingHeaderWithTermini, s[i], location, originCtx)
-				}
+				sl.subClients[i].SubRelayPendingHeader(context.Background(), pendingHeaderWithTermini, s[i], location, originCtx)
 			}
 		}
 	}
@@ -658,9 +656,9 @@ func (sl *Slice) writeToPhCacheAndPickPhHead(inSlice bool, reorg bool, s *big.In
 		} else {
 			var subDeltaEntropy *big.Int
 			if originCtx < nodeCtx {
-				subDeltaEntropy = s
-			} else {
 				subDeltaEntropy = big.NewInt(0).Add(oldPh.SubDeltaEntropy, s)
+			} else {
+				subDeltaEntropy = s
 			}
 			futureEntropy = big.NewInt(0).Add(oldPh.TerminusEntropy, pendingHeaderWithTermini.Header.ParentDeltaS())
 			futureEntropy = big.NewInt(0).Add(futureEntropy, subDeltaEntropy)
