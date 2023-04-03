@@ -710,7 +710,7 @@ func (h *Header) CalcDeltaS() *big.Int {
 
 func (h *Header) CalcSubDeltaS(args ...int) []*big.Int {
 	ctx := common.NodeLocation.Context()
-	//intrinsicS := h.CalcIntrinsicS()
+	intrinsicS := h.CalcIntrinsicS()
 	if len(args) > 0 {
 		ctx = args[0]
 	}
@@ -720,7 +720,7 @@ func (h *Header) CalcSubDeltaS(args ...int) []*big.Int {
 		for i := 0; i < 3; i++ {
 			if i != int(h.Location().Region()) {
 				subDeltaS[i] = big.NewInt(0).Add(h.ParentSubDeltaS(i), h.ParentDeltaS(ctx+1))
-				//subDeltaS[i] = big.NewInt(0).Add(subDeltaS[i], intrinsicS)
+				subDeltaS[i] = big.NewInt(0).Add(subDeltaS[i], intrinsicS)
 			} else {
 				subDeltaS[i] = big.NewInt(0)
 			}
@@ -730,7 +730,7 @@ func (h *Header) CalcSubDeltaS(args ...int) []*big.Int {
 		for i := 0; i < 3; i++ {
 			if i != int(h.Location().Zone()) {
 				subDeltaS[i] = big.NewInt(0).Add(h.ParentSubDeltaS(i), h.ParentDeltaS(ctx+1))
-				//subDeltaS[i] = big.NewInt(0).Add(subDeltaS[i], intrinsicS)
+				subDeltaS[i] = big.NewInt(0).Add(subDeltaS[i], intrinsicS)
 			} else {
 				subDeltaS[i] = big.NewInt(0)
 			}

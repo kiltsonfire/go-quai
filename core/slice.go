@@ -643,7 +643,7 @@ func (sl *Slice) writeToPhCacheAndPickPhHead(inSlice bool, reorg bool, s *big.In
 	nodeCtx := common.NodeLocation.Context()
 	oldPh, exist := sl.phCache[pendingHeaderWithTermini.Termini[terminiIndex]]
 	var deepCopyPendingHeaderWithTermini types.PendingHeader
-	futureEntropy := pendingHeaderWithTermini.Header.ParentEntropy()
+	var futureEntropy *big.Int
 	//parentHeader := sl.hc.GetHeaderByHash(pendingHeaderWithTermini.Header.ParentHash())
 
 	if exist {
@@ -674,6 +674,7 @@ func (sl *Slice) writeToPhCacheAndPickPhHead(inSlice bool, reorg bool, s *big.In
 		}
 		fmt.Println("writeToPhCacheAndPickPhHead, s:", common.BigBitsToBits(s), "oldPh.TerminusEntropy:", common.BigBitsToBits(oldPh.TerminusEntropy), "oldPh.FutureEntropy:", common.BigBitsToBits(oldPh.FutureEntropy))
 	} else {
+		futureEntropy = big.NewInt(0).Add(pendingHeaderWithTermini.Header.ParentEntropy(), s)
 		fmt.Println("future entropy 672:", common.BigBitsToBits(futureEntropy), "number:", pendingHeaderWithTermini.Header.NumberArray())
 		deepCopyPendingHeaderWithTermini = types.PendingHeader{Header: types.CopyHeader(pendingHeaderWithTermini.Header), Termini: pendingHeaderWithTermini.Termini, TerminusEntropy: futureEntropy, SubDeltaEntropy: big.NewInt(0), FutureEntropy: futureEntropy}
 		sl.phCache[pendingHeaderWithTermini.Termini[terminiIndex]] = deepCopyPendingHeaderWithTermini
