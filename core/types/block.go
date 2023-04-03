@@ -446,7 +446,9 @@ func (h *Header) SetParentSubDeltaS(val *big.Int, loc int) {
 }
 
 func (h *Header) SetParentSubDeltaSArray(val []*big.Int) {
-	h.parentSubDeltaS = val
+	for index, v := range val {
+		h.SetParentSubDeltaS(v, index)
+	}
 }
 
 func (h *Header) SetManifestHash(val common.Hash, args ...int) {
@@ -526,6 +528,7 @@ func (h *Header) NumberArray() []*big.Int           { return h.number }
 func (h *Header) GasLimitArray() []uint64           { return h.gasLimit }
 func (h *Header) GasUsedArray() []uint64            { return h.gasUsed }
 func (h *Header) BaseFeeArray() []*big.Int          { return h.baseFee }
+func (h *Header) ParentSubDeltaSArray() []*big.Int  { return h.parentSubDeltaS }
 
 // Hash returns the block hash of the header, which is simply the keccak256 hash of its
 // RLP encoding.

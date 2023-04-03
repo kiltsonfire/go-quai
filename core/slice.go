@@ -212,6 +212,7 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	}
 
 	// calc subDeltaS
+	fmt.Println("Parent sub delta S", common.BigBitsArrayToBitsArray(header.ParentSubDeltaSArray()))
 	subDeltaS := header.CalcSubDeltaS()
 
 	pendingHeaderWithTermini.Header.SetParentEntropy(s)
@@ -565,22 +566,24 @@ func (sl *Slice) SubRelayPendingHeader(pendingHeader types.PendingHeader, s *big
 	defer sl.phCachemu.Unlock()
 	nodeCtx := common.NodeLocation.Context()
 
+	var newS *big.Int
+	var err error
 	if nodeCtx == common.REGION_CTX {
 		// Adding a guard on the region that was already updated in the synchronous path.
-		err := sl.updatePhCacheFromDom(pendingHeader, common.NodeLocation.Region(), []int{common.PRIME_CTX}, s, originCtx)
+		newS, err = sl.updatePhCacheFromDom(pendingHeader, common.NodeLocation.Region(), []int{common.PRIME_CTX}, s, originCtx)
 		if err != nil {
 			return
 		}
 		for i := range sl.subClients {
 			if sl.subClients[i] != nil {
-				sl.subClients[i].SubRelayPendingHeader(context.Background(), sl.phCache[pendingHeader.Termini[common.NodeLocation.Region()]], s, location, originCtx)
+				sl.subClients[i].SubRelayPendingHeader(context.Background(), sl.phCache[pendingHeader.Termini[common.NodeLocation.Region()]], newS, location, originCtx)
 			}
 		}
 	} else {
 		// This check prevents a double send to the miner.
 		// If the previous block on which the given pendingHeader was built is the same as the NodeLocation
 		// the pendingHeader update has already been sent to the miner for the given location in relayPh.
-		err := sl.updatePhCacheFromDom(pendingHeader, common.NodeLocation.Zone(), []int{common.PRIME_CTX, common.REGION_CTX}, s, originCtx)
+		_, err := sl.updatePhCacheFromDom(pendingHeader, common.NodeLocation.Zone(), []int{common.PRIME_CTX, common.REGION_CTX}, s, originCtx)
 		if err != nil {
 			return
 		}
@@ -614,12 +617,13 @@ func (sl *Slice) computePendingHeader(localPendingHeaderWithTermini types.Pendin
 }
 
 // updatePhCacheFromDom combines the recieved pending header with the pending header stored locally at a given terminus for specified context
-func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, terminiIndex int, indices []int, s *big.Int, originCtx int) error {
+func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, terminiIndex int, indices []int, s *big.Int, originCtx int) (*big.Int, error) {
 
 	nodeCtx := common.NodeLocation.Context()
 	hash := pendingHeader.Termini[terminiIndex]
 	localPendingHeader, exists := sl.phCache[hash]
 
+	var newS *big.Int
 	if exists {
 		combinedPendingHeader := types.CopyHeader(localPendingHeader.Header)
 		for _, i := range indices {
@@ -630,12 +634,12 @@ func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, termini
 			combinedPendingHeader.SetLocation(common.NodeLocation)
 		}
 
-		sl.writeToPhCacheAndPickPhHead(false, false, s, types.PendingHeader{Header: combinedPendingHeader, Termini: localPendingHeader.Termini}, false, 3, originCtx)
+		newS = sl.writeToPhCacheAndPickPhHead(false, false, s, types.PendingHeader{Header: combinedPendingHeader, Termini: localPendingHeader.Termini}, false, 3, originCtx)
 
-		return nil
+		return newS, nil
 	}
 	log.Warn("no pending header found for", "terminus", hash, "pendingHeaderNumber", pendingHeader.Header.NumberArray(), "Hash", pendingHeader.Header.ParentHash(), "Termini index", terminiIndex, "indices", indices, "s", s, "originCtx", originCtx)
-	return errors.New("no pending header found in cache")
+	return newS, errors.New("no pending header found in cache")
 }
 
 // writePhCache dom writes a given pendingHeaderWithTermini to the cache with the terminus used as the key.
@@ -655,11 +659,16 @@ func (sl *Slice) writeToPhCacheAndPickPhHead(inSlice bool, reorg bool, s *big.In
 			deepCopyPendingHeaderWithTermini = types.PendingHeader{Header: types.CopyHeader(pendingHeaderWithTermini.Header), Termini: pendingHeaderWithTermini.Termini, TerminusEntropy: oldPh.TerminusEntropy, SubDeltaEntropy: oldPh.SubDeltaEntropy, FutureEntropy: futureEntropy}
 		} else {
 			var subDeltaEntropy *big.Int
-			if originCtx < nodeCtx {
-				subDeltaEntropy = big.NewInt(0).Add(oldPh.SubDeltaEntropy, s)
+			if originCtx != common.PRIME_CTX {
+				if originCtx < nodeCtx {
+					subDeltaEntropy = big.NewInt(0).Add(oldPh.SubDeltaEntropy, s)
+				} else {
+					subDeltaEntropy = s
+				}
 			} else {
-				subDeltaEntropy = s
+				subDeltaEntropy = big.NewInt(0)
 			}
+
 			futureEntropy = big.NewInt(0).Add(oldPh.TerminusEntropy, pendingHeaderWithTermini.Header.ParentDeltaS())
 			futureEntropy = big.NewInt(0).Add(futureEntropy, subDeltaEntropy)
 			//futureEntropy = big.NewInt(0).Add(futureEntropy, parentHeader.CalcIntrinsicS())
@@ -895,6 +904,7 @@ func (sl *Slice) combinePendingHeader(header *types.Header, slPendingHeader *typ
 	combinedPendingHeader.SetRoot(header.Root(index), index)
 	combinedPendingHeader.SetParentEntropy(header.ParentEntropy(index), index)
 	combinedPendingHeader.SetParentDeltaS(header.ParentDeltaS(index), index)
+	combinedPendingHeader.SetParentSubDeltaS(header.ParentSubDeltaS(index), index)
 	combinedPendingHeader.SetCoinbase(header.Coinbase(index), index)
 	combinedPendingHeader.SetBloom(header.Bloom(index), index)
 	combinedPendingHeader.SetDifficulty(header.Difficulty())
