@@ -670,18 +670,18 @@ func (h *Header) CalcS() *big.Int {
 	intrinsicS := h.CalcIntrinsicS()
 	switch order {
 	case common.PRIME_CTX:
-		fmt.Println("CalcS, h.ParentEntropy:", common.BigBitsToBits(h.ParentEntropy(common.PRIME_CTX)), "h.parentDeltaS(REGION):", common.BigBitsToBits(h.ParentDeltaS(common.REGION_CTX)), "h.ParentDeltaS(ZONE):", common.BigBitsToBits(h.ParentDeltaS(common.ZONE_CTX)), "intrinsic:", common.BigBitsToBits(intrinsicS))
+		//fmt.Println("CalcS, h.ParentEntropy:", common.BigBitsToBits(h.ParentEntropy(common.PRIME_CTX)), "h.parentDeltaS(REGION):", common.BigBitsToBits(h.ParentDeltaS(common.REGION_CTX)), "h.ParentDeltaS(ZONE):", common.BigBitsToBits(h.ParentDeltaS(common.ZONE_CTX)), "intrinsic:", common.BigBitsToBits(intrinsicS))
 		totalS := big.NewInt(0).Add(h.ParentEntropy(common.PRIME_CTX), h.ParentDeltaS(common.REGION_CTX))
 		totalS.Add(totalS, h.ParentDeltaS(common.ZONE_CTX))
 		totalS.Add(totalS, intrinsicS)
 		return totalS
 	case common.REGION_CTX:
-		fmt.Println("CalcS, h.ParentEntropy:", common.BigBitsToBits(h.ParentEntropy(common.REGION_CTX)), "h.parentDeltaS(ZONE):", common.BigBitsToBits(h.ParentDeltaS(common.ZONE_CTX)), "intrinsic:", common.BigBitsToBits(intrinsicS))
+		//fmt.Println("CalcS, h.ParentEntropy:", common.BigBitsToBits(h.ParentEntropy(common.REGION_CTX)), "h.parentDeltaS(ZONE):", common.BigBitsToBits(h.ParentDeltaS(common.ZONE_CTX)), "intrinsic:", common.BigBitsToBits(intrinsicS))
 		totalS := big.NewInt(0).Add(h.ParentEntropy(common.REGION_CTX), h.ParentDeltaS(common.ZONE_CTX))
 		totalS.Add(totalS, intrinsicS)
 		return totalS
 	case common.ZONE_CTX:
-		fmt.Println("CalcS, h.ParentEntropy:", common.BigBitsToBits(h.ParentEntropy(common.ZONE_CTX)), "intrinsic:", common.BigBitsToBits(intrinsicS))
+		//fmt.Println("CalcS, h.ParentEntropy:", common.BigBitsToBits(h.ParentEntropy(common.ZONE_CTX)), "intrinsic:", common.BigBitsToBits(intrinsicS))
 		totalS := big.NewInt(0).Add(h.ParentEntropy(common.ZONE_CTX), intrinsicS)
 		return totalS
 	}
@@ -710,24 +710,36 @@ func (h *Header) CalcDeltaS() *big.Int {
 
 func (h *Header) CalcSubDeltaS(args ...int) []*big.Int {
 	ctx := common.NodeLocation.Context()
-	intrinsicS := h.CalcIntrinsicS()
+	//intrinsicS := h.CalcIntrinsicS()
 	if len(args) > 0 {
 		ctx = args[0]
 	}
 	subDeltaS := make([]*big.Int, common.NumRegionsInPrime)
-	if ctx != common.ZONE_CTX {
+	switch ctx {
+	case common.PRIME_CTX:
 		for i := 0; i < 3; i++ {
 			if i != int(h.Location().Region()) {
 				subDeltaS[i] = big.NewInt(0).Add(h.ParentSubDeltaS(i), h.ParentDeltaS(ctx+1))
-				subDeltaS[i] = big.NewInt(0).Add(subDeltaS[i], intrinsicS)
+				//subDeltaS[i] = big.NewInt(0).Add(subDeltaS[i], intrinsicS)
 			} else {
 				subDeltaS[i] = big.NewInt(0)
 			}
 		}
 		return subDeltaS
-	} else {
+	case common.REGION_CTX:
+		for i := 0; i < 3; i++ {
+			if i != int(h.Location().Zone()) {
+				subDeltaS[i] = big.NewInt(0).Add(h.ParentSubDeltaS(i), h.ParentDeltaS(ctx+1))
+				//subDeltaS[i] = big.NewInt(0).Add(subDeltaS[i], intrinsicS)
+			} else {
+				subDeltaS[i] = big.NewInt(0)
+			}
+		}
+		return subDeltaS
+	case common.ZONE_CTX:
 		return []*big.Int{big.NewInt(0), big.NewInt(0), big.NewInt(0)}
 	}
+	return nil
 }
 
 func (h *Header) CalcOrder() int {
@@ -1101,6 +1113,7 @@ type PendingHeader struct {
 	Header          *Header
 	Termini         []common.Hash
 	TerminusEntropy *big.Int
+	SubDeltaEntropy *big.Int
 	FutureEntropy   *big.Int
 }
 
