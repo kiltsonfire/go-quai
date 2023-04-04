@@ -87,17 +87,17 @@ var (
 	headerHashSuffix   = []byte("n") // headerPrefix + num (uint64 big endian) + headerHashSuffix -> hash
 	headerNumberPrefix = []byte("H") // headerNumberPrefix + hash -> num (uint64 big endian)
 
-	pendingHeaderPrefix = []byte("ph")    // pendingHeaderPrefix + hash -> header
-	pbBodyPrefix        = []byte("pb")    // pbBodyPrefix + hash -> *types.Body
-	pbBodyHashPrefix    = []byte("pbKey") // pbBodyPrefix -> []common.Hash
-	phTerminiPrefix     = []byte("pht")   // phTerminiPrefix + hash -> []common.Hash
-	phEntropyPrefix     = []byte("pt")    // phEntropyPrefix + hash -> *big.Int
-	terminiPrefix       = []byte("tk")    //terminiPrefix + hash -> []common.Hash
-
-	blockBodyPrefix     = []byte("b")  // blockBodyPrefix + num (uint64 big endian) + hash -> block body
-	blockReceiptsPrefix = []byte("r")  // blockReceiptsPrefix + num (uint64 big endian) + hash -> block receipts
-	etxSetPrefix        = []byte("e")  // etxSetPrefix + num (uint64 big endian) + hash -> EtxSet at block
-	pendingEtxsPrefix   = []byte("pe") // pendingEtxsPrefix + hash -> PendingEtxs at block
+	pendingHeaderPrefix   = []byte("ph")    // pendingHeaderPrefix + hash -> header
+	pbBodyPrefix          = []byte("pb")    // pbBodyPrefix + hash -> *types.Body
+	pbBodyHashPrefix      = []byte("pbKey") // pbBodyPrefix -> []common.Hash
+	phTerminiPrefix       = []byte("pht")   // phTerminiPrefix + hash -> []common.Hash
+	phEntropyPrefix       = []byte("pt")    // phEntropyPrefix + hash -> *big.Int
+	terminiPrefix         = []byte("tk")    //terminiPrefix + hash -> []common.Hash
+	subDeltaEntropyPrefix = []byte("s")     //subDeltaSPrefix + hash -> []common.Hash
+	blockBodyPrefix       = []byte("b")     // blockBodyPrefix + num (uint64 big endian) + hash -> block body
+	blockReceiptsPrefix   = []byte("r")     // blockReceiptsPrefix + num (uint64 big endian) + hash -> block receipts
+	etxSetPrefix          = []byte("e")     // etxSetPrefix + num (uint64 big endian) + hash -> EtxSet at block
+	pendingEtxsPrefix     = []byte("pe")    // pendingEtxsPrefix + hash -> PendingEtxs at block
 
 	txLookupPrefix        = []byte("l") // txLookupPrefix + hash -> transaction/receipt lookup metadata
 	bloomBitsPrefix       = []byte("B") // bloomBitsPrefix + bit (uint16 big endian) + section (uint64 big endian) + hash -> bloom bits
@@ -174,6 +174,11 @@ func headerKey(number uint64, hash common.Hash) []byte {
 // terminiKey = domPendingHeaderPrefix + hash
 func terminiKey(hash common.Hash) []byte {
 	return append(terminiPrefix, hash.Bytes()...)
+}
+
+// subDeltaEntropyKey = subDeltaEntropyKeyPrefix + hash
+func subDeltaEntropyKey(hash common.Hash) []byte {
+	return append(subDeltaEntropyPrefix, hash.Bytes()...)
 }
 
 // pendingHeaderKey = pendingHeaderPrefix + hash

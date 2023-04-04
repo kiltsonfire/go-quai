@@ -694,6 +694,29 @@ func (h *Header) CalcS() *big.Int {
 	return nil
 }
 
+func (h *Header) CalcPhS() *big.Int {
+	// TODO guard on context
+	switch common.NodeLocation.Context() {
+	case common.PRIME_CTX:
+		totalS := h.ParentEntropy(common.PRIME_CTX)
+		fmt.Println("CalcPhS:", common.BigBitsToBits(totalS), "h.ParentEntropy:", common.BigBitsToBits(h.ParentEntropy(common.PRIME_CTX)))
+		return totalS
+	case common.REGION_CTX:
+		totalS := big.NewInt(0).Add(h.ParentEntropy(common.PRIME_CTX), h.ParentDeltaS(common.REGION_CTX))
+		fmt.Println("CalcPhS:", common.BigBitsToBits(totalS), "h.ParentEntropy:", common.BigBitsToBits(h.ParentEntropy(common.PRIME_CTX)), "h.parentDeltaS(REGION):", common.BigBitsToBits(h.ParentDeltaS(common.REGION_CTX)))
+		return totalS
+	case common.ZONE_CTX:
+		totalS := big.NewInt(0).Add(h.ParentEntropy(common.PRIME_CTX), h.ParentDeltaS(common.REGION_CTX))
+		totalS.Add(totalS, h.ParentDeltaS(common.ZONE_CTX))
+		fmt.Println("CalcPhS:", common.BigBitsToBits(totalS), "h.ParentEntropy:", common.BigBitsToBits(h.ParentEntropy(common.PRIME_CTX)), "h.parentDeltaS(REGION):", common.BigBitsToBits(h.ParentDeltaS(common.REGION_CTX)), "h.ParentDeltaS(ZONE):", common.BigBitsToBits(h.ParentDeltaS(common.ZONE_CTX)))
+		return totalS
+	}
+	if h.NumberU64() == 0 {
+		return big.NewInt(0)
+	}
+	return nil
+}
+
 func (h *Header) CalcDeltaS() *big.Int {
 	order := h.CalcOrder()
 	intrinsicS := h.CalcIntrinsicS()
@@ -711,38 +734,26 @@ func (h *Header) CalcDeltaS() *big.Int {
 	return nil
 }
 
-func (h *Header) CalcSubDeltaS(args ...int) []*big.Int {
+func (h *Header) CalcSubDeltaS(parentSubDeltaS []*big.Int, args ...int) []*big.Int {
 	ctx := common.NodeLocation.Context()
 	intrinsicS := h.CalcIntrinsicS()
 	if len(args) > 0 {
 		ctx = args[0]
 	}
 	subDeltaS := make([]*big.Int, common.NumRegionsInPrime)
-	switch ctx {
-	case common.PRIME_CTX:
+	if ctx != common.ZONE_CTX {
 		for i := 0; i < 3; i++ {
-			if i != int(h.Location().Region()) {
-				subDeltaS[i] = big.NewInt(0).Add(h.ParentSubDeltaS(i), h.ParentDeltaS(ctx+1))
+			if i != int(h.Location().SubIndex()) {
+				subDeltaS[i] = big.NewInt(0).Add(parentSubDeltaS[i], h.ParentDeltaS(ctx+1))
 				subDeltaS[i] = big.NewInt(0).Add(subDeltaS[i], intrinsicS)
 			} else {
 				subDeltaS[i] = big.NewInt(0)
 			}
 		}
 		return subDeltaS
-	case common.REGION_CTX:
-		for i := 0; i < 3; i++ {
-			if i != int(h.Location().Zone()) {
-				subDeltaS[i] = big.NewInt(0).Add(h.ParentSubDeltaS(i), h.ParentDeltaS(ctx+1))
-				subDeltaS[i] = big.NewInt(0).Add(subDeltaS[i], intrinsicS)
-			} else {
-				subDeltaS[i] = big.NewInt(0)
-			}
-		}
-		return subDeltaS
-	case common.ZONE_CTX:
+	} else {
 		return []*big.Int{big.NewInt(0), big.NewInt(0), big.NewInt(0)}
 	}
-	return nil
 }
 
 func (h *Header) CalcOrder() int {
@@ -1113,11 +1124,9 @@ type Blocks []*Block
 
 // PendingHeader stores the header and termini value associated with the header.
 type PendingHeader struct {
-	Header          *Header
-	Termini         []common.Hash
-	TerminusEntropy *big.Int
-	SubDeltaEntropy *big.Int
-	FutureEntropy   *big.Int
+	Header  *Header
+	Termini []common.Hash
+	Entropy *big.Int
 }
 
 // BlockManifest is a list of block hashes, which implements DerivableList

@@ -568,6 +568,42 @@ func DeleteTermini(db ethdb.KeyValueWriter, hash common.Hash) {
 	}
 }
 
+// ReadSubDeltaEntropy retreive's the heads hashes of the blockchain.
+func ReadSubDeltaEntropy(db ethdb.Reader, hash common.Hash) []*big.Int {
+	key := subDeltaEntropyKey(hash)
+	data, _ := db.Get(key)
+	if len(data) == 0 {
+		return nil
+	}
+	subDeltaS := new([]*big.Int)
+	if err := rlp.DecodeBytes(data, subDeltaS); err != nil {
+		return nil
+	}
+	return *subDeltaS
+}
+
+// WriteSubDeltaEntropy writes the heads hashes of the blockchain.
+func WriteSubDeltaEntropy(db ethdb.KeyValueWriter, hash common.Hash, subDeltaS []*big.Int) {
+	log.Debug("WriteSubDeltaEntropy:", "hash:", hash, "subDeltaS:", subDeltaS)
+	key := subDeltaEntropyKey(hash)
+	data, err := rlp.EncodeToBytes(subDeltaS)
+	if err != nil {
+		log.Crit("Failed to RLP encode subDeltaS", "err", err)
+	}
+	if err := db.Put(key, data); err != nil {
+		log.Crit("Failed to store last block's subDeltaS", "err", err)
+	}
+}
+
+// DeleteSubDeltaEntropy writes the heads hashes of the blockchain.
+func DeleteSubDeltaEntropy(db ethdb.KeyValueWriter, hash common.Hash) {
+	key := subDeltaEntropyKey(hash)
+
+	if err := db.Delete(key); err != nil {
+		log.Crit("Failed to delete subDeltaS ", "err", err)
+	}
+}
+
 // ReadPendingHeader retreive's the pending header stored in hash.
 func ReadPendingHeader(db ethdb.Reader, hash common.Hash) *types.Header {
 	key := pendingHeaderKey(hash)
@@ -686,7 +722,7 @@ func ReadPhCache(db ethdb.Reader) map[common.Hash]types.PendingHeader {
 		header := ReadPendingHeader(db, hash)
 		termini := ReadPhCacheTermini(db, hash)
 		entropy := ReadPhCacheEntropy(db, hash)
-		pendingHeader := types.PendingHeader{Header: header, Termini: termini, TerminusEntropy: entropy}
+		pendingHeader := types.PendingHeader{Header: header, Termini: termini, Entropy: entropy}
 		phCache[hash] = pendingHeader
 	}
 	return phCache
@@ -699,7 +735,7 @@ func WritePhCache(db ethdb.KeyValueWriter, phCache map[common.Hash]types.Pending
 		hashes = append(hashes, hash)
 		WritePendingHeader(db, hash, pendingHeader.Header)
 		WritePhCacheTermini(db, hash, pendingHeader.Termini)
-		WritePhCacheEntropy(db, hash, pendingHeader.TerminusEntropy)
+		WritePhCacheEntropy(db, hash, pendingHeader.Entropy)
 	}
 
 	data, err := rlp.EncodeToBytes(hashes)
