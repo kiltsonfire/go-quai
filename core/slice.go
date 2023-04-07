@@ -133,19 +133,19 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 		log.Warn("Block has already been appended: ", "Hash: ", header.Hash())
 		return nil, ErrKnownBlock
 	}
-
+	time1 := common.PrettyDuration(time.Since(start))
 	// This is to prevent a crash when we try to insert blocks before domClient is on.
 	// Ideally this check should not exist here and should be fixed before we start the slice.
 	if sl.domClient == nil && nodeCtx != common.PRIME_CTX {
 		return nil, ErrDomClientNotUp
 	}
-
+	time2 := common.PrettyDuration(time.Since(start))
 	// Construct the block locally
 	block, err := sl.ConstructLocalBlock(header)
 	if err != nil {
 		return nil, err
 	}
-
+	time3 := common.PrettyDuration(time.Since(start))
 	batch := sl.sliceDb.NewBatch()
 
 	// Run Previous Coincident Reference Check (PCRC)
@@ -153,7 +153,7 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	if err != nil {
 		return nil, err
 	}
-
+	time4 := common.PrettyDuration(time.Since(start))
 	// If this was a coincident block, our dom will be passing us a set of newly confirmed ETXs
 	// If this is not a coincident block, we need to build up the list of confirmed ETXs using the subordinate manifest
 	subRollup := types.Transactions{}
@@ -170,23 +170,24 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 		}
 		subRollup = subRollups[nodeCtx+1]
 	}
+	time5 := common.PrettyDuration(time.Since(start))
 
 	// Append the new block
 	err = sl.hc.Append(batch, block, newInboundEtxs.FilterToLocation(common.NodeLocation))
 	if err != nil {
 		return nil, err
 	}
-
+	time6 := common.PrettyDuration(time.Since(start))
 	// Upate the local pending header
 	localPendingHeader, err := sl.miner.worker.GeneratePendingHeader(block)
 	if err != nil {
 		return nil, err
 	}
-
+	time7 := common.PrettyDuration(time.Since(start))
 	// Combine subordinates pending header with local pending header
 	pendingHeaderWithTermini := sl.computePendingHeader(types.PendingHeader{Header: localPendingHeader, Termini: newTermini}, domPendingHeader, domOrigin)
 	pendingHeaderWithTermini.Header.SetLocation(header.Location())
-
+	time8 := common.PrettyDuration(time.Since(start))
 	s := header.CalcS()
 
 	// Set the parent delta S prior to sending to sub
@@ -197,7 +198,7 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 			pendingHeaderWithTermini.Header.SetParentDeltaS(header.CalcDeltaS(), nodeCtx)
 		}
 	}
-
+	time9 := common.PrettyDuration(time.Since(start))
 	pendingHeaderWithTermini.Header.SetParentEntropy(s)
 
 	// Call my sub to append the block, and collect the rolled up ETXs from that sub
@@ -219,7 +220,7 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 			sl.AddPendingEtxs(pEtxs)
 		}
 	}
-
+	time10 := common.PrettyDuration(time.Since(start))
 	log.Debug("Entropy Calculations", "header", header.Hash(), "S", common.BigBitsToBits(s), "DeltaS", common.BigBitsToBits(header.CalcDeltaS()), "IntrinsicS", common.BigBitsToBits(header.CalcIntrinsicS()))
 	// Combine sub's pending ETXs, sub rollup, and our local ETXs into localPendingEtxs
 	// e.g. localPendingEtxs[ctx]:
@@ -242,7 +243,7 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	}
 	localPendingEtxs[nodeCtx] = make(types.Transactions, len(block.ExtTransactions()))
 	copy(localPendingEtxs[nodeCtx], block.ExtTransactions()) // Assign our new ETXs without rolling up
-
+	time11 := common.PrettyDuration(time.Since(start))
 	// WriteTd
 	rawdb.WriteTd(batch, block.Header().Hash(), block.NumberU64(), big.NewInt(0))
 
@@ -250,12 +251,13 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	if err := batch.Write(); err != nil {
 		return nil, err
 	}
-
+	time12 := common.PrettyDuration(time.Since(start))
 	sl.writeToPhCacheAndPickPhHead(pendingHeaderWithTermini)
 
 	// Relay the new pendingHeader
 	sl.relayPh(pendingHeaderWithTermini, domOrigin, block.Location())
-
+	time13 := common.PrettyDuration(time.Since(start))
+	log.Info("times during append:", "t1:", time1, "t2:", time2, "t3:", time3, "t4:", time4, "t5:", time5, "t6:", time6, "t7:", time7, "t8:", time8, "t9:", time9, "t10:", time10, "t11:", time11, "t12:", time12, "t13:", time13)
 	log.Info("Appended new block", "number", block.Header().Number(), "hash", block.Hash(),
 		"uncles", len(block.Uncles()), "txs", len(block.Transactions()), "etxs", len(block.ExtTransactions()), "gas", block.GasUsed(),
 		"root", block.Root(),
