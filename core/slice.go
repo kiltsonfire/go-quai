@@ -260,7 +260,7 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	sl.writeToPhCacheAndPickPhHead(pendingHeaderWithTermini)
 
 	// Relay the new pendingHeader
-	sl.relayPh(pendingHeaderWithTermini, domOrigin, block.Location())
+	go sl.relayPh(pendingHeaderWithTermini, domOrigin, block.Location())
 	time13 := common.PrettyDuration(time.Since(start))
 	log.Info("times during append:", "t1:", time1, "t2:", time2, "t3:", time3, "t4:", time4, "t5:", time5, "t6:", time6, "t7:", time7, "t8:", time8, "t9:", time9, "t10:", time10, "t11:", time11, "t12:", time12, "t13:", time13)
 	log.Info("times during sub append:", "t9_1:", time9_1, "t9_2:", time9_2, "t9_3:", time9_3)
