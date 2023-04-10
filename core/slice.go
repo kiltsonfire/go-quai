@@ -200,7 +200,9 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	}
 	time9 := common.PrettyDuration(time.Since(start))
 	pendingHeaderWithTermini.Header.SetParentEntropy(s)
-
+	var time9_1 common.PrettyDuration
+	var time9_2 common.PrettyDuration
+	var time9_3 common.PrettyDuration
 	// Call my sub to append the block, and collect the rolled up ETXs from that sub
 	localPendingEtxs := []types.Transactions{types.Transactions{}, types.Transactions{}, types.Transactions{}}
 	subPendingEtxs := []types.Transactions{types.Transactions{}, types.Transactions{}, types.Transactions{}}
@@ -212,12 +214,15 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 			if err != nil {
 				return nil, err
 			}
+			time9_1 = common.PrettyDuration(time.Since(start))
 			// Cache the subordinate's pending ETXs
 			pEtxs := types.PendingEtxs{block.Header(), subPendingEtxs}
 			if !pEtxs.IsValid(trie.NewStackTrie(nil)) {
 				return nil, errors.New("sub pending ETXs faild validation")
 			}
+			time9_2 = common.PrettyDuration(time.Since(start))
 			sl.AddPendingEtxs(pEtxs)
+			time9_3 = common.PrettyDuration(time.Since(start))
 		}
 	}
 	time10 := common.PrettyDuration(time.Since(start))
@@ -258,6 +263,7 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	sl.relayPh(pendingHeaderWithTermini, domOrigin, block.Location())
 	time13 := common.PrettyDuration(time.Since(start))
 	log.Info("times during append:", "t1:", time1, "t2:", time2, "t3:", time3, "t4:", time4, "t5:", time5, "t6:", time6, "t7:", time7, "t8:", time8, "t9:", time9, "t10:", time10, "t11:", time11, "t12:", time12, "t13:", time13)
+	log.Info("times during sub append:", "t9_1:", time9_1, "t9_2:", time9_2, "t9_3:", time9_3)
 	log.Info("Appended new block", "number", block.Header().Number(), "hash", block.Hash(),
 		"uncles", len(block.Uncles()), "txs", len(block.Transactions()), "etxs", len(block.ExtTransactions()), "gas", block.GasUsed(),
 		"root", block.Root(),
