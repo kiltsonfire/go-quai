@@ -400,7 +400,7 @@ func DefaultOrchardGenesisBlock() *Genesis {
 		Config:     params.OrchardChainConfig,
 		Nonce:      68,
 		ExtraData:  hexutil.MustDecode("0x3535353535353535353535353535353535353535353535353535353535353535"),
-		GasLimit:   []uint64{1000000, 1000000, 1000000},
+		GasLimit:   []uint64{10000000, 10000000, 10000000},
 		Difficulty: big.NewInt(2048576),
 		Alloc:      decodePrealloc(orchardAllocData),
 	}
