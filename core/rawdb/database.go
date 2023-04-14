@@ -309,6 +309,7 @@ func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte) error {
 		ancientReceiptsSize common.StorageSize
 		ancientTdsSize      common.StorageSize
 		ancientHashesSize   common.StorageSize
+		ancientEtxSetSize   common.StorageSize
 
 		// Les statistic
 		chtTrieNodes   stat
@@ -392,7 +393,7 @@ func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte) error {
 		}
 	}
 	// Inspect append-only file store then.
-	ancientSizes := []*common.StorageSize{&ancientHeadersSize, &ancientBodiesSize, &ancientReceiptsSize, &ancientHashesSize, &ancientTdsSize}
+	ancientSizes := []*common.StorageSize{&ancientHeadersSize, &ancientBodiesSize, &ancientReceiptsSize, &ancientHashesSize, &ancientTdsSize, &ancientEtxSetSize}
 	for i, category := range []string{freezerHeaderTable, freezerBodiesTable, freezerReceiptTable, freezerHashTable, freezerDifficultyTable, freezerEtxSetsTable} {
 		if size, err := db.AncientSize(category); err == nil {
 			*ancientSizes[i] += common.StorageSize(size)
@@ -425,6 +426,7 @@ func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte) error {
 		{"Ancient store", "Receipt lists", ancientReceiptsSize.String(), ancients.String()},
 		{"Ancient store", "Difficulties", ancientTdsSize.String(), ancients.String()},
 		{"Ancient store", "Block number->hash", ancientHashesSize.String(), ancients.String()},
+		{"Ancient store", "etx set", ancientEtxSetSize.String(), ancients.String()},
 		{"Light client", "CHT trie nodes", chtTrieNodes.Size(), chtTrieNodes.Count()},
 		{"Light client", "Bloom trie nodes", bloomTrieNodes.Size(), bloomTrieNodes.Count()},
 	}

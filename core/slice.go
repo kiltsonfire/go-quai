@@ -107,6 +107,8 @@ func NewSlice(db ethdb.Database, config *Config, txConfig *TxPoolConfig, isLocal
 		return nil, err
 	}
 
+	rawdb.InspectDatabase(sl.sliceDb, []byte("h"), []byte("h"))
+
 	return sl, nil
 }
 
