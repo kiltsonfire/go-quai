@@ -106,8 +106,45 @@ func NewSlice(db ethdb.Database, config *Config, txConfig *TxPoolConfig, isLocal
 	if err := sl.init(genesis); err != nil {
 		return nil, err
 	}
+	var prefixArray [][]byte
 
-	rawdb.InspectDatabase(sl.sliceDb, []byte("h"), []byte("h"))
+	// Data item prefixes (use single byte to avoid mixing data types, avoid `i`, used for indexes).
+	prefixArray = append(prefixArray, []byte("h")) // headerPrefix + num (uint64 big endian) + hash -> header
+	prefixArray = append(prefixArray, []byte("t")) // headerPrefix + num (uint64 big endian) + hash + headerTDSuffix -> td
+	prefixArray = append(prefixArray, []byte("n")) // headerPrefix + num (uint64 big endian) + headerHashSuffix -> hash
+	prefixArray = append(prefixArray, []byte("H")) // headerNumberPrefix + hash -> num (uint64 big endian)
+
+	prefixArray = append(prefixArray, []byte("ph"))    // pendingHeaderPrefix + hash -> header
+	prefixArray = append(prefixArray, []byte("cb"))    // candidateBodyPrefix + hash -> Body
+	prefixArray = append(prefixArray, []byte("pb"))    // pbBodyPrefix + hash -> *types.Body
+	prefixArray = append(prefixArray, []byte("pbKey")) // pbBodyPrefix -> []common.Hash
+	prefixArray = append(prefixArray, []byte("pht"))   // phTerminiPrefix + hash -> []common.Hash
+	prefixArray = append(prefixArray, []byte("pt"))    // phEntropyPrefix + hash -> *big.Int
+	prefixArray = append(prefixArray, []byte("pc"))    // phBodyPrefix + hash -> []common.Hash + Td
+	prefixArray = append(prefixArray, []byte("tk"))    //terminiPrefix + hash -> []common.Hash
+
+	prefixArray = append(prefixArray, []byte("b"))  // blockBodyPrefix + num (uint64 big endian) + hash -> block body
+	prefixArray = append(prefixArray, []byte("r"))  // blockReceiptsPrefix + num (uint64 big endian) + hash -> block receipts
+	prefixArray = append(prefixArray, []byte("e"))  // etxSetPrefix + num (uint64 big endian) + hash -> EtxSet at block
+	prefixArray = append(prefixArray, []byte("pe")) // pendingEtxsPrefix + hash -> PendingEtxs at block
+
+	prefixArray = append(prefixArray, []byte("l")) // txLookupPrefix + hash -> transaction/receipt lookup metadata
+	prefixArray = append(prefixArray, []byte("B")) // bloomBitsPrefix + bit (uint16 big endian) + section (uint64 big endian) + hash -> bloom bits
+	prefixArray = append(prefixArray, []byte("a")) // SnapshotAccountPrefix + account hash -> account trie value
+	prefixArray = append(prefixArray, []byte("o")) // SnapshotStoragePrefix + account hash + storage hash -> storage trie value
+	prefixArray = append(prefixArray, []byte("c")) // CodePrefix + code hash -> account code
+
+	prefixArray = append(prefixArray, []byte("secure-key-"))      // preimagePrefix + hash -> preimage
+	prefixArray = append(prefixArray, []byte("ethereum-config-")) // config prefix for the db
+
+	// Chain index prefixes (use `i` + single byte to avoid mixing data types).
+	prefixArray = append(prefixArray, []byte("iB")) // BloomBitsIndexPrefix is the data table of a chain indexer to track its progress
+
+	for _, prefix := range prefixArray {
+		rawdb.InspectDatabase(sl.sliceDb, prefix, []byte{0})
+	}
+
+	//rawdb.InspectDatabase(sl.sliceDb, []byte("h"), []byte{0})
 
 	return sl, nil
 }

@@ -295,6 +295,16 @@ func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte) error {
 		tds             stat
 		numHashPairings stat
 		hashNumPairings stat
+		pendingHeader   stat
+		candidateBody   stat
+		pbBody          stat
+		pbBodyHash      stat
+		phTermini       stat
+		phEntropy       stat
+		phBody          stat
+		termini         stat
+		etxSet          stat
+		pendingEtxs     stat
 		tries           stat
 		codes           stat
 		txLookups       stat
@@ -358,6 +368,26 @@ func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte) error {
 			metadata.Add(size)
 		case bytes.HasPrefix(key, bloomBitsPrefix) && len(key) == (len(bloomBitsPrefix)+10+common.HashLength):
 			bloomBits.Add(size)
+		case bytes.HasPrefix(key, pendingHeaderPrefix):
+			pendingHeader.Add(size)
+		case bytes.HasPrefix(key, candidateBodyPrefix):
+			candidateBody.Add(size)
+		case bytes.HasPrefix(key, pbBodyPrefix):
+			pbBody.Add(size)
+		case bytes.HasPrefix(key, pbBodyHashPrefix):
+			pbBodyHash.Add(size)
+		case bytes.HasPrefix(key, phTerminiPrefix):
+			phTermini.Add(size)
+		case bytes.HasPrefix(key, phEntropyPrefix):
+			phEntropy.Add(size)
+		case bytes.HasPrefix(key, phBodyPrefix):
+			phBody.Add(size)
+		case bytes.HasPrefix(key, terminiPrefix):
+			termini.Add(size)
+		case bytes.HasPrefix(key, etxSetPrefix):
+			etxSet.Add(size)
+		case bytes.HasPrefix(key, pendingEtxsPrefix):
+			pendingEtxs.Add(size)
 		case bytes.HasPrefix(key, BloomBitsIndexPrefix):
 			bloomBits.Add(size)
 		case bytes.HasPrefix(key, []byte("cht-")) ||
@@ -415,6 +445,13 @@ func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte) error {
 		{"Key-Value store", "Block hash->number", hashNumPairings.Size(), hashNumPairings.Count()},
 		{"Key-Value store", "Transaction index", txLookups.Size(), txLookups.Count()},
 		{"Key-Value store", "Bloombit index", bloomBits.Size(), bloomBits.Count()},
+		{"Key-Value store", "pendingHeader index", pendingHeader.Size(), pendingHeader.Count()},
+		{"Key-Value store", "candidateBody index", candidateBody.Size(), candidateBody.Count()},
+		{"Key-Value store", "phBody index", phBody.Size(), phBody.Count()},
+		{"Key-Value store", "pbBodyHash index", pbBodyHash.Size(), pbBodyHash.Count()},
+		{"Key-Value store", "phTermini index", phTermini.Size(), phTermini.Count()},
+		{"Key-Value store", "etxSet index", etxSet.Size(), etxSet.Count()},
+		{"Key-Value store", "pendingEtxs index", pendingEtxs.Size(), pendingEtxs.Count()},
 		{"Key-Value store", "Contract codes", codes.Size(), codes.Count()},
 		{"Key-Value store", "Trie nodes", tries.Size(), tries.Count()},
 		{"Key-Value store", "Trie preimages", preimages.Size(), preimages.Count()},
