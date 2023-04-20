@@ -25,10 +25,12 @@ import (
 	"time"
 
 	"github.com/dominant-strategies/go-quai/common"
+	"github.com/dominant-strategies/go-quai/core/types"
 	"github.com/dominant-strategies/go-quai/ethdb"
 	"github.com/dominant-strategies/go-quai/ethdb/leveldb"
 	"github.com/dominant-strategies/go-quai/ethdb/memorydb"
 	"github.com/dominant-strategies/go-quai/log"
+	"github.com/dominant-strategies/go-quai/rlp"
 	"github.com/olekukonko/tablewriter"
 )
 
@@ -342,6 +344,11 @@ func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte) error {
 		switch {
 		case bytes.HasPrefix(key, headerPrefix) && len(key) == (len(headerPrefix)+8+common.HashLength):
 			headers.Add(size)
+			header := new(types.Header)
+			if err := rlp.Decode(bytes.NewReader(it.Value()), header); err != nil {
+				return nil
+			}
+			fmt.Println("header number:", header.NumberArray(), "hash:", header.Hash())
 		case bytes.HasPrefix(key, blockBodyPrefix) && len(key) == (len(blockBodyPrefix)+8+common.HashLength):
 			bodies.Add(size)
 		case bytes.HasPrefix(key, blockReceiptsPrefix) && len(key) == (len(blockReceiptsPrefix)+8+common.HashLength):
