@@ -182,7 +182,7 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	}
 	time6 := common.PrettyDuration(time.Since(start))
 	// Upate the local pending header
-	localPendingHeader, err := sl.miner.worker.GeneratePendingHeader(block)
+	localPendingHeader, err := sl.miner.worker.GeneratePendingHeader(block, true)
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +258,6 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 		return nil, err
 	}
 	time12 := common.PrettyDuration(time.Since(start))
-	sl.writeToPhCacheAndPickPhHead(pendingHeaderWithTermini)
 
 	// Relay the new pendingHeader
 	go sl.relayPh(pendingHeaderWithTermini, domOrigin, block.Location())
@@ -289,6 +288,8 @@ func (sl *Slice) backfillPETXs(header *types.Header, subManifest types.BlockMani
 // relayPh sends pendingHeaderWithTermini to subordinates
 func (sl *Slice) relayPh(pendingHeaderWithTermini types.PendingHeader, domOrigin bool, location common.Location) {
 	nodeCtx := common.NodeLocation.Context()
+
+	sl.writeToPhCacheAndPickPhHead(pendingHeaderWithTermini)
 
 	if nodeCtx == common.ZONE_CTX {
 		bestPh, exists := sl.phCache[sl.bestPhKey]
@@ -766,7 +767,7 @@ func (sl *Slice) NewGenesisPendingHeader(domPendingHeader *types.Header) {
 	nodeCtx := common.NodeLocation.Context()
 	genesisHash := sl.config.GenesisHash
 	// Upate the local pending header
-	localPendingHeader, err := sl.miner.worker.GeneratePendingHeader(sl.hc.GetBlockByHash(genesisHash))
+	localPendingHeader, err := sl.miner.worker.GeneratePendingHeader(sl.hc.GetBlockByHash(genesisHash), false)
 	if err != nil {
 		return
 	}

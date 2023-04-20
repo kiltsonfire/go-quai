@@ -385,7 +385,7 @@ func (w *worker) StorePendingBlockBody() {
 }
 
 // GeneratePendingBlock generates pending block given a commited block.
-func (w *worker) GeneratePendingHeader(block *types.Block) (*types.Header, error) {
+func (w *worker) GeneratePendingHeader(block *types.Block, empty bool) (*types.Header, error) {
 
 	// Sanitize recommit interval if the user-specified one is too short.
 	recommit := w.config.Recommit
@@ -446,7 +446,9 @@ func (w *worker) GeneratePendingHeader(block *types.Block) (*types.Header, error
 
 	// Fill pending transactions from the txpool
 	w.adjustGasLimit(nil, work, block)
-	w.fillTransactions(interrupt, work, block)
+	if !empty {
+		w.fillTransactions(interrupt, work, block)
+	}
 
 	env := work.copy()
 	interval := w.fullTaskHook
