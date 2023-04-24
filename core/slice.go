@@ -182,15 +182,11 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	}
 	time6 := common.PrettyDuration(time.Since(start))
 	// Upate the local pending header
-	localPendingHeader, err := sl.miner.worker.GeneratePendingHeader(block)
+	pendingHeaderWithTermini, err := sl.generateSlicePendingHeader(block, newTermini, domPendingHeader, domOrigin, false)
 	if err != nil {
 		return nil, err
 	}
 	time7 := common.PrettyDuration(time.Since(start))
-	// Combine subordinates pending header with local pending header
-	pendingHeaderWithTermini := sl.computePendingHeader(types.PendingHeader{Header: localPendingHeader, Termini: newTermini}, domPendingHeader, domOrigin)
-	pendingHeaderWithTermini.Header.SetLocation(header.Location())
-	time8 := common.PrettyDuration(time.Since(start))
 	s := header.CalcS()
 
 	// Set the parent delta S prior to sending to sub
@@ -201,11 +197,11 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 			pendingHeaderWithTermini.Header.SetParentDeltaS(header.CalcDeltaS(), nodeCtx)
 		}
 	}
-	time9 := common.PrettyDuration(time.Since(start))
+	time8 := common.PrettyDuration(time.Since(start))
 	pendingHeaderWithTermini.Header.SetParentEntropy(s)
-	var time9_1 common.PrettyDuration
-	var time9_2 common.PrettyDuration
-	var time9_3 common.PrettyDuration
+	var time8_1 common.PrettyDuration
+	var time8_2 common.PrettyDuration
+	var time8_3 common.PrettyDuration
 	// Call my sub to append the block, and collect the rolled up ETXs from that sub
 	localPendingEtxs := []types.Transactions{types.Transactions{}, types.Transactions{}, types.Transactions{}}
 	subPendingEtxs := []types.Transactions{types.Transactions{}, types.Transactions{}, types.Transactions{}}
@@ -217,18 +213,18 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 			if err != nil {
 				return nil, err
 			}
-			time9_1 = common.PrettyDuration(time.Since(start))
+			time8_1 = common.PrettyDuration(time.Since(start))
 			// Cache the subordinate's pending ETXs
 			pEtxs := types.PendingEtxs{block.Header(), subPendingEtxs}
 			if !pEtxs.IsValid(trie.NewStackTrie(nil)) {
 				return nil, errors.New("sub pending ETXs faild validation")
 			}
-			time9_2 = common.PrettyDuration(time.Since(start))
+			time8_2 = common.PrettyDuration(time.Since(start))
 			sl.AddPendingEtxs(pEtxs)
-			time9_3 = common.PrettyDuration(time.Since(start))
+			time8_3 = common.PrettyDuration(time.Since(start))
 		}
 	}
-	time10 := common.PrettyDuration(time.Since(start))
+	time9 := common.PrettyDuration(time.Since(start))
 	log.Trace("Entropy Calculations", "header", header.Hash(), "S", common.BigBitsToBits(s), "DeltaS", common.BigBitsToBits(header.CalcDeltaS()), "IntrinsicS", common.BigBitsToBits(header.CalcIntrinsicS()))
 	// Combine sub's pending ETXs, sub rollup, and our local ETXs into localPendingEtxs
 	// e.g. localPendingEtxs[ctx]:
@@ -252,19 +248,19 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	localPendingEtxs[nodeCtx] = make(types.Transactions, len(block.ExtTransactions()))
 	copy(localPendingEtxs[nodeCtx], block.ExtTransactions()) // Assign our new ETXs without rolling up
 
-	time11 := common.PrettyDuration(time.Since(start))
+	time10 := common.PrettyDuration(time.Since(start))
 	//Append has succeeded write the batch
 	if err := batch.Write(); err != nil {
 		return nil, err
 	}
-	time12 := common.PrettyDuration(time.Since(start))
+	time11 := common.PrettyDuration(time.Since(start))
 	sl.writeToPhCacheAndPickPhHead(pendingHeaderWithTermini)
 
 	// Relay the new pendingHeader
-	go sl.relayPh(pendingHeaderWithTermini, domOrigin, block.Location())
-	time13 := common.PrettyDuration(time.Since(start))
-	log.Info("times during append:", "t1:", time1, "t2:", time2, "t3:", time3, "t4:", time4, "t5:", time5, "t6:", time6, "t7:", time7, "t8:", time8, "t9:", time9, "t10:", time10, "t11:", time11, "t12:", time12, "t13:", time13)
-	log.Info("times during sub append:", "t9_1:", time9_1, "t9_2:", time9_2, "t9_3:", time9_3)
+	go sl.relayPh(block, pendingHeaderWithTermini, domOrigin, block.Location())
+	time12 := common.PrettyDuration(time.Since(start))
+	log.Info("times during append:", "t1:", time1, "t2:", time2, "t3:", time3, "t4:", time4, "t5:", time5, "t6:", time6, "t7:", time7, "t8:", time8, "t9:", time9, "t10:", time10, "t11:", time11, "t12:", time12)
+	log.Info("times during sub append:", "t9_1:", time8_1, "t9_2:", time8_2, "t9_3:", time8_3)
 	log.Info("Appended new block", "number", block.Header().Number(), "hash", block.Hash(),
 		"uncles", len(block.Uncles()), "txs", len(block.Transactions()), "etxs", len(block.ExtTransactions()), "gas", block.GasUsed(),
 		"root", block.Root(),
@@ -287,10 +283,15 @@ func (sl *Slice) backfillPETXs(header *types.Header, subManifest types.BlockMani
 }
 
 // relayPh sends pendingHeaderWithTermini to subordinates
-func (sl *Slice) relayPh(pendingHeaderWithTermini types.PendingHeader, domOrigin bool, location common.Location) {
+func (sl *Slice) relayPh(block *types.Block, pendingHeaderWithTermini types.PendingHeader, domOrigin bool, location common.Location) {
 	nodeCtx := common.NodeLocation.Context()
 
 	if nodeCtx == common.ZONE_CTX {
+		localPendingHeader, err := sl.miner.worker.GeneratePendingHeader(block, true)
+		if err != nil {
+			pendingHeaderWithTermini.Header = sl.combinePendingHeader(localPendingHeader, pendingHeaderWithTermini.Header, common.NodeLocation.Context())
+		}
+
 		bestPh, exists := sl.phCache[sl.bestPhKey]
 		if exists {
 			bestPh.Header.SetLocation(common.NodeLocation)
@@ -304,6 +305,21 @@ func (sl *Slice) relayPh(pendingHeaderWithTermini types.PendingHeader, domOrigin
 			}
 		}
 	}
+}
+
+// Generate a slice pending header
+func (sl *Slice) generateSlicePendingHeader(block *types.Block, newTermini []common.Hash, domPendingHeader *types.Header, domOrigin bool, fill bool) (types.PendingHeader, error) {
+	// Upate the local pending header
+	localPendingHeader, err := sl.miner.worker.GeneratePendingHeader(block, fill)
+	if err != nil {
+		return types.PendingHeader{}, err
+	}
+
+	// Combine subordinates pending header with local pending header
+	pendingHeaderWithTermini := sl.computePendingHeader(types.PendingHeader{Header: localPendingHeader, Termini: newTermini}, domPendingHeader, domOrigin)
+	pendingHeaderWithTermini.Header.SetLocation(block.Header().Location())
+
+	return pendingHeaderWithTermini, nil
 }
 
 // CollectEtxsForManifest will gather the full list of ETXs that are referenceable through a given manifest
@@ -767,7 +783,7 @@ func (sl *Slice) NewGenesisPendingHeader(domPendingHeader *types.Header) {
 	nodeCtx := common.NodeLocation.Context()
 	genesisHash := sl.config.GenesisHash
 	// Upate the local pending header
-	localPendingHeader, err := sl.miner.worker.GeneratePendingHeader(sl.hc.GetBlockByHash(genesisHash))
+	localPendingHeader, err := sl.miner.worker.GeneratePendingHeader(sl.hc.GetBlockByHash(genesisHash), true)
 	if err != nil {
 		return
 	}
