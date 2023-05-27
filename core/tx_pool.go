@@ -1193,6 +1193,8 @@ func (pool *TxPool) scheduleReorgLoop() {
 // runReorg runs reset and promoteExecutables on behalf of scheduleReorgLoop.
 func (pool *TxPool) runReorg(done chan struct{}, reset *txpoolResetRequest, dirtyAccounts *accountSet, events map[common.InternalAddress]*txSortedMap) {
 	defer close(done)
+	var promoteAddrs []common.InternalAddress
+	var promoted []*types.Transaction
 
 	for {
 		select {
@@ -1206,7 +1208,6 @@ func (pool *TxPool) runReorg(done chan struct{}, reset *txpoolResetRequest, dirt
 				start = time.Now()
 			}
 
-			var promoteAddrs []common.InternalAddress
 			if dirtyAccounts != nil && reset == nil {
 				// Only dirty accounts need to be promoted, unless we're resetting.
 				// For resets, all addresses in the tx queue will be promoted and
@@ -1232,7 +1233,7 @@ func (pool *TxPool) runReorg(done chan struct{}, reset *txpoolResetRequest, dirt
 				}
 			}
 			// Check for pending transactions for every account that sent new ones
-			promoted := pool.promoteExecutables(promoteAddrs)
+			promoted = pool.promoteExecutables(promoteAddrs)
 
 			// If a new block appeared, validate the pool of pending transactions. This will
 			// remove any transaction that has been included in the block or was invalidated
