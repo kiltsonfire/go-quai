@@ -50,7 +50,8 @@ func (txn *txNoncer) get(addr common.InternalAddress) uint64 {
 	if _, ok := txn.nonces[addr]; !ok {
 		txn.nonces[addr] = txn.fallback.GetNonce(addr)
 	}
-	return txn.nonces[addr]
+	nonce := txn.nonces[addr]
+	return nonce
 }
 
 // set inserts a new virtual nonce into the virtual state database to be returned
