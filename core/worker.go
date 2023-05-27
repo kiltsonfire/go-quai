@@ -398,7 +398,7 @@ func (w *worker) asyncStateLoop() {
 
 	for {
 		select {
-		case <-w.chainHeadCh:
+		case head := <-w.chainHeadCh:
 
 			w.interruptAsyncPhGen()
 
@@ -408,7 +408,14 @@ func (w *worker) asyncStateLoop() {
 					w.interrupt = make(chan struct{})
 					return
 				default:
-					w.txPool.HardReset()
+					block := head.Block
+					header, err := w.GeneratePendingHeader(block, true)
+					if err != nil {
+						log.Error("Error generating pending header with state", "err", err)
+						return
+					}
+					// Send the updated pendingHeader in the asyncPhFeed
+					w.asyncPhFeed.Send(header)
 					return
 				}
 			}()

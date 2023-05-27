@@ -332,6 +332,9 @@ func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, chain block
 }
 
 func (pool *TxPool) HardReset() {
+	if pool == nil {
+		return
+	}
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
 
@@ -882,10 +885,9 @@ func (pool *TxPool) AddLocals(txs []*types.Transaction) []error {
 // AddLocal enqueues a single local transaction into the pool if it is valid. This is
 // a convenience wrapper aroundd AddLocals.
 func (pool *TxPool) AddLocal(tx *types.Transaction) error {
-	return nil
-	//pool.localTxsCount += 1
-	//errs := pool.AddLocals([]*types.Transaction{tx})
-	//return errs[0]
+	pool.localTxsCount += 1
+	errs := pool.AddLocals([]*types.Transaction{tx})
+	return errs[0]
 }
 
 // AddRemotes enqueues a batch of transactions into the pool if they are valid. If the
@@ -1271,7 +1273,7 @@ func (pool *TxPool) runReorg(done chan struct{}, reset *txpoolResetRequest, dirt
 				for _, set := range events {
 					txs = append(txs, set.Flatten()...)
 				}
-				pool.txFeed.Send(NewTxsEvent{txs})
+				//pool.txFeed.Send(NewTxsEvent{txs})
 			}
 			if pool.reOrgCounter == c_reorgCounterThreshold {
 				log.Info("Time taken to runReorg in txpool", "time", common.PrettyDuration(time.Since(start)))
