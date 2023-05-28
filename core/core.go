@@ -140,6 +140,7 @@ func (c *Core) procAppendQueue() {
 		if block != nil {
 			c.serviceFutureBlock(block)
 		} else {
+			c.removeFromAppendQueue(block)
 			log.Warn("Entry in the FH cache without being in the db: ", "Hash: ", hashAndNumber.Hash)
 		}
 	}
@@ -168,7 +169,9 @@ func (c *Core) addToAppendQueue(block *types.Block) error {
 
 // removeFromAppendQueue removes a block from the append queue
 func (c *Core) removeFromAppendQueue(block *types.Block) {
-	c.appendQueue.Remove(block.Hash())
+	if block != nil {
+		c.appendQueue.Remove(block.Hash())
+	}
 }
 
 // updateAppendQueue is a time to procAppendQueue
