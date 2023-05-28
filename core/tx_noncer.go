@@ -17,8 +17,6 @@
 package core
 
 import (
-	"fmt"
-
 	lru "github.com/hashicorp/golang-lru"
 	sync "github.com/sasha-s/go-deadlock"
 
@@ -55,7 +53,6 @@ func newTxNoncer(statedb *state.StateDB) *txNoncer {
 //
 //go:noinline
 func (txn *txNoncer) get(addr common.InternalAddress) uint64 {
-	fmt.Println("tx_noncer 58")
 	// We use mutex for get operation is the underlying
 	// state will mutate db even for read access.
 	txn.lock.Lock()
