@@ -300,7 +300,7 @@ func (hc *HeaderChain) collectInclusiveEtxRollup(b *types.Block) (types.Transact
 
 // Append
 func (hc *HeaderChain) Append(batch ethdb.Batch, block *types.Block, newInboundEtxs types.Transactions) error {
-	nodeCtx := common.NodeLocation.Context()
+	// nodeCtx := common.NodeLocation.Context()
 	log.Debug("HeaderChain Append:", "Block information: Hash:", block.Hash(), "block header hash:", block.Header().Hash(), "Number:", block.NumberU64(), "Location:", block.Header().Location, "Parent:", block.ParentHash())
 
 	err := hc.engine.VerifyHeader(hc, block.Header(), true)
@@ -308,33 +308,33 @@ func (hc *HeaderChain) Append(batch ethdb.Batch, block *types.Block, newInboundE
 		return err
 	}
 
-	collectBlockManifest := time.Now()
-	// Verify the manifest matches expected
-	// Load the manifest of blocks preceding this block
-	// note: prime manifest is non-existent, because a prime block cannot be
-	// coincident with a higher order chain. So, this check is skipped for prime
-	// nodes.
-	if nodeCtx > common.PRIME_CTX {
-		manifest, err := hc.CollectBlockManifest(block.Header())
-		if err != nil {
-			return err
-		}
-		if block.ManifestHash(nodeCtx) != types.DeriveSha(manifest, trie.NewStackTrie(nil)) {
-			return errors.New("manifest does not match hash")
-		}
-	}
-	elapsedCollectBlockManifest := common.PrettyDuration(time.Since(collectBlockManifest))
+	// collectBlockManifest := time.Now()
+	// // Verify the manifest matches expected
+	// // Load the manifest of blocks preceding this block
+	// // note: prime manifest is non-existent, because a prime block cannot be
+	// // coincident with a higher order chain. So, this check is skipped for prime
+	// // nodes.
+	// if nodeCtx > common.PRIME_CTX {
+	// 	manifest, err := hc.CollectBlockManifest(block.Header())
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// 	if block.ManifestHash(nodeCtx) != types.DeriveSha(manifest, trie.NewStackTrie(nil)) {
+	// 		return errors.New("manifest does not match hash")
+	// 	}
+	// }
+	// elapsedCollectBlockManifest := common.PrettyDuration(time.Since(collectBlockManifest))
 
 	// Append header to the headerchain
 	rawdb.WriteHeader(batch, block.Header())
 
-	blockappend := time.Now()
+	// blockappend := time.Now()
 	// Append block else revert header append
 	logs, err := hc.bc.Append(batch, block, newInboundEtxs)
 	if err != nil {
 		return err
 	}
-	log.Info("Time taken to", "collectBlockManifest", elapsedCollectBlockManifest, "Append in bc", common.PrettyDuration(time.Since(blockappend)))
+	// log.Info("Time taken to", "collectBlockManifest", elapsedCollectBlockManifest, "Append in bc", common.PrettyDuration(time.Since(blockappend)))
 
 	hc.bc.chainFeed.Send(ChainEvent{Block: block, Hash: block.Hash(), Logs: logs})
 	if len(logs) > 0 {

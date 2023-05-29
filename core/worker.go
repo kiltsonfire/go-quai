@@ -869,21 +869,21 @@ func (w *worker) FinalizeAssemble(chain consensus.ChainHeaderReader, header *typ
 	}
 
 	// Compute and set manifest hash
-	manifest := types.BlockManifest{}
-	if nodeCtx == common.PRIME_CTX {
-		// Nothing to do for prime chain
-		manifest = types.BlockManifest{}
-	} else if w.engine.IsDomCoincident(parent.Header()) {
-		manifest = types.BlockManifest{parent.Hash()}
-	} else {
-		manifest, err = w.hc.CollectBlockManifest(parent.Header())
-		if err != nil {
-			return nil, err
-		}
-		manifest = append(manifest, header.ParentHash())
-	}
-	manifestHash := types.DeriveSha(manifest, trie.NewStackTrie(nil))
-	block.Header().SetManifestHash(manifestHash)
+	// manifest := types.BlockManifest{}
+	// if nodeCtx == common.PRIME_CTX {
+	// 	// Nothing to do for prime chain
+	// 	manifest = types.BlockManifest{}
+	// } else if w.engine.IsDomCoincident(parent.Header()) {
+	// 	manifest = types.BlockManifest{parent.Hash()}
+	// } else {
+	// 	manifest, err = w.hc.CollectBlockManifest(parent.Header())
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	manifest = append(manifest, header.ParentHash())
+	// }
+	// manifestHash := types.DeriveSha(manifest, trie.NewStackTrie(nil))
+	// block.Header().SetManifestHash(manifestHash)
 
 	if nodeCtx == common.ZONE_CTX {
 		// Compute and set etx rollup hash
