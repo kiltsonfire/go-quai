@@ -541,7 +541,7 @@ func (w *worker) makeEnv(parent *types.Block, header *types.Header, coinbase com
 	if err != nil {
 		return nil, err
 	}
-	state.StartPrefetcher("miner")
+	//state.StartPrefetcher("miner")
 
 	// Note the passed coinbase may be different with header.Coinbase.
 	env := &environment{
@@ -555,13 +555,13 @@ func (w *worker) makeEnv(parent *types.Block, header *types.Header, coinbase com
 		externalGasUsed: uint64(0),
 	}
 	// when 08 is processed ancestors contain 07 (quick block)
-	for _, ancestor := range w.hc.GetBlocksFromHash(parent.Hash(), 7) {
-		for _, uncle := range ancestor.Uncles() {
-			env.family.Add(uncle.Hash())
-		}
-		env.family.Add(ancestor.Hash())
-		env.ancestors.Add(ancestor.Hash())
-	}
+	// for _, ancestor := range w.hc.GetBlocksFromHash(parent.Hash(), 7) {
+	// 	for _, uncle := range ancestor.Uncles() {
+	// 		env.family.Add(uncle.Hash())
+	// 	}
+	// 	env.family.Add(ancestor.Hash())
+	// 	env.ancestors.Add(ancestor.Hash())
+	// }
 	// Keep track of transactions which return errors so they can be removed
 	env.tcount = 0
 	return env, nil
@@ -788,27 +788,27 @@ func (w *worker) prepareWork(genParams *generateParams, block *types.Block) (*en
 			log.Error("Failed to create sealing context", "err", err)
 			return nil, err
 		}
-		// Accumulate the uncles for the sealing work.
-		commitUncles := func(blocks map[common.Hash]*types.Block) {
-			for hash, uncle := range blocks {
-				env.uncleMu.RLock()
-				if len(env.uncles) == 2 {
-					env.uncleMu.RUnlock()
-					break
-				}
-				env.uncleMu.RUnlock()
-				if err := w.commitUncle(env, uncle.Header()); err != nil {
-					log.Trace("Possible uncle rejected", "hash", hash, "reason", err)
-				} else {
-					log.Debug("Committing new uncle to block", "hash", hash)
-				}
-			}
-		}
-		w.uncleMu.RLock()
-		// Prefer to locally generated uncle
-		commitUncles(w.localUncles)
-		commitUncles(w.remoteUncles)
-		w.uncleMu.RUnlock()
+		// // Accumulate the uncles for the sealing work.
+		// commitUncles := func(blocks map[common.Hash]*types.Block) {
+		// 	for hash, uncle := range blocks {
+		// 		env.uncleMu.RLock()
+		// 		if len(env.uncles) == 2 {
+		// 			env.uncleMu.RUnlock()
+		// 			break
+		// 		}
+		// 		env.uncleMu.RUnlock()
+		// 		if err := w.commitUncle(env, uncle.Header()); err != nil {
+		// 			log.Trace("Possible uncle rejected", "hash", hash, "reason", err)
+		// 		} else {
+		// 			log.Debug("Committing new uncle to block", "hash", hash)
+		// 		}
+		// 	}
+		// }
+		// w.uncleMu.RLock()
+		// // Prefer to locally generated uncle
+		// commitUncles(w.localUncles)
+		// commitUncles(w.remoteUncles)
+		// w.uncleMu.RUnlock()
 		return env, nil
 	} else {
 		return &environment{header: header}, nil
@@ -888,15 +888,15 @@ func (w *worker) FinalizeAssemble(chain consensus.ChainHeaderReader, header *typ
 	if nodeCtx == common.ZONE_CTX {
 		// Compute and set etx rollup hash
 		etxRollup := types.Transactions{}
-		if w.engine.IsDomCoincident(parent.Header()) {
-			etxRollup = parent.ExtTransactions()
-		} else {
-			etxRollup, err = w.hc.CollectEtxRollup(parent)
-			if err != nil {
-				return nil, err
-			}
-			etxRollup = append(etxRollup, parent.ExtTransactions()...)
-		}
+		// if w.engine.IsDomCoincident(parent.Header()) {
+		// 	etxRollup = parent.ExtTransactions()
+		// } else {
+		// 	etxRollup, err = w.hc.CollectEtxRollup(parent)
+		// 	if err != nil {
+		// 		return nil, err
+		// 	}
+		// 	etxRollup = append(etxRollup, parent.ExtTransactions()...)
+		// }
 		etxRollupHash := types.DeriveSha(etxRollup, trie.NewStackTrie(nil))
 		block.Header().SetEtxRollupHash(etxRollupHash)
 	}

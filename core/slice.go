@@ -23,9 +23,9 @@ import (
 )
 
 const (
-	c_maxPendingEtxBatches            = 1024
-	c_maxPendingEtxsRollup            = 256
-	c_pendingHeaderCacheLimit         = 100
+	c_maxPendingEtxBatches            = 32
+	c_maxPendingEtxsRollup            = 32
+	c_pendingHeaderCacheLimit         = 32
 	c_pendingHeaderChacheBufferFactor = 2
 	pendingHeaderGCTime               = 5
 	c_terminusIndex                   = 3
@@ -168,11 +168,12 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	// list of confirmed ETXs using the subordinate manifest In either case, if
 	// we are a dominant node, we need to collect the ETX rollup from our sub.
 	if !domOrigin && nodeCtx != common.ZONE_CTX {
-		newInboundEtxs, _, err = sl.CollectNewlyConfirmedEtxs(block, block.Location())
-		if err != nil {
-			log.Error("Error collecting newly confirmed etxs: ", "err", err)
-			return nil, false, ErrSubNotSyncedToDom
-		}
+		// newInboundEtxs, _, err = sl.CollectNewlyConfirmedEtxs(block, block.Location())
+		// if err != nil {
+		// 	log.Error("Error collecting newly confirmed etxs: ", "err", err)
+		// 	return nil, false, ErrSubNotSyncedToDom
+		// }
+		newInboundEtxs = types.Transactions{}
 	}
 	time5 := common.PrettyDuration(time.Since(start))
 
@@ -204,16 +205,16 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 			}
 			time8_1 = common.PrettyDuration(time.Since(start))
 			// Cache the subordinate's pending ETXs
-			pEtxs := types.PendingEtxs{block.Header(), subPendingEtxs}
+			// pEtxs := types.PendingEtxs{block.Header(), subPendingEtxs}
 			time8_2 = common.PrettyDuration(time.Since(start))
 			// Add the pending etx given by the sub in the rollup
-			sl.AddPendingEtxs(pEtxs)
-			// Only region has the rollup hashes for pendingEtxs
-			if nodeCtx == common.REGION_CTX {
-				// We also need to store the pendingEtxRollup to the dom
-				pEtxRollup := types.PendingEtxsRollup{block.Header(), block.SubManifest()}
-				sl.AddPendingEtxsRollup(pEtxRollup)
-			}
+			// sl.AddPendingEtxs(pEtxs)
+			// // Only region has the rollup hashes for pendingEtxs
+			// if nodeCtx == common.REGION_CTX {
+			// 	// We also need to store the pendingEtxRollup to the dom
+			// 	pEtxRollup := types.PendingEtxsRollup{block.Header(), block.SubManifest()}
+			// 	sl.AddPendingEtxsRollup(pEtxRollup)
+			// }
 			time8_3 = common.PrettyDuration(time.Since(start))
 		}
 	}
@@ -261,7 +262,7 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 		"elapsed", common.PrettyDuration(time.Since(start)))
 
 	if nodeCtx == common.ZONE_CTX {
-		return block.ExtTransactions(), subReorg, nil
+		return types.Transactions{}, subReorg, nil
 	} else {
 		return subPendingEtxs, subReorg, nil
 	}

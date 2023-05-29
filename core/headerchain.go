@@ -3,11 +3,12 @@ package core
 import (
 	"errors"
 	"fmt"
-	sync "github.com/sasha-s/go-deadlock"
 	"io"
 	"math/big"
 	"sync/atomic"
 	"time"
+
+	sync "github.com/sasha-s/go-deadlock"
 
 	"github.com/dominant-strategies/go-quai/common"
 	"github.com/dominant-strategies/go-quai/consensus"
@@ -26,8 +27,8 @@ import (
 )
 
 const (
-	headerCacheLimit      = 512
-	numberCacheLimit      = 2048
+	headerCacheLimit      = 32
+	numberCacheLimit      = 32
 	primeHorizonThreshold = 20
 )
 
