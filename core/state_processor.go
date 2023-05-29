@@ -452,7 +452,7 @@ func (p *StateProcessor) State() (*state.StateDB, error) {
 
 // StateAt returns a new mutable state based on a particular point in time.
 func (p *StateProcessor) StateAt(root common.Hash) (*state.StateDB, error) {
-	return state.New(root, p.stateCache, nil)
+	return state.New(root, p.stateCache, p.snaps)
 }
 
 // StateCache returns the caching database underpinning the blockchain instance.
