@@ -27,8 +27,8 @@ import (
 )
 
 const (
-	headerCacheLimit      = 32
-	numberCacheLimit      = 32
+	headerCacheLimit      = 100
+	numberCacheLimit      = 100
 	primeHorizonThreshold = 20
 )
 

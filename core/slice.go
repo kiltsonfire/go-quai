@@ -19,6 +19,7 @@ import (
 	"github.com/dominant-strategies/go-quai/params"
 	"github.com/dominant-strategies/go-quai/quaiclient"
 	"github.com/dominant-strategies/go-quai/trie"
+	lru "github.com/hashicorp/golang-lru"
 	sync "github.com/sasha-s/go-deadlock"
 )
 
@@ -33,6 +34,7 @@ const (
 	c_regionRelayProc                 = 3
 	c_primeRelayProc                  = 10
 	c_asyncPhUpdateChanSize           = 10
+	c_phCacheSize                     = 50
 )
 
 type Slice struct {
@@ -64,7 +66,7 @@ type Slice struct {
 	phCachemu sync.RWMutex
 
 	bestPhKey common.Hash
-	phCache   map[common.Hash]types.PendingHeader
+	phCache   *lru.Cache
 
 	validator Validator // Block and state validator interface
 }
@@ -92,7 +94,7 @@ func NewSlice(db ethdb.Database, config *Config, txConfig *TxPoolConfig, txLooku
 	}
 	sl.miner = New(sl.hc, sl.txPool, config, db, chainConfig, engine, isLocalBlock)
 
-	sl.phCache = make(map[common.Hash]types.PendingHeader)
+	sl.phCache, _ = lru.New(c_phCacheSize)
 
 	// only set the subClients if the chain is not Zone
 	sl.subClients = make([]*quaiclient.Client, 3)
@@ -251,7 +253,7 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	}
 
 	// Relay the new pendingHeader
-	go sl.relayPh(block, &appendFinished, subReorg, pendingHeaderWithTermini, domOrigin, block.Location())
+	sl.relayPh(block, &appendFinished, subReorg, pendingHeaderWithTermini, domOrigin, block.Location())
 	time12 := common.PrettyDuration(time.Since(start))
 	log.Info("times during append:", "t1:", time1, "t2:", time2, "t3:", time3, "t4:", time4, "t5:", time5, "t6:", time6, "t7:", time7, "t8:", time8, "t9:", time9, "t10:", time10, "t11:", time11, "t12:", time12)
 	log.Info("times during sub append:", "t9_1:", time8_1, "t9_2:", time8_2, "t9_3:", time8_3)
@@ -328,7 +330,8 @@ func (sl *Slice) asyncPendingHeaderLoop() {
 func (sl *Slice) readPhCache(hash common.Hash) (types.PendingHeader, bool) {
 	sl.phCachemu.RLock()
 	defer sl.phCachemu.RUnlock()
-	ph, exists := sl.phCache[hash]
+	phInt, exists := sl.phCache.Get(hash)
+	ph, _ := phInt.(types.PendingHeader)
 	if exists {
 		return *types.CopyPendingHeader(&ph), exists
 	}
@@ -339,7 +342,7 @@ func (sl *Slice) readPhCache(hash common.Hash) (types.PendingHeader, bool) {
 func (sl *Slice) writePhCache(hash common.Hash, pendingHeader types.PendingHeader) {
 	sl.phCachemu.Lock()
 	defer sl.phCachemu.Unlock()
-	sl.phCache[hash] = pendingHeader
+	sl.phCache.Add(hash, pendingHeader)
 }
 
 // Generate a slice pending header
@@ -816,7 +819,7 @@ func (sl *Slice) NewGenesisPendingHeader(domPendingHeader *types.Header) {
 	}
 	genesisTermini := []common.Hash{genesisHash, genesisHash, genesisHash, genesisHash}
 	if sl.hc.Empty() {
-		sl.phCache[sl.config.GenesisHash] = types.PendingHeader{Header: domPendingHeader, Termini: genesisTermini}
+		sl.phCache.Add(sl.config.GenesisHash, types.PendingHeader{Header: domPendingHeader, Termini: genesisTermini})
 	}
 }
 
@@ -857,7 +860,7 @@ func makeSubClients(suburls []string) []*quaiclient.Client {
 
 // loadLastState loads the phCache and the slice pending header hash from the db.
 func (sl *Slice) loadLastState() error {
-	sl.phCache = rawdb.ReadPhCache(sl.sliceDb)
+	//sl.phCache = rawdb.ReadPhCache(sl.sliceDb)
 	sl.bestPhKey = rawdb.ReadBestPhKey(sl.sliceDb)
 	sl.miner.worker.LoadPendingBlockBody()
 	return nil
@@ -869,7 +872,7 @@ func (sl *Slice) Stop() {
 	// write the ph head hash to the db.
 	rawdb.WriteBestPhKey(sl.sliceDb, sl.bestPhKey)
 	// Write the ph cache to the dd.
-	rawdb.WritePhCache(sl.sliceDb, sl.phCache)
+	//rawdb.WritePhCache(sl.sliceDb, sl.phCache)
 
 	sl.miner.worker.StorePendingBlockBody()
 
