@@ -27,7 +27,8 @@ const (
 	c_maxAppendQueue         = 1000000 // Maximum number of future headers we can store in cache
 	c_maxFutureTime          = 30      // Max time into the future (in seconds) we will accept a block
 	c_appendQueueRetryPeriod = 1       // Time (in seconds) before retrying to append from AppendQueue
-	c_appendQueueThreshold   = 30      // Number of blocks to load from the disk to ram on every proc of append queue
+	c_appendQueueThreshold   = 100     // Number of blocks to load from the disk to ram on every proc of append queue
+	c_appendQueueAgeOutDepth = 500     // The number of blocks behind the current head at which block is evicted from append queue
 )
 
 type Core struct {
@@ -118,7 +119,11 @@ func (c *Core) procAppendQueue() {
 	for _, hash := range c.appendQueue.Keys() {
 		if value, exist := c.appendQueue.Peek(hash); exist {
 			hashNumber := types.HashAndNumber{Hash: hash.(common.Hash), Number: value.(uint64)}
-			hashNumberList = append(hashNumberList, hashNumber)
+			if hashNumber.Number+c_appendQueueAgeOutDepth < c.CurrentHeader().NumberU64() {
+				c.appendQueue.Remove(hash)
+			} else {
+				hashNumberList = append(hashNumberList, hashNumber)
+			}
 		}
 	}
 	sort.Slice(hashNumberList, func(i, j int) bool {
