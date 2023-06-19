@@ -210,6 +210,11 @@ func init() {
 }
 
 func main() {
+
+	if err := app.Run(os.Args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	runtime.SetBlockProfileRate(1)
 	runtime.SetMutexProfileFraction(1)
 	var port string
@@ -247,10 +252,6 @@ func main() {
 	go func() {
 		_ = http.ListenAndServe("localhost:"+port, nil)
 	}()
-	if err := app.Run(os.Args); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
 }
 
 // prepare manipulates memory cache allowance and setups metric system.
