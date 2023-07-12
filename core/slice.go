@@ -255,7 +255,7 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	sl.updatePhCache(pendingHeaderWithTermini, true, nil)
 
 	if nodeCtx == common.ZONE_CTX {
-		subReorg = sl.poem(pendingHeaderWithTermini.Header.ParentEntropy(), bestPh.Header.ParentEntropy())
+		subReorg = sl.poem(pendingHeaderWithTermini.Header.CalcPhS(), bestPh.Header.CalcPhS())
 	}
 	if subReorg {
 		sl.bestPhKey = pendingHeaderWithTermini.Termini[c_terminusIndex]
@@ -519,7 +519,7 @@ func (sl *Slice) SubRelayPendingHeader(pendingHeader types.PendingHeader, locati
 				return
 			}
 		}
-		if reorg {
+		if reorg || location.Region() == common.NodeLocation.Region() {
 			for i := range sl.subClients {
 				if sl.subClients[i] != nil {
 					if ph, exists := sl.readPhCache(pendingHeader.Termini[common.NodeLocation.Region()]); exists {
