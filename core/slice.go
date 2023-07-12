@@ -252,14 +252,13 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 		log.Error("BestPh Key does not exist for", "key", sl.bestPhKey)
 	}
 
-	oldBestPhEntropy := new(big.Int).Set(bestPh.Header.CalcPhS())
-
 	sl.updatePhCache(pendingHeaderWithTermini, true, nil)
 
 	if nodeCtx == common.ZONE_CTX {
-		subReorg = sl.pickPhHead(pendingHeaderWithTermini, oldBestPhEntropy)
+		subReorg = sl.poem(pendingHeaderWithTermini.Header.ParentEntropy(), bestPh.Header.ParentEntropy())
 	}
 	if subReorg {
+		sl.bestPhKey = pendingHeaderWithTermini.Termini[c_terminusIndex]
 		block.SetAppendTime(appendFinished)
 		sl.hc.SetCurrentHeader(block.Header())
 		sl.hc.chainHeadFeed.Send(ChainHeadEvent{Block: block})
