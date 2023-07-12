@@ -509,19 +509,23 @@ func (sl *Slice) SendPendingEtxsToDom(pEtxs types.PendingEtxs) error {
 // SubRelayPendingHeader takes a pending header from the sender (ie dominant), updates the phCache with a composited header and relays result to subordinates
 func (sl *Slice) SubRelayPendingHeader(pendingHeader types.PendingHeader, location common.Location) {
 	nodeCtx := common.NodeLocation.Context()
+	var err error
+	var reorg bool
 
 	if nodeCtx == common.REGION_CTX {
 		// Adding a guard on the region that was already updated in the synchronous path.
 		if location.Region() != common.NodeLocation.Region() {
-			err := sl.updatePhCacheFromDom(pendingHeader, common.NodeLocation.Region(), []int{common.PRIME_CTX})
+			reorg, err = sl.updatePhCacheFromDom(pendingHeader, common.NodeLocation.Region(), []int{common.PRIME_CTX})
 			if err != nil {
 				return
 			}
 		}
-		for i := range sl.subClients {
-			if sl.subClients[i] != nil {
-				if ph, exists := sl.readPhCache(pendingHeader.Termini[common.NodeLocation.Region()]); exists {
-					sl.subClients[i].SubRelayPendingHeader(context.Background(), ph, location)
+		if reorg {
+			for i := range sl.subClients {
+				if sl.subClients[i] != nil {
+					if ph, exists := sl.readPhCache(pendingHeader.Termini[common.NodeLocation.Region()]); exists {
+						sl.subClients[i].SubRelayPendingHeader(context.Background(), ph, location)
+					}
 				}
 			}
 		}
@@ -530,7 +534,7 @@ func (sl *Slice) SubRelayPendingHeader(pendingHeader types.PendingHeader, locati
 		// If the previous block on which the given pendingHeader was built is the same as the NodeLocation
 		// the pendingHeader update has already been sent to the miner for the given location in relayPh.
 		if !bytes.Equal(location, common.NodeLocation) {
-			err := sl.updatePhCacheFromDom(pendingHeader, common.NodeLocation.Zone(), []int{common.PRIME_CTX, common.REGION_CTX})
+			_, err := sl.updatePhCacheFromDom(pendingHeader, common.NodeLocation.Zone(), []int{common.PRIME_CTX, common.REGION_CTX})
 			if err != nil {
 				return
 			}
@@ -566,7 +570,7 @@ func (sl *Slice) computePendingHeader(localPendingHeaderWithTermini types.Pendin
 }
 
 // updatePhCacheFromDom combines the recieved pending header with the pending header stored locally at a given terminus for specified context
-func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, terminiIndex int, indices []int) error {
+func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, terminiIndex int, indices []int) (bool, error) {
 	hash := pendingHeader.Termini[terminiIndex]
 	localPendingHeader, exists := sl.readPhCache(hash)
 
@@ -585,18 +589,17 @@ func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, termini
 
 		oldBestPhEntropy := new(big.Int).Set(bestPh.Header.CalcPhS())
 		sl.updatePhCache(types.PendingHeader{Header: combinedPendingHeader, Termini: localPendingHeader.Termini}, false, nil)
-		sl.pickPhHead(types.PendingHeader{Header: combinedPendingHeader, Termini: localPendingHeader.Termini}, oldBestPhEntropy)
-		return nil
+		reorg := sl.pickPhHead(types.PendingHeader{Header: combinedPendingHeader, Termini: localPendingHeader.Termini}, oldBestPhEntropy)
+		return reorg, nil
 	}
 	log.Warn("no pending header found for", "terminus", hash, "pendingHeaderNumber", pendingHeader.Header.NumberArray(), "Hash", pendingHeader.Header.ParentHash(), "Termini index", terminiIndex, "indices", indices)
-	return errors.New("no pending header found in cache")
+	return false, errors.New("no pending header found in cache")
 }
 
 // updatePhCache updates cache given a pendingHeaderWithTermini with the terminus used as the key.
 func (sl *Slice) updatePhCache(pendingHeaderWithTermini types.PendingHeader, inSlice bool, localHeader *types.Header) {
 	sl.phCacheMu.Lock()
 	defer sl.phCacheMu.Unlock()
-	nodeCtx := common.NodeLocation.Context()
 
 	var exists bool
 	if localHeader != nil {
@@ -610,7 +613,6 @@ func (sl *Slice) updatePhCache(pendingHeaderWithTermini types.PendingHeader, inS
 	// Update the pendingHeader Cache
 	oldPh, exist := sl.readPhCache(pendingHeaderWithTermini.Termini[c_terminusIndex])
 	var deepCopyPendingHeaderWithTermini types.PendingHeader
-	newPhEntropy := pendingHeaderWithTermini.Header.CalcPhS()
 	deepCopyPendingHeaderWithTermini = types.PendingHeader{Header: types.CopyHeader(pendingHeaderWithTermini.Header), Termini: pendingHeaderWithTermini.Termini}
 	deepCopyPendingHeaderWithTermini.Header.SetLocation(common.NodeLocation)
 	deepCopyPendingHeaderWithTermini.Header.SetTime(uint64(time.Now().Unix()))
@@ -620,15 +622,8 @@ func (sl *Slice) updatePhCache(pendingHeaderWithTermini types.PendingHeader, inS
 		// Simultaneously we have to allow for the state root update
 		// asynchronously, to do this equal check is added to the inSlice case
 		if !inSlice {
-			if pendingHeaderWithTermini.Header.NumberU64(nodeCtx-1) == oldPh.Header.NumberU64(nodeCtx-1) {
-				if pendingHeaderWithTermini.Header.ParentEntropy(nodeCtx-1).Cmp(oldPh.Header.ParentEntropy(nodeCtx-1)) >= 0 {
-					sl.writePhCache(pendingHeaderWithTermini.Termini[c_terminusIndex], deepCopyPendingHeaderWithTermini)
-					log.Info("PhCache update:", "inSlice:", inSlice, "Ph Number:", deepCopyPendingHeaderWithTermini.Header.NumberArray(), "Termini:", deepCopyPendingHeaderWithTermini.Termini[c_terminusIndex])
-				}
-			} else if newPhEntropy.Cmp(pendingHeaderWithTermini.Header.CalcPhS()) >= 0 {
-				sl.writePhCache(pendingHeaderWithTermini.Termini[c_terminusIndex], deepCopyPendingHeaderWithTermini)
-				log.Info("PhCache update:", "inSlice:", inSlice, "Ph Number:", deepCopyPendingHeaderWithTermini.Header.NumberArray(), "Termini:", deepCopyPendingHeaderWithTermini.Termini[c_terminusIndex])
-			}
+			sl.writePhCache(pendingHeaderWithTermini.Termini[c_terminusIndex], deepCopyPendingHeaderWithTermini)
+			log.Info("PhCache update:", "inSlice:", inSlice, "Ph Number:", deepCopyPendingHeaderWithTermini.Header.NumberArray(), "Termini:", deepCopyPendingHeaderWithTermini.Termini[c_terminusIndex])
 		} else if inSlice && (pendingHeaderWithTermini.Header.ParentEntropy().Cmp(oldPh.Header.ParentEntropy()) >= 0) {
 			sl.writePhCache(pendingHeaderWithTermini.Termini[c_terminusIndex], deepCopyPendingHeaderWithTermini)
 			log.Info("PhCache update:", "inSlice:", inSlice, "Ph Number:", deepCopyPendingHeaderWithTermini.Header.NumberArray(), "Termini:", deepCopyPendingHeaderWithTermini.Termini[c_terminusIndex])
