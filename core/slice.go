@@ -255,7 +255,7 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	sl.updatePhCache(pendingHeaderWithTermini, true, nil)
 
 	if nodeCtx == common.ZONE_CTX {
-		subReorg = sl.poem(block.Header().CalcS(), bestPh.Header.CalcPhS(order))
+		subReorg = sl.poem(pendingHeaderWithTermini.Header.CalcPhS(order), bestPh.Header.CalcPhS())
 	}
 	if subReorg {
 		sl.bestPhKey = pendingHeaderWithTermini.Termini[c_terminusIndex]
