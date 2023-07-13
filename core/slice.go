@@ -256,26 +256,27 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 
 	if nodeCtx == common.ZONE_CTX {
 		subReorg = sl.poem(block.Header().CalcS(), bestPh.Header.ParentEntropy())
-		if pendingHeaderWithTermini.Termini[c_terminusIndex] != bestPh.Termini[c_terminusIndex] {
+		if pendingHeaderWithTermini.Termini[c_terminusIndex] != bestPh.Termini[c_terminusIndex] && bestPh.Termini[c_terminusIndex] != sl.hc.config.GenesisHash {
 			domTerminusHeader := sl.hc.GetHeaderByHash(bestPh.Termini[c_terminusIndex])
 			domTerminusOrder, err := domTerminusHeader.CalcOrder()
 			if err != nil {
 				return nil, false, err
 			}
-			if order <= domTerminusOrder && subReorg {
-				sl.bestPhKey = pendingHeaderWithTermini.Termini[c_terminusIndex]
+			if order > domTerminusOrder {
+				subReorg = false
 			}
 		}
 	}
 
 	if subReorg {
+		sl.bestPhKey = pendingHeaderWithTermini.Termini[c_terminusIndex]
 		block.SetAppendTime(appendFinished)
 		sl.hc.SetCurrentHeader(block.Header())
 		sl.hc.chainHeadFeed.Send(ChainHeadEvent{Block: block})
+		// Relay the new pendingHeader
+		sl.relayPh(block, &appendFinished, subReorg, pendingHeaderWithTermini, domOrigin, block.Location())
 	}
 
-	// Relay the new pendingHeader
-	sl.relayPh(block, &appendFinished, subReorg, pendingHeaderWithTermini, domOrigin, block.Location())
 	time12 := common.PrettyDuration(time.Since(start))
 	log.Info("times during append:", "t0_1", time0_1, "t0_2", time0_2, "t1:", time1, "t2:", time2, "t3:", time3, "t4:", time4, "t5:", time5, "t6:", time6, "t7:", time7, "t8:", time8, "t9:", time9, "t10:", time10, "t11:", time11, "t12:", time12)
 	log.Info("times during sub append:", "t9_1:", time8_1, "t9_2:", time8_2, "t9_3:", time8_3)
@@ -518,24 +519,19 @@ func (sl *Slice) SendPendingEtxsToDom(pEtxs types.PendingEtxs) error {
 // SubRelayPendingHeader takes a pending header from the sender (ie dominant), updates the phCache with a composited header and relays result to subordinates
 func (sl *Slice) SubRelayPendingHeader(pendingHeader types.PendingHeader, location common.Location) {
 	nodeCtx := common.NodeLocation.Context()
-	var err error
-	var reorg bool
 
 	if nodeCtx == common.REGION_CTX {
 		// Adding a guard on the region that was already updated in the synchronous path.
-		reorg, err = sl.updatePhCacheFromDom(pendingHeader, common.NodeLocation.Region(), []int{common.PRIME_CTX}, (location.Region() != common.NodeLocation.Region()))
-		if err != nil {
-			return
-		}
-		if reorg {
-			for i := range sl.subClients {
-				if sl.subClients[i] != nil && !bytes.Equal(location, common.NodeLocation) {
-					if ph, exists := sl.readPhCache(pendingHeader.Termini[common.NodeLocation.Region()]); exists {
-						sl.subClients[i].SubRelayPendingHeader(context.Background(), ph, location)
-					}
+		_, _ = sl.updatePhCacheFromDom(pendingHeader, common.NodeLocation.Region(), []int{common.PRIME_CTX}, (location.Region() != common.NodeLocation.Region()))
+
+		for i := range sl.subClients {
+			if sl.subClients[i] != nil && !bytes.Equal(location, common.NodeLocation) {
+				if ph, exists := sl.readPhCache(pendingHeader.Termini[common.NodeLocation.Region()]); exists {
+					sl.subClients[i].SubRelayPendingHeader(context.Background(), ph, location)
 				}
 			}
 		}
+
 	} else {
 		// This check prevents a double send to the miner.
 		// If the previous block on which the given pendingHeader was built is the same as the NodeLocation
