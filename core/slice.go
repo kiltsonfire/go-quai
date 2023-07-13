@@ -255,10 +255,20 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	sl.updatePhCache(pendingHeaderWithTermini, true, nil)
 
 	if nodeCtx == common.ZONE_CTX {
-		subReorg = sl.poem(pendingHeaderWithTermini.Header.CalcPhS(order), bestPh.Header.CalcPhS())
+		subReorg = sl.poem(block.Header().CalcS(), bestPh.Header.ParentEntropy())
+		if pendingHeaderWithTermini.Termini[c_terminusIndex] != bestPh.Termini[c_terminusIndex] {
+			domTerminusHeader := sl.hc.GetHeaderByHash(bestPh.Termini[c_terminusIndex])
+			domTerminusOrder, err := domTerminusHeader.CalcOrder()
+			if err != nil {
+				return nil, false, err
+			}
+			if order <= domTerminusOrder && subReorg {
+				sl.bestPhKey = pendingHeaderWithTermini.Termini[c_terminusIndex]
+			}
+		}
 	}
+
 	if subReorg {
-		sl.bestPhKey = pendingHeaderWithTermini.Termini[c_terminusIndex]
 		block.SetAppendTime(appendFinished)
 		sl.hc.SetCurrentHeader(block.Header())
 		sl.hc.chainHeadFeed.Send(ChainHeadEvent{Block: block})
