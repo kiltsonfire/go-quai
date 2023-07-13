@@ -255,7 +255,7 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	sl.updatePhCache(pendingHeaderWithTermini, true, nil)
 
 	if nodeCtx == common.ZONE_CTX {
-		subReorg = sl.poem(pendingHeaderWithTermini.Header.CalcPhS(), bestPh.Header.CalcPhS())
+		subReorg = sl.poem(block.Header().CalcS(), bestPh.Header.CalcPhS(order))
 	}
 	if subReorg {
 		sl.bestPhKey = pendingHeaderWithTermini.Termini[c_terminusIndex]
@@ -467,7 +467,7 @@ func (sl *Slice) pcrc(batch ethdb.Batch, header *types.Header, domTerminus commo
 // POEM compares externS to the currentHead S and returns true if externS is greater
 func (sl *Slice) poem(externS *big.Int, currentS *big.Int) bool {
 	log.Info("POEM:", "Header hash:", sl.hc.CurrentHeader().Hash(), "currentS:", common.BigBitsToBits(currentS), "externS:", common.BigBitsToBits(externS))
-	reorg := currentS.Cmp(externS) < 0
+	reorg := currentS.Cmp(externS) <= 0
 	return reorg
 }
 
@@ -513,15 +513,13 @@ func (sl *Slice) SubRelayPendingHeader(pendingHeader types.PendingHeader, locati
 
 	if nodeCtx == common.REGION_CTX {
 		// Adding a guard on the region that was already updated in the synchronous path.
-		if location.Region() != common.NodeLocation.Region() {
-			reorg, err = sl.updatePhCacheFromDom(pendingHeader, common.NodeLocation.Region(), []int{common.PRIME_CTX})
-			if err != nil {
-				return
-			}
+		reorg, err = sl.updatePhCacheFromDom(pendingHeader, common.NodeLocation.Region(), []int{common.PRIME_CTX}, (location.Region() != common.NodeLocation.Region()))
+		if err != nil {
+			return
 		}
-		if reorg || location.Region() == common.NodeLocation.Region() {
+		if reorg {
 			for i := range sl.subClients {
-				if sl.subClients[i] != nil {
+				if sl.subClients[i] != nil && !bytes.Equal(location, common.NodeLocation) {
 					if ph, exists := sl.readPhCache(pendingHeader.Termini[common.NodeLocation.Region()]); exists {
 						sl.subClients[i].SubRelayPendingHeader(context.Background(), ph, location)
 					}
@@ -532,11 +530,12 @@ func (sl *Slice) SubRelayPendingHeader(pendingHeader types.PendingHeader, locati
 		// This check prevents a double send to the miner.
 		// If the previous block on which the given pendingHeader was built is the same as the NodeLocation
 		// the pendingHeader update has already been sent to the miner for the given location in relayPh.
+
+		_, err := sl.updatePhCacheFromDom(pendingHeader, common.NodeLocation.Zone(), []int{common.PRIME_CTX, common.REGION_CTX}, !bytes.Equal(location, common.NodeLocation))
+		if err != nil {
+			return
+		}
 		if !bytes.Equal(location, common.NodeLocation) {
-			_, err := sl.updatePhCacheFromDom(pendingHeader, common.NodeLocation.Zone(), []int{common.PRIME_CTX, common.REGION_CTX})
-			if err != nil {
-				return
-			}
 			bestPh, exists := sl.readPhCache(sl.bestPhKey)
 			if exists {
 				bestPh.Header.SetLocation(common.NodeLocation)
@@ -569,7 +568,7 @@ func (sl *Slice) computePendingHeader(localPendingHeaderWithTermini types.Pendin
 }
 
 // updatePhCacheFromDom combines the recieved pending header with the pending header stored locally at a given terminus for specified context
-func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, terminiIndex int, indices []int) (bool, error) {
+func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, terminiIndex int, indices []int, update bool) (bool, error) {
 	hash := pendingHeader.Termini[terminiIndex]
 	localPendingHeader, exists := sl.readPhCache(hash)
 
@@ -587,7 +586,10 @@ func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, termini
 		}
 
 		oldBestPhEntropy := new(big.Int).Set(bestPh.Header.CalcPhS())
-		sl.updatePhCache(types.PendingHeader{Header: combinedPendingHeader, Termini: localPendingHeader.Termini}, false, nil)
+
+		if update {
+			sl.updatePhCache(types.PendingHeader{Header: combinedPendingHeader, Termini: localPendingHeader.Termini}, false, nil)
+		}
 		reorg := sl.pickPhHead(types.PendingHeader{Header: combinedPendingHeader, Termini: localPendingHeader.Termini}, oldBestPhEntropy)
 		return reorg, nil
 	}

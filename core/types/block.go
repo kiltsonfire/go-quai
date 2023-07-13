@@ -745,19 +745,36 @@ func (h *Header) CalcS() *big.Int {
 	return big.NewInt(0)
 }
 
-func (h *Header) CalcPhS() *big.Int {
-	switch common.NodeLocation.Context() {
-	case common.PRIME_CTX:
-		totalS := h.ParentEntropy(common.PRIME_CTX)
-		return totalS
-	case common.REGION_CTX:
-		totalS := new(big.Int).Add(h.ParentEntropy(common.PRIME_CTX), h.ParentDeltaS(common.REGION_CTX))
-		return totalS
-	case common.ZONE_CTX:
-		totalS := new(big.Int).Add(h.ParentEntropy(common.PRIME_CTX), h.ParentDeltaS(common.REGION_CTX))
-		totalS.Add(totalS, h.ParentDeltaS(common.ZONE_CTX))
-		return totalS
+func (h *Header) CalcPhS(args ...int) *big.Int {
+	if len(args) > 0 {
+		phOrder := args[0]
+		switch phOrder {
+		case common.PRIME_CTX:
+			totalS := new(big.Int).Add(h.ParentEntropy(common.PRIME_CTX), h.ParentDeltaS(common.REGION_CTX))
+			totalS.Add(totalS, h.ParentDeltaS(common.ZONE_CTX))
+			return totalS
+		case common.REGION_CTX:
+			totalS := new(big.Int).Add(h.ParentEntropy(common.REGION_CTX), h.ParentDeltaS(common.ZONE_CTX))
+			return totalS
+		case common.ZONE_CTX:
+			totalS := h.ParentEntropy(common.ZONE_CTX)
+			return totalS
+		}
+	} else {
+		switch common.NodeLocation.Context() {
+		case common.PRIME_CTX:
+			totalS := h.ParentEntropy(common.PRIME_CTX)
+			return totalS
+		case common.REGION_CTX:
+			totalS := new(big.Int).Add(h.ParentEntropy(common.PRIME_CTX), h.ParentDeltaS(common.REGION_CTX))
+			return totalS
+		case common.ZONE_CTX:
+			totalS := new(big.Int).Add(h.ParentEntropy(common.PRIME_CTX), h.ParentDeltaS(common.REGION_CTX))
+			totalS.Add(totalS, h.ParentDeltaS(common.ZONE_CTX))
+			return totalS
+		}
 	}
+
 	return big.NewInt(0)
 }
 
