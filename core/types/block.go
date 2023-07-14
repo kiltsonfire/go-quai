@@ -745,23 +745,6 @@ func (h *Header) CalcS() *big.Int {
 	return big.NewInt(0)
 }
 
-func (h *Header) CalcPhS() *big.Int {
-	switch common.NodeLocation.Context() {
-	case common.PRIME_CTX:
-		totalS := h.ParentEntropy(common.PRIME_CTX)
-		return totalS
-	case common.REGION_CTX:
-		totalS := new(big.Int).Add(h.ParentEntropy(common.PRIME_CTX), h.ParentDeltaS(common.REGION_CTX))
-		return totalS
-	case common.ZONE_CTX:
-		totalS := new(big.Int).Add(h.ParentEntropy(common.PRIME_CTX), h.ParentDeltaS(common.REGION_CTX))
-		totalS.Add(totalS, h.ParentDeltaS(common.ZONE_CTX))
-		return totalS
-	}
-
-	return big.NewInt(0)
-}
-
 func (h *Header) CalcDeltaS() *big.Int {
 	order, err := h.CalcOrder()
 	if err != nil {
