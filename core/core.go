@@ -286,8 +286,8 @@ func (c *Core) ConstructLocalMinedBlock(header *types.Header) (*types.Block, err
 	return c.sl.ConstructLocalMinedBlock(header)
 }
 
-func (c *Core) SubRelayPendingHeader(slPendingHeader types.PendingHeader, location common.Location) {
-	c.sl.SubRelayPendingHeader(slPendingHeader, location)
+func (c *Core) SubRelayPendingHeader(slPendingHeader types.PendingHeader, location common.Location, originCtx int) {
+	c.sl.SubRelayPendingHeader(slPendingHeader, location, originCtx)
 }
 
 func (c *Core) NewGenesisPendigHeader(pendingHeader *types.Header) {

@@ -458,8 +458,8 @@ func (b *QuaiAPIBackend) PendingBlock() *types.Block {
 	return b.eth.core.PendingBlock()
 }
 
-func (b *QuaiAPIBackend) SubRelayPendingHeader(pendingHeader types.PendingHeader, location common.Location) {
-	b.eth.core.SubRelayPendingHeader(pendingHeader, location)
+func (b *QuaiAPIBackend) SubRelayPendingHeader(pendingHeader types.PendingHeader, location common.Location, originCtx int) {
+	b.eth.core.SubRelayPendingHeader(pendingHeader, location, originCtx)
 }
 
 func (b *QuaiAPIBackend) NewGenesisPendingHeader(pendingHeader *types.Header) {

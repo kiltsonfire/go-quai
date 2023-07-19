@@ -631,9 +631,10 @@ func (s *PublicBlockChainQuaiAPI) Append(ctx context.Context, raw json.RawMessag
 }
 
 type SubRelay struct {
-	Header   *types.Header
-	Termini  []common.Hash
-	Location common.Location
+	Header    *types.Header
+	Termini   []common.Hash
+	Location  common.Location
+	OriginCtx int
 }
 
 func (s *PublicBlockChainQuaiAPI) SubRelayPendingHeader(ctx context.Context, raw json.RawMessage) {
@@ -642,7 +643,7 @@ func (s *PublicBlockChainQuaiAPI) SubRelayPendingHeader(ctx context.Context, raw
 		return
 	}
 	pendingHeader := types.PendingHeader{Header: subRelay.Header, Termini: subRelay.Termini}
-	s.b.SubRelayPendingHeader(pendingHeader, subRelay.Location)
+	s.b.SubRelayPendingHeader(pendingHeader, subRelay.Location, subRelay.OriginCtx)
 }
 
 func (s *PublicBlockChainQuaiAPI) NewGenesisPendingHeader(ctx context.Context, raw json.RawMessage) {
