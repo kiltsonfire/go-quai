@@ -436,6 +436,7 @@ func (blake3pow *Blake3pow) CalcPrimeDifficulty(chain consensus.ChainHeaderReade
 	deltaNumber := new(big.Int).Sub(parent.Number(), primeTerminusHeader.Number())
 	log.Info("CalcPrimeDifficulty", "deltaNumber:", deltaNumber)
 	target := new(big.Int).Mul(big.NewInt(common.NumRegionsInPrime), params.TimeFactor)
+	target = new(big.Int).Mul(big.NewInt(common.NumZonesInRegion), target)
 	log.Info("CalcPrimeDifficulty", "target:", target)
 
 	// prior - prior * k * (target - deltaNumber)/target
@@ -444,7 +445,7 @@ func (blake3pow *Blake3pow) CalcPrimeDifficulty(chain consensus.ChainHeaderReade
 	controlError = new(big.Int).Mul(controlError, prior)
 	controlError = new(big.Int).Quo(controlError, target)
 	log.Info("CalcPrimeDifficulty", "error:", controlError)
-	adjustment := new(big.Int).Quo(controlError, big100)
+	adjustment := new(big.Int).Quo(controlError, common.Big4)
 	log.Info("CalcPrimeDifficulty", "adjustment:", adjustment)
 	newDifficulty := new(big.Int).Add(prior, adjustment)
 	log.Info("CalcPrimeDifficulty", "newDifficulty:", newDifficulty)
@@ -480,7 +481,7 @@ func (blake3pow *Blake3pow) CalcRegionDifficulty(chain consensus.ChainHeaderRead
 	controlError = new(big.Int).Mul(controlError, prior)
 	controlError = new(big.Int).Quo(controlError, target)
 	log.Info("CalcRegionDifficulty", "error:", controlError)
-	adjustment := new(big.Int).Quo(controlError, big100)
+	adjustment := new(big.Int).Quo(controlError, common.Big32)
 	log.Info("CalcRegionDifficulty", "adjustment:", adjustment)
 	newDifficulty := new(big.Int).Add(prior, adjustment)
 	log.Info("CalcRegionDifficulty", "newDifficulty:", newDifficulty)
