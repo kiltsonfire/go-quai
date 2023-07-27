@@ -349,6 +349,9 @@ func (h *Header) PrimeDifficulty(args ...int) *big.Int {
 	if len(args) > 0 {
 		nodeCtx = args[0]
 	}
+	if args[0] < 0 { //GENESIS ESCAPE
+		nodeCtx = 0
+	}
 	return h.primeDifficulty[nodeCtx]
 }
 func (h *Header) ManifestHash(args ...int) common.Hash {
@@ -851,6 +854,7 @@ func CopyHeader(h *Header) *Header {
 	for i := 0; i < common.NumZonesInRegion; i++ {
 		cpy.SetPrimeDifficulty(h.PrimeDifficulty(i), i)
 	}
+	cpy.SetRegionDifficulty(h.RegionDifficulty())
 	cpy.SetTerminusHash(h.TerminusHash())
 	cpy.SetUncleHash(h.UncleHash())
 	cpy.SetCoinbase(h.Coinbase())
@@ -1112,12 +1116,12 @@ type Termini struct {
 
 func CopyTermini(termini Termini) Termini {
 	newTermini := EmptyTermini()
-	newTermini.domTerminus = termini.domTerminus
+	newTermini.SetDomTerminus(termini.domTerminus)
 	for i, t := range termini.subTermini {
-		newTermini.subTermini[i] = t
+		newTermini.SetSubTerminiAtIndex(t, i)
 	}
 	for i, t := range termini.primeTermini {
-		newTermini.primeTermini[i] = t
+		newTermini.SetPrimeTerminiAtIndex(t, i)
 	}
 	return newTermini
 }

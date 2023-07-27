@@ -30,8 +30,8 @@ func (blake3pow *Blake3pow) CalcOrder(header *types.Header) (*big.Int, int, erro
 	totalDeltaSPrime := new(big.Int).Add(header.ParentDeltaS(common.REGION_CTX), header.ParentDeltaS(common.ZONE_CTX))
 	totalDeltaSPrime.Add(totalDeltaSPrime, intrinsicS)
 
-	if totalDeltaSPrime.Cmp(header.PrimeDifficulty(header.Location().Region())) > 0 {
-		fmt.Println("prime block because", common.BigBitsToBits(totalDeltaSPrime), ">", common.BigBitsToBits(header.PrimeDifficulty(header.Location().Region())))
+	if totalDeltaSPrime.Cmp(header.PrimeDifficulty(header.Location().Zone())) > 0 {
+		fmt.Println("prime block because", common.BigBitsToBits(totalDeltaSPrime), ">", common.BigBitsToBits(header.PrimeDifficulty(header.Location().Zone())))
 		return intrinsicS, common.PRIME_CTX, nil
 	}
 

@@ -288,7 +288,7 @@ func (blake3pow *Blake3pow) verifyHeader(chain consensus.ChainHeaderReader, head
 					return err
 				}
 				if header.RegionDifficulty().Cmp(regionDifficulty) != 0 {
-					return fmt.Errorf("invalid region difficulty rd: have %v, want %v", header.RegionDifficulty(), regionDifficulty)
+					return fmt.Errorf("invalid region difficulty dom block rd: have %v, want %v", header.RegionDifficulty(), regionDifficulty)
 				}
 			}
 			if nodeCtx == common.REGION_CTX {
@@ -305,15 +305,23 @@ func (blake3pow *Blake3pow) verifyHeader(chain consensus.ChainHeaderReader, head
 			if parentDeltaS.Cmp(header.ParentDeltaS()) != 0 {
 				return fmt.Errorf("invalid parent delta s: have %v, want %v", header.ParentDeltaS(), parentDeltaS)
 			}
-			// if parent is not a dom block, no adjustment to the prime or region difficulty will be made
-			for i := 0; i < common.NumZonesInRegion; i++ {
-				if header.PrimeDifficulty(i).Cmp(parent.PrimeDifficulty(i)) != 0 {
-					return fmt.Errorf("invalid prime difficulty pd: have %v, want %v at index %v", header.PrimeDifficulty(i), parent.PrimeDifficulty(i), i)
+			if nodeCtx == common.REGION_CTX {
+				// if parent is not a dom block, no adjustment to the prime or region difficulty will be made
+				for i := 0; i < common.NumZonesInRegion; i++ {
+					if header.PrimeDifficulty(i).Cmp(parent.PrimeDifficulty(i)) != 0 {
+						return fmt.Errorf("invalid prime difficulty pd: have %v, want %v at index %v", header.PrimeDifficulty(i), parent.PrimeDifficulty(i), i)
+					}
 				}
 			}
-			if header.RegionDifficulty() != parent.RegionDifficulty() {
-				return fmt.Errorf("invalid region difficulty rd: have %v, want %v", header.RegionDifficulty(), parent.PrimeDifficulty())
+			if nodeCtx == common.ZONE_CTX {
+				if header.RegionDifficulty().Cmp(parent.RegionDifficulty()) != 0 {
+					return fmt.Errorf("invalid region difficulty rd: have %v, want %v", header.RegionDifficulty(), parent.RegionDifficulty())
+				}
+				if header.PrimeDifficulty(common.NodeLocation.Zone()).Cmp(parent.PrimeDifficulty(common.NodeLocation.Zone())) != 0 {
+					return fmt.Errorf("invalid prime difficulty pd: have %v, want %v at index %v", header.PrimeDifficulty(common.NodeLocation.Zone()), parent.PrimeDifficulty(common.NodeLocation.Zone()), common.NodeLocation.Zone())
+				}
 			}
+
 		}
 	}
 
@@ -423,20 +431,8 @@ func (blake3pow *Blake3pow) CalcPrimeDifficulty(chain consensus.ChainHeaderReade
 		return nil, errors.New("termini not found in CalcPrimeDifficulty")
 	}
 	primeTerminusHeader := chain.GetHeaderByHash(termini.PrimeTerminiAtIndex(parent.Location().SubIndex()))
-	if primeTerminusHeader.Hash() == chain.Config().GenesisHash {
-		initPrimeThreshold := new(big.Int).Mul(params.TimeFactor, big.NewInt(common.NumRegionsInPrime))
-		initPrimeThreshold = new(big.Int).Mul(initPrimeThreshold, big.NewInt(common.NumZonesInRegion))
-		log.Info("SetTerminusHash", "initPrimeThreshold:", initPrimeThreshold)
-		target := new(big.Int).Div(common.Big2e256, parent.Difficulty()).Bytes()
-		log.Info("SetTerminusHash", "target:", target, "parentdiff:", parent.Difficulty())
-		zoneThresholdS := blake3pow.IntrinsicLogS(common.BytesToHash(target))
-		log.Info("SetTerminusHash", "zoneThreshold:", zoneThresholdS)
-		initPrimeThreshold = new(big.Int).Mul(zoneThresholdS, initPrimeThreshold)
-		log.Info("SetTerminusHash", "initPrimeThreshold:", initPrimeThreshold)
-		return initPrimeThreshold, nil
 
-	}
-	log.Info("CalcPrimeDifficulty", "primeTerminusHeader:", primeTerminusHeader.NumberArray())
+	log.Info("CalcPrimeDifficulty", "primeTerminusHeader:", primeTerminusHeader.NumberArray(), "Hash", primeTerminusHeader.Hash())
 	deltaNumber := new(big.Int).Sub(parent.Number(), primeTerminusHeader.Number())
 	log.Info("CalcPrimeDifficulty", "deltaNumber:", deltaNumber)
 	target := new(big.Int).Mul(big.NewInt(common.NumRegionsInPrime), params.TimeFactor)
@@ -473,16 +469,7 @@ func (blake3pow *Blake3pow) CalcRegionDifficulty(chain consensus.ChainHeaderRead
 		return nil, errors.New("termini not found in CalcRegionDifficulty")
 	}
 	regionTerminusHeader := chain.GetHeaderByHash(termini.DomTerminus())
-	if regionTerminusHeader.Hash() == chain.Config().GenesisHash {
-		target := new(big.Int).Div(common.Big2e256, parent.Difficulty()).Bytes()
-		log.Info("SetTerminusHash", "target:", target, "parentdiff:", parent.Difficulty())
-		zoneThresholdS := blake3pow.IntrinsicLogS(common.BytesToHash(target))
-		log.Info("SetTerminusHash", "zoneThreshold:", zoneThresholdS)
 
-		initRegionThreshold := new(big.Int).Mul(params.TimeFactor, big.NewInt(common.NumZonesInRegion))
-		initRegionThreshold = new(big.Int).Mul(zoneThresholdS, initRegionThreshold)
-		return initRegionThreshold, nil
-	}
 	deltaNumber := new(big.Int).Sub(parent.Number(), regionTerminusHeader.Number())
 	target := new(big.Int).Mul(big.NewInt(common.NumZonesInRegion), params.TimeFactor)
 

@@ -424,7 +424,7 @@ func (sl *Slice) pcrc(batch ethdb.Batch, header *types.Header, domTerminus commo
 	nodeCtx := common.NodeLocation.Context()
 	location := header.Location()
 
-	log.Debug("PCRC:", "Parent Hash:", header.ParentHash(), "Number", header.Number, "Location:", header.Location())
+	log.Debug("PCRC:", "Parent Hash:", header.ParentHash(), "Number", header.Number(), "Location:", header.Location())
 	termini := sl.hc.GetTerminiByHash(header.ParentHash())
 
 	if !termini.IsValid() {
@@ -461,6 +461,8 @@ func (sl *Slice) pcrc(batch ethdb.Batch, header *types.Header, domTerminus commo
 	if nodeCtx == common.ZONE_CTX {
 		return common.Hash{}, newTermini, nil
 	}
+
+	fmt.Println("Prime Termini", "Hash", header.Hash(), "Termini", newTermini.PrimeTermini())
 
 	return termini.SubTerminiAtIndex(location.SubIndex()), newTermini, nil
 }
@@ -557,10 +559,6 @@ func (sl *Slice) computePendingHeader(localPendingHeaderWithTermini types.Pendin
 		log.Info("computePendingHeader:", "primeDifficulty:", cachedPendingHeaderWithTermini.Header().PrimeDifficultyArray(), "regionDifficulty:", cachedPendingHeaderWithTermini.Header().RegionDifficulty())
 
 		newPh = sl.combinePendingHeader(localPendingHeaderWithTermini.Header(), cachedPendingHeaderWithTermini.Header(), nodeCtx, true)
-
-		// for i := 0; i < common.NumZonesInRegion; i++ {
-		// 	newPh.SetPrimeDifficulty(cachedPendingHeaderWithTermini.Header().PrimeDifficulty(i), i)
-		// }
 
 		log.Info("computePendingHeader:", "primeDifficulty:", newPh.PrimeDifficultyArray(), "regionDifficulty:", newPh.RegionDifficulty())
 		return types.NewPendingHeader(newPh, localPendingHeaderWithTermini.Termini())
