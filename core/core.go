@@ -143,8 +143,8 @@ func (c *Core) procAppendQueue() {
 			hashNumber := types.HashAndNumber{Hash: hash.(common.Hash), Number: value.(blockNumberAndRetryCounter).number}
 			if value.(blockNumberAndRetryCounter).retry < c_appendQueueRetryPriorityThreshold {
 				hashNumberPriorityList = append(hashNumberPriorityList, hashNumber)
-			} 
-            if hashNumber.Number < c.CurrentHeader().NumberU64()+c_maxFutureBlocks {
+			}
+			if hashNumber.Number < c.CurrentHeader().NumberU64()+c_maxFutureBlocks {
 				hashNumberList = append(hashNumberList, hashNumber)
 			}
 		}
@@ -325,6 +325,10 @@ func (c *Core) ConstructLocalMinedBlock(header *types.Header) (*types.Block, err
 
 func (c *Core) SubRelayPendingHeader(slPendingHeader types.PendingHeader, location common.Location, subReorg bool) {
 	c.sl.SubRelayPendingHeader(slPendingHeader, location, subReorg)
+}
+
+func (c *Core) UpdateDom(oldTerminus common.Hash, newTerminus common.Hash, location common.Location) {
+	c.sl.UpdateDom(oldTerminus, newTerminus, location)
 }
 
 func (c *Core) NewGenesisPendigHeader(pendingHeader *types.Header) {
