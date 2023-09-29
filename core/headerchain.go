@@ -439,14 +439,10 @@ func (hc *HeaderChain) loadLastState() error {
 		if chead := hc.GetHeaderByHash(head); chead != nil {
 			hc.currentHeader.Store(chead)
 		} else {
-			// This is only done if during the stop, currenthead hash was not stored
-			// properly and it doesn't crash the nodes
-			hc.currentHeader.Store(hc.genesisHeader)
+			// Recover the current header
+			log.Info("Recovering Current Header")
+			hc.currentHeader.Store(hc.RecoverCurrentHeader())
 		}
-	} else {
-		// Recover the current header
-		log.Info("Recovering Current Header")
-		hc.currentHeader.Store(hc.RecoverCurrentHeader())
 	}
 
 	heads := make([]*types.Header, 0)
