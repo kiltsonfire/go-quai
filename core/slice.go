@@ -306,10 +306,15 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 				return nil, false, false, err
 			}
 		}
-		// Upate the local pending header
-		pendingHeaderWithTermini, err = sl.generateSlicePendingHeader(block, newTermini, domPendingHeader, domOrigin, subReorg, false)
-		if err != nil {
-			return nil, false, false, err
+
+		if sl.ProcessingState() {
+			// Upate the local pending header
+			pendingHeaderWithTermini, err = sl.generateSlicePendingHeader(block, newTermini, domPendingHeader, domOrigin, subReorg, false)
+			if err != nil {
+				return nil, false, false, err
+			}
+		} else {
+			pendingHeaderWithTermini = tempPendingHeader
 		}
 
 		time9 = common.PrettyDuration(time.Since(start))
@@ -484,7 +489,9 @@ func (sl *Slice) asyncPendingHeaderLoop() {
 
 	// Subscribe to the AsyncPh updates from the worker
 	sl.asyncPhCh = make(chan *types.Header, c_asyncPhUpdateChanSize)
-	sl.asyncPhSub = sl.miner.worker.SubscribeAsyncPendingHeader(sl.asyncPhCh)
+	if sl.ProcessingState() {
+		sl.asyncPhSub = sl.miner.worker.SubscribeAsyncPendingHeader(sl.asyncPhCh)
+	}
 
 	for {
 		select {
