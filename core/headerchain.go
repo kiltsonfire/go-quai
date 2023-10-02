@@ -380,7 +380,10 @@ func (hc *HeaderChain) SetCurrentState(head *types.Header) error {
 	var headersWithoutState []*types.Header
 	for {
 		headersWithoutState = append(headersWithoutState, current)
-		header := hc.GetHeaderOrCandidate(current.ParentHash(), current.NumberU64()-1)
+		header := hc.GetHeader(current.ParentHash(), current.NumberU64()-1)
+		if header == nil {
+			return consensus.ErrFutureBlock
+		}
 		_, err := hc.bc.processor.StateAt(header.Root())
 		if err == nil {
 			break
