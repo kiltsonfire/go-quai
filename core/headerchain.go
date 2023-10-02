@@ -307,8 +307,7 @@ func (hc *HeaderChain) AppendBlock(block *types.Block, newInboundEtxs types.Tran
 	return nil
 }
 
-// SetCurrentHeader sets the in-memory head header marker of the canonical chan
-// as the given header.
+// SetCurrentHeader sets the current header based on the POEM choice
 func (hc *HeaderChain) SetCurrentHeader(head *types.Header) error {
 	hc.headermu.Lock()
 	defer hc.headermu.Unlock()
@@ -326,10 +325,6 @@ func (hc *HeaderChain) SetCurrentHeader(head *types.Header) error {
 
 	// If head is the normal extension of canonical head, we can return by just wiring the canonical hash.
 	if prevHeader.Hash() == head.ParentHash() {
-		err := hc.ReadInboundEtxsAndAppendBlock(head)
-		if err != nil {
-			return err
-		}
 		rawdb.WriteCanonicalHash(hc.headerDb, head.Hash(), head.NumberU64())
 		return nil
 	}
@@ -369,13 +364,37 @@ func (hc *HeaderChain) SetCurrentHeader(head *types.Header) error {
 
 	// Run through the hash stack to update canonicalHash and forward state processor
 	for i := len(hashStack) - 1; i >= 0; i-- {
-		err := hc.ReadInboundEtxsAndAppendBlock(hashStack[i])
-		if err != nil {
-			return err
-		}
 		rawdb.WriteCanonicalHash(hc.headerDb, hashStack[i].Hash(), hashStack[i].NumberU64())
 	}
 
+	return nil
+}
+
+// SetCurrentHeader sets the in-memory head header marker of the canonical chan
+// as the given header.
+func (hc *HeaderChain) SetCurrentState(head *types.Header) error {
+	hc.headermu.Lock()
+	defer hc.headermu.Unlock()
+
+	current := types.CopyHeader(head)
+	var headersWithoutState []*types.Header
+	for {
+		headersWithoutState = append(headersWithoutState, current)
+		header := hc.GetHeaderOrCandidate(current.ParentHash(), current.NumberU64()-1)
+		_, err := hc.bc.processor.StateAt(header.Root())
+		if err == nil {
+			break
+		}
+		current = header
+	}
+
+	// Run through the hash stack to update canonicalHash and forward state processor
+	for i := len(headersWithoutState) - 1; i >= 0; i-- {
+		err := hc.ReadInboundEtxsAndAppendBlock(headersWithoutState[i])
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
