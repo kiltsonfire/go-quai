@@ -197,7 +197,13 @@ func newHandler(config *handlerConfig) (*handler, error) {
 				atomic.StoreUint32(&h.acceptTxs, 1)
 			}
 		}
-		h.core.WriteBlock(block)
+		target := new(big.Int).Div(common.Big2e256, h.core.CurrentHeader().Difficulty())
+		zoneThresholdS := h.core.IntrinsicLogS(common.BytesToHash(target.Bytes()))
+		threshold := new(big.Int).Mul(zoneThresholdS, big.NewInt(100))
+		threshold = new(big.Int).Add(block.ParentEntropy(), threshold)
+		if threshold.Cmp(h.core.CurrentHeader().ParentEntropy()) > 0 {
+			h.core.WriteBlock(block)
+		}
 	}
 	h.blockFetcher = fetcher.NewBlockFetcher(h.core.GetBlockOrCandidateByHash, writeBlock, validator, verifySeal, h.BroadcastBlock, heighter, currentThresholdS, currentS, currentDifficulty, h.removePeer, h.core.IsBlockHashABadHash)
 

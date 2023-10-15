@@ -664,6 +664,11 @@ func (c *Core) TotalLogS(header *types.Header) *big.Int {
 	return c.engine.TotalLogS(header)
 }
 
+// IntrinsicLogS returns the entropy reduction in a hash
+func (c *Core) IntrinsicLogS(hash common.Hash) *big.Int {
+	return c.engine.IntrinsicLogS(hash)
+}
+
 // CalcOrder returns the order of the block within the hierarchy of chains
 func (c *Core) CalcOrder(header *types.Header) (*big.Int, int, error) {
 	return c.engine.CalcOrder(header)
