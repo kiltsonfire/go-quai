@@ -634,7 +634,7 @@ func (p *StateProcessor) StateAtBlock(block *types.Block, reexec uint64, base *s
 	if base != nil {
 		// The optional base statedb is given, mark the start point as parent block
 		statedb, database, report = base, base.Database(), false
-		current = p.hc.GetBlockOrCandidate(block.ParentHash(), block.NumberU64()-1)
+		current = p.hc.GetBlock(block.ParentHash(), block.NumberU64()-1)
 	} else {
 		// Otherwise try to reexec blocks until we find a state or reach our limit
 		current = block
@@ -658,7 +658,7 @@ func (p *StateProcessor) StateAtBlock(block *types.Block, reexec uint64, base *s
 			if current.NumberU64() == 0 {
 				return nil, errors.New("genesis state is missing")
 			}
-			parent := p.hc.GetBlockOrCandidate(current.ParentHash(), current.NumberU64()-1)
+			parent := p.hc.GetBlock(current.ParentHash(), current.NumberU64()-1)
 			if parent == nil {
 				return nil, fmt.Errorf("missing block %v %d", current.ParentHash(), current.NumberU64()-1)
 			}
