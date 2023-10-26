@@ -141,6 +141,7 @@ func NewSlice(db ethdb.Database, config *Config, txConfig *TxPoolConfig, txLooku
 // Return of this function is the Etxs generated in the Zone Block, subReorg bool that tells dom if should be mined on, setHead bool that determines if we should set the block as the current head and the error
 func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.Transactions) (types.Transactions, bool, bool, error) {
 	start := time.Now()
+	blockHash := header.Hash()
 
 	if header.Hash() == sl.config.GenesisHash {
 		return nil, false, false, nil
@@ -338,6 +339,9 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 		log.Info("Append 338:", "block.Header().Hash()", block.Header().Hash(), "block.Hash():", block.Hash(), "header.Hash():", header.Hash())
 		time9 = common.PrettyDuration(time.Since(start))
 
+	}
+	if blockHash != block.Hash() {
+		log.Info("Mutated Hash, blockHash:", blockHash, "block.Header().Hash():", block.Header().Hash(), "block.Hash()", block.Hash())
 	}
 	sl.updatePhCache(pendingHeaderWithTermini, true, nil, subReorg, common.NodeLocation)
 
