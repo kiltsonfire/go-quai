@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -196,6 +197,24 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 	time3 := common.PrettyDuration(time.Since(start))
 	// Construct the block locally
 	block, err := sl.ConstructLocalBlock(header)
+	log.Info("Constructing the block, origin:", domOrigin, "block hash", block.Header().Hash(), "header hash:", header.Hash(), "number:", block.Header().NumberArray(), "location", header.Location())
+	if block.Header().Hash() != header.Hash() {
+		jsonHeader, err := json.MarshalIndent(header, "", "    ")
+		if err != nil {
+			log.Info("Failed to marshal JSON header: %v", err)
+		}
+
+		// Print the indented JSON string.
+		log.Info(string(jsonHeader))
+
+		jsonBlockHeader, err := json.MarshalIndent(block.Header(), "", "    ")
+		if err != nil {
+			log.Info("Failed to marshal JSON blockHeader: %v", err)
+		}
+
+		// Print the indented JSON string.
+		log.Info(string(jsonBlockHeader))
+	}
 	if err != nil {
 		return nil, false, false, err
 	}
@@ -284,22 +303,24 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 		}
 
 		time8 = common.PrettyDuration(time.Since(start))
-
+		log.Info("Append 306:", "block.Header().Hash()", block.Header().Hash(), "block.Hash():", block.Hash(), "header.Hash():", header.Hash())
 		tempPendingHeader, err := sl.generateSlicePendingHeader(block, newTermini, domPendingHeader, domOrigin, false, false)
 		if err != nil {
 			return nil, false, false, err
 		}
+		log.Info("Append 311:", "block.Header().Hash()", block.Header().Hash(), "block.Hash():", block.Hash(), "header.Hash():", header.Hash())
 
 		subReorg = sl.miningStrategy(bestPh, tempPendingHeader)
 
 		if order < nodeCtx {
 			// Store the inbound etxs for dom blocks that did not get picked and use
 			// it in the future if dom switch happens
-			rawdb.WriteInboundEtxs(sl.sliceDb, block.Hash(), newInboundEtxs.FilterToLocation(common.NodeLocation))
+			rawdb.WriteInboundEtxs(sl.sliceDb, block.Header().Hash(), newInboundEtxs.FilterToLocation(common.NodeLocation))
 		}
 
 		setHead = sl.poem(sl.engine.TotalLogS(block.Header()), sl.engine.TotalLogS(sl.hc.CurrentHeader()))
 
+		log.Info("Append 323:", "block.Header().Hash()", block.Header().Hash(), "block.Hash():", block.Hash(), "header.Hash():", header.Hash())
 		if subReorg {
 			err := sl.hc.SetCurrentState(block.Header())
 			if err != nil {
@@ -307,12 +328,14 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 				return nil, false, false, err
 			}
 		}
+		log.Info("Append 331:", "block.Header().Hash()", block.Header().Hash(), "block.Hash():", block.Hash(), "header.Hash():", header.Hash())
 		// Upate the local pending header
 		pendingHeaderWithTermini, err = sl.generateSlicePendingHeader(block, newTermini, domPendingHeader, domOrigin, subReorg, false)
 		if err != nil {
 			return nil, false, false, err
 		}
 
+		log.Info("Append 338:", "block.Header().Hash()", block.Header().Hash(), "block.Hash():", block.Hash(), "header.Hash():", header.Hash())
 		time9 = common.PrettyDuration(time.Since(start))
 
 	}
@@ -328,6 +351,7 @@ func (sl *Slice) Append(header *types.Header, domPendingHeader *types.Header, do
 		block.SetAppendTime(time.Duration(time9))
 	}
 
+	log.Info("Append 354:", "block.Header().Hash()", block.Header().Hash(), "block.Hash():", block.Hash(), "header.Hash():", header.Hash())
 	// Append has succeeded write the batch
 	if err := batch.Write(); err != nil {
 		return nil, false, false, err
