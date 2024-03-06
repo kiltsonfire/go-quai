@@ -430,10 +430,10 @@ func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte, logger *log.
 		default:
 			var accounted bool
 			for _, meta := range [][]byte{
-				databaseVersionKey, headHeaderKey, headBlockKey, lastPivotKey,
+				databaseVersionKey, headHeaderKey, headWorkObjectKey, lastPivotKey,
 				fastTrieProgressKey, snapshotDisabledKey, snapshotRootKey, snapshotJournalKey,
 				snapshotGeneratorKey, snapshotRecoveryKey, txIndexTailKey, fastTxLookupLimitKey,
-				uncleanShutdownKey, badBlockKey,
+				uncleanShutdownKey, badWorkObjectKey,
 			} {
 				if bytes.Equal(key, meta) {
 					metadata.Add(size)

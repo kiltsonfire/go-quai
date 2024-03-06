@@ -228,7 +228,7 @@ func New(stack *node.Node, p2p NetworkingAPI, config *quaiconfig.Config, nodeCtx
 	// Set the p2p Networking API
 	quai.p2p = p2p
 	// Subscribe to the Blocks subscription
-	quai.p2p.Subscribe(config.NodeLocation, &types.Block{})
+	quai.p2p.Subscribe(config.NodeLocation, &types.WorkObject{})
 	quai.p2p.Subscribe(config.NodeLocation, common.Hash{})
 	quai.p2p.Subscribe(config.NodeLocation, &types.Transaction{})
 
@@ -322,7 +322,7 @@ func (s *Quai) Etherbase() (eb common.Address, err error) {
 //
 // We regard two types of accounts as local miner account: etherbase
 // and accounts specified via `txpool.locals` flag.
-func (s *Quai) isLocalBlock(header *types.Header) bool {
+func (s *Quai) isLocalBlock(header *types.WorkObject) bool {
 	author, err := s.engine.Author(header)
 	if err != nil {
 		s.logger.WithFields(log.Fields{
@@ -356,8 +356,8 @@ func (s *Quai) isLocalBlock(header *types.Header) bool {
 // shouldPreserve checks whether we should preserve the given block
 // during the chain reorg depending on whether the author of block
 // is a local account.
-func (s *Quai) shouldPreserve(block *types.Block) bool {
-	return s.isLocalBlock(block.Header())
+func (s *Quai) shouldPreserve(block *types.WorkObject) bool {
+	return s.isLocalBlock(block)
 }
 
 func (s *Quai) Core() *core.Core                 { return s.core }

@@ -27,7 +27,6 @@ import (
 	"reflect"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"google.golang.org/protobuf/proto"
 	"lukechampine.com/blake3"
@@ -79,7 +78,12 @@ func (n *BlockNonce) UnmarshalText(input []byte) error {
 	return hexutil.UnmarshalFixedText("BlockNonce", input, n[:])
 }
 
-//go:generate gencodec -type Header -field-override headerMarshaling -out gen_header_json.go
+type writeCounter common.StorageSize
+
+func (c *writeCounter) Write(b []byte) (int, error) {
+	*c += writeCounter(len(b))
+	return len(b), nil
+}
 
 // Header represents a block header in the Quai blockchain.
 type Header struct {
@@ -154,7 +158,7 @@ type extheader struct {
 }
 
 // Construct an empty header
-func EmptyHeader() *Header {
+func EmptyHeader(nodeCtx int) *WorkObject {
 	h := &Header{}
 	h.parentHash = make([]common.Hash, common.HierarchyDepth)
 	h.manifestHash = make([]common.Hash, common.HierarchyDepth)
@@ -178,7 +182,7 @@ func EmptyHeader() *Header {
 		h.parentDeltaS[i] = big.NewInt(0)
 		h.number[i] = big.NewInt(0)
 	}
-	return h
+	return NewWorkObjectWithHeader(h, &Transaction{}, nodeCtx)
 }
 
 // DecodeRLP decodes the Quai header format into h.
@@ -892,93 +896,6 @@ func (b *Body) QuaiTransactions() []*Transaction {
 	return quaiTxs
 }
 
-// Block represents an entire block in the Quai blockchain.
-type Block struct {
-	header          *Header
-	uncles          []*Header
-	transactions    Transactions
-	extTransactions Transactions
-	subManifest     BlockManifest
-
-	// caches
-	size       atomic.Value
-	appendTime atomic.Value
-
-	// These fields are used by package eth to track
-	// inter-peer block relay.
-	ReceivedAt   time.Time
-	ReceivedFrom interface{}
-}
-
-// "external" block encoding. used for eth protocol, etc.
-type extblock struct {
-	Header      *Header
-	Txs         []*Transaction
-	Uncles      []*Header
-	Etxs        []*Transaction
-	SubManifest BlockManifest
-}
-
-func NewBlock(header *Header, txs []*Transaction, uncles []*Header, etxs []*Transaction, subManifest BlockManifest, receipts []*Receipt, hasher TrieHasher, nodeCtx int) *Block {
-	b := &Block{header: CopyHeader(header)}
-
-	// TODO: panic if len(txs) != len(receipts)
-	if len(txs) == 0 {
-		b.header.SetTxHash(EmptyRootHash)
-	} else {
-		b.header.SetTxHash(DeriveSha(Transactions(txs), hasher))
-		b.transactions = make(Transactions, len(txs))
-		copy(b.transactions, txs)
-	}
-
-	if len(receipts) == 0 {
-		b.header.SetReceiptHash(EmptyRootHash)
-	} else {
-		b.header.SetReceiptHash(DeriveSha(Receipts(receipts), hasher))
-	}
-
-	if len(uncles) == 0 {
-		b.header.SetUncleHash(EmptyUncleHash)
-	} else {
-		b.header.SetUncleHash(CalcUncleHash(uncles))
-		b.uncles = make([]*Header, len(uncles))
-		for i := range uncles {
-			b.uncles[i] = CopyHeader(uncles[i])
-		}
-	}
-
-	if len(etxs) == 0 {
-		b.header.SetEtxHash(EmptyRootHash)
-	} else {
-		b.header.SetEtxHash(DeriveSha(Transactions(etxs), hasher))
-		b.extTransactions = make(Transactions, len(etxs))
-		copy(b.extTransactions, etxs)
-	}
-
-	// Since the subordinate's manifest lives in our body, we still need to check
-	// that the manifest matches the subordinate's manifest hash, but we do not set
-	// the subordinate's manifest hash.
-	subManifestHash := EmptyRootHash
-	if len(subManifest) != 0 {
-		subManifestHash = DeriveSha(subManifest, hasher)
-		b.subManifest = make(BlockManifest, len(subManifest))
-		copy(b.subManifest, subManifest)
-	}
-	if nodeCtx < common.ZONE_CTX && subManifestHash != b.Header().ManifestHash(nodeCtx+1) {
-		log.Global.Error("attempted to build block with invalid subordinate manifest")
-		return nil
-	}
-
-	return b
-}
-
-// NewBlockWithHeader creates a block with the given header data. The
-// header data is copied, changes to header and to the field values
-// will not affect the block.
-func NewBlockWithHeader(header *Header) *Block {
-	return &Block{header: CopyHeader(header)}
-}
-
 // CopyHeader creates a deep copy of a block header to prevent side effects from
 // modifying a header variable.
 func CopyHeader(h *Header) *Header {
@@ -1017,242 +934,27 @@ func CopyHeader(h *Header) *Header {
 	return &cpy
 }
 
-// DecodeRLP decodes the Quai RLP encoding into b.
-func (b *Block) DecodeRLP(s *rlp.Stream) error {
-	var eb extblock
-	_, size, _ := s.Kind()
-	if err := s.Decode(&eb); err != nil {
-		return err
-	}
-	b.header, b.uncles, b.transactions, b.extTransactions, b.subManifest = eb.Header, eb.Uncles, eb.Txs, eb.Etxs, eb.SubManifest
-	b.size.Store(common.StorageSize(rlp.ListSize(size)))
-	return nil
-}
-
-// EncodeRLP serializes b into the Quai RLP block format.
-func (b *Block) EncodeRLP(w io.Writer) error {
-	return rlp.Encode(w, extblock{
-		Header:      b.header,
-		Txs:         b.transactions,
-		Uncles:      b.uncles,
-		Etxs:        b.extTransactions,
-		SubManifest: b.subManifest,
-	})
-}
-
-// ProtoEncode serializes h into the Quai Proto Block format
-func (b *Block) ProtoEncode() (*ProtoBlock, error) {
-	protoHeader, err := b.header.ProtoEncode()
-	if err != nil {
-		return nil, err
-	}
-	protoBody, err := b.Body().ProtoEncode()
-	if err != nil {
-		return nil, err
-	}
-	protoBlock := &ProtoBlock{
-		Header: protoHeader,
-		Body:   protoBody,
-	}
-	return protoBlock, nil
-}
-
-// ProtoEncode deserializes th ProtoHeader into the Header format
-func (b *Block) ProtoDecode(protoBlock *ProtoBlock, location common.Location) error {
-	b.header = &Header{}
-	err := b.header.ProtoDecode(protoBlock.GetHeader())
-	if err != nil {
-		return err
-	}
-	body := &Body{}
-	err = body.ProtoDecode(protoBlock.GetBody(), location)
-	if err != nil {
-		return err
-	}
-	b.transactions = body.Transactions
-	b.extTransactions = body.ExtTransactions
-	b.uncles = body.Uncles
-	b.subManifest = body.SubManifest
-	return nil
-}
-
-// Wrapped header accessors
-func (b *Block) ParentHash(nodeCtx int) common.Hash   { return b.header.ParentHash(nodeCtx) }
-func (b *Block) UncleHash() common.Hash               { return b.header.UncleHash() }
-func (b *Block) Coinbase() common.Address             { return b.header.Coinbase() }
-func (b *Block) EVMRoot() common.Hash                 { return b.header.EVMRoot() }
-func (b *Block) UTXORoot() common.Hash                { return b.header.UTXORoot() }
-func (b *Block) TxHash() common.Hash                  { return b.header.TxHash() }
-func (b *Block) EtxHash() common.Hash                 { return b.header.EtxHash() }
-func (b *Block) EtxRollupHash() common.Hash           { return b.header.EtxRollupHash() }
-func (b *Block) ManifestHash(nodeCtx int) common.Hash { return b.header.ManifestHash(nodeCtx) }
-func (b *Block) ReceiptHash() common.Hash             { return b.header.ReceiptHash() }
-func (b *Block) Difficulty(nodeCtx int) *big.Int      { return b.header.Difficulty() }
-func (b *Block) ParentEntropy(nodeCtx int) *big.Int   { return b.header.ParentEntropy(nodeCtx) }
-func (b *Block) ParentDeltaS(nodeCtx int) *big.Int    { return b.header.ParentDeltaS(nodeCtx) }
-func (b *Block) Number(nodeCtx int) *big.Int          { return b.header.Number(nodeCtx) }
-func (b *Block) NumberU64(nodeCtx int) uint64         { return b.header.NumberU64(nodeCtx) }
-func (b *Block) GasLimit() uint64                     { return b.header.GasLimit() }
-func (b *Block) GasUsed() uint64                      { return b.header.GasUsed() }
-func (b *Block) BaseFee() *big.Int                    { return b.header.BaseFee() }
-func (b *Block) Location() common.Location            { return b.header.Location() }
-func (b *Block) Time() uint64                         { return b.header.Time() }
-func (b *Block) Extra() []byte                        { return b.header.Extra() }
-func (b *Block) Nonce() BlockNonce                    { return b.header.Nonce() }
-func (b *Block) NonceU64() uint64                     { return b.header.NonceU64() }
-
-// TODO: copies
-
-func (b *Block) Uncles() []*Header          { return b.uncles }
-func (b *Block) Transactions() Transactions { return b.transactions }
-func (b *Block) Transaction(hash common.Hash) *Transaction {
-	for _, transaction := range b.Transactions() {
-		if transaction.Hash() == hash {
-			return transaction
-		}
-	}
-	return nil
-}
-func (b *Block) ExtTransactions() Transactions { return b.extTransactions }
-func (b *Block) ExtTransaction(hash common.Hash) *Transaction {
-	for _, transaction := range b.ExtTransactions() {
-		if transaction.Hash() == hash {
-			return transaction
-		}
-	}
-	return nil
-}
-func (b *Block) SubManifest() BlockManifest { return b.subManifest }
-
-func (b *Block) Header() *Header { return b.header }
-
-func (b *Block) QiTransactions() []*Transaction {
-	// TODO: cache the UTXO loop
-	qiTxs := make([]*Transaction, 0)
-	for _, t := range b.Transactions() {
-		if t.Type() == QiTxType {
-			qiTxs = append(qiTxs, t)
-		}
-	}
-	return qiTxs
-}
-
-func (b *Block) QuaiTransactions() []*Transaction {
-	quaiTxs := make([]*Transaction, 0)
-	for _, t := range b.Transactions() {
-		if t.Type() != QiTxType && (t.To() == nil || t.To().IsInQuaiLedgerScope()) {
-			quaiTxs = append(quaiTxs, t)
-		}
-	}
-	return quaiTxs
-}
-
-// Body returns the non-header content of the block.
-func (b *Block) Body() *Body {
-	return &Body{b.transactions, b.uncles, b.extTransactions, b.subManifest}
-}
-
-// Size returns the true RLP encoded storage size of the block, either by encoding
-// and returning it, or returning a previsouly cached value.
-func (b *Block) Size() common.StorageSize {
-	if size := b.size.Load(); size != nil {
-		return size.(common.StorageSize)
-	}
-	c := writeCounter(0)
-	rlp.Encode(&c, b)
-	b.size.Store(common.StorageSize(c))
-	return common.StorageSize(c)
-}
-
-// SanityCheck can be used to prevent that unbounded fields are
-// stuffed with junk data to add processing overhead
-func (b *Block) SanityCheck() error {
-	return b.header.SanityCheck()
-}
-
-type writeCounter common.StorageSize
-
-func (c *writeCounter) Write(b []byte) (int, error) {
-	*c += writeCounter(len(b))
-	return len(b), nil
-}
-
-func CalcUncleHash(uncles []*Header) common.Hash {
-	if len(uncles) == 0 {
-		return EmptyUncleHash
-	}
-	return RlpHash(uncles)
-}
-
-// WithSeal returns a new block with the data from b but the header replaced with
-// the sealed one.
-func (b *Block) WithSeal(header *Header) *Block {
-	return &Block{
-		header:          CopyHeader(header),
-		transactions:    b.transactions,
-		uncles:          b.uncles,
-		extTransactions: b.extTransactions,
-		subManifest:     b.subManifest,
-	}
-}
-
-// WithBody returns a new block with the given transaction and uncle contents, for a single context
-func (b *Block) WithBody(transactions []*Transaction, uncles []*Header, extTransactions []*Transaction, subManifest BlockManifest) *Block {
-	block := &Block{
-		header:          CopyHeader(b.header),
-		transactions:    make([]*Transaction, len(transactions)),
-		uncles:          make([]*Header, len(uncles)),
-		extTransactions: make([]*Transaction, len(extTransactions)),
-		subManifest:     make(BlockManifest, len(subManifest)),
-	}
-	copy(block.transactions, transactions)
-	copy(block.extTransactions, extTransactions)
-	copy(block.subManifest, subManifest)
-	for i := range uncles {
-		block.uncles[i] = CopyHeader(uncles[i])
-	}
-	return block
-}
-
-// Hash returns the keccak256 hash of b's header.
-// The hash is computed on the first call and cached thereafter.
-func (b *Block) Hash() common.Hash {
-	return b.header.Hash()
-}
-
-// GetAppendTime returns the appendTime of the block
-// The appendTime is computed on the first call and cached thereafter.
-func (b *Block) GetAppendTime() time.Duration {
-	if appendTime := b.appendTime.Load(); appendTime != nil {
-		if val, ok := appendTime.(time.Duration); ok {
-			return val
-		}
-	}
-	return -1
-}
-
-func (b *Block) SetAppendTime(appendTime time.Duration) {
-	b.appendTime.Store(appendTime)
-}
-
-type Blocks []*Block
-
 // PendingHeader stores the header and termini value associated with the header.
 type PendingHeader struct {
-	header  *Header `json:"header"`
-	termini Termini `json:"termini"`
+	wo      *WorkObject `json:"wo"`
+	termini Termini     `json:"termini"`
 }
 
 // accessor methods for pending header
 func (ph PendingHeader) Header() *Header {
-	return ph.header
+	return ph.wo.woBody.header
 }
+
+func (ph PendingHeader) WorkObject() *WorkObject {
+	return ph.wo
+}
+
 func (ph PendingHeader) Termini() Termini {
 	return ph.termini
 }
 
-func (ph *PendingHeader) SetHeader(header *Header) {
-	ph.header = CopyHeader(header)
+func (ph *PendingHeader) SetHeader(header *WorkObject) {
+	ph.wo.SetHeader(header.Header())
 }
 
 func (ph *PendingHeader) SetTermini(termini Termini) {
@@ -1265,37 +967,38 @@ func EmptyPendingHeader() PendingHeader {
 	return pendingHeader
 }
 
-func NewPendingHeader(header *Header, termini Termini) PendingHeader {
+func NewPendingHeader(wo *WorkObject, termini Termini) PendingHeader {
 	emptyPh := EmptyPendingHeader()
-	emptyPh.SetHeader(header)
+	emptyPh.wo = CopyWorkObject(wo)
+	emptyPh.wo.SetHeader(CopyHeader(wo.woBody.Header()))
 	emptyPh.SetTermini(termini)
 	return emptyPh
 }
 
 func CopyPendingHeader(ph *PendingHeader) *PendingHeader {
 	cpy := *ph
-	cpy.SetHeader(CopyHeader(ph.Header()))
+	cpy.SetHeader(CopyWorkObject(ph.wo))
 	cpy.SetTermini(CopyTermini(ph.Termini()))
 	return &cpy
 }
 
 // ProtoEncode serializes h into the Quai Proto PendingHeader format
 func (ph PendingHeader) ProtoEncode() (*ProtoPendingHeader, error) {
-	protoHeader, err := ph.Header().ProtoEncode()
+	protoWorkObject, err := ph.WorkObject().ProtoEncode()
 	if err != nil {
 		return nil, err
 	}
 	protoTermini := ph.Termini().ProtoEncode()
 	return &ProtoPendingHeader{
-		Header:  protoHeader,
+		Wo:      protoWorkObject,
 		Termini: protoTermini,
 	}, nil
 }
 
 // ProtoEncode deserializes the ProtoHeader into the Header format
 func (ph *PendingHeader) ProtoDecode(protoPendingHeader *ProtoPendingHeader) error {
-	ph.header = &Header{}
-	err := ph.header.ProtoDecode(protoPendingHeader.GetHeader())
+	ph.wo = &WorkObject{}
+	err := ph.wo.ProtoDecode(protoPendingHeader.GetWo())
 	if err != nil {
 		return err
 	}
@@ -1309,7 +1012,7 @@ func (ph *PendingHeader) ProtoDecode(protoPendingHeader *ProtoPendingHeader) err
 
 // "external" pending header encoding. used for rlp
 type extPendingHeader struct {
-	Header  *Header
+	Wo      *WorkObject
 	Termini Termini
 }
 
@@ -1327,14 +1030,14 @@ func (p *PendingHeader) DecodeRLP(s *rlp.Stream) error {
 	if err := s.Decode(&eb); err != nil {
 		return err
 	}
-	p.header, p.termini = eb.Header, eb.Termini
+	p.wo, p.termini = eb.Wo, eb.Termini
 	return nil
 }
 
 // EncodeRLP serializes b into the Quai RLP format.
 func (p PendingHeader) EncodeRLP(w io.Writer) error {
 	return rlp.Encode(w, extPendingHeader{
-		Header:  p.header,
+		Wo:      p.wo,
 		Termini: p.termini,
 	})
 }

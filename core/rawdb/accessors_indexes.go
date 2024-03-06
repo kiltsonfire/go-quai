@@ -79,9 +79,9 @@ func WriteTxLookupEntries(db ethdb.KeyValueWriter, number uint64, hashes []commo
 
 // WriteTxLookupEntriesByBlock stores a positional metadata for every transaction from
 // a block, enabling hash based transaction and receipt lookups.
-func WriteTxLookupEntriesByBlock(db ethdb.KeyValueWriter, block *types.Block, nodeCtx int) {
-	numberBytes := block.Number(nodeCtx).Bytes()
-	for _, tx := range block.Transactions() {
+func WriteTxLookupEntriesByBlock(db ethdb.KeyValueWriter, wo *types.WorkObject, nodeCtx int) {
+	numberBytes := wo.Number(nodeCtx).Bytes()
+	for _, tx := range wo.Transactions() {
 		writeTxLookupEntry(db, tx.Hash(), numberBytes)
 	}
 }

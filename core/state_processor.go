@@ -198,11 +198,11 @@ func NewStateProcessor(config *params.ChainConfig, hc *HeaderChain, engine conse
 // Process returns the receipts and logs accumulated during the process and
 // returns the amount of gas that was used in the process. If any of the
 // transactions failed to execute due to insufficient gas it will return an error.
-func (p *StateProcessor) Process(block *types.Block, etxSet types.EtxSet) (types.Receipts, []*types.Transaction, []*types.Log, *state.StateDB, uint64, error) {
+func (p *StateProcessor) Process(block *types.WorkObject, etxSet types.EtxSet) (types.Receipts, []*types.Transaction, []*types.Log, *state.StateDB, uint64, error) {
 	var (
 		receipts     types.Receipts
 		usedGas      = new(uint64)
-		header       = types.CopyHeader(block.Header())
+		header       = types.CopyWorkObject(block)
 		blockHash    = block.Hash()
 		nodeLocation = p.hc.NodeLocation()
 		nodeCtx      = p.hc.NodeCtx()
@@ -371,7 +371,7 @@ func (p *StateProcessor) Process(block *types.Block, etxSet types.EtxSet) (types
 
 	time4 := common.PrettyDuration(time.Since(start))
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
-	p.engine.Finalize(p.hc, header, statedb, block.Transactions(), block.Uncles())
+	p.engine.Finalize(p.hc, block, statedb, block.Transactions(), block.Uncles())
 	time5 := common.PrettyDuration(time.Since(start))
 
 	p.logger.WithFields(log.Fields{
@@ -464,7 +464,7 @@ func applyTransaction(msg types.Message, config *params.ChainConfig, bc ChainCon
 	return receipt, err
 }
 
-func ProcessQiTx(tx *types.Transaction, updateState bool, currentHeader *types.Header, statedb *state.StateDB, gp *GasPool, usedGas *uint64, signer types.Signer, location common.Location, chainId big.Int, etxRLimit, etxPLimit *int) (*big.Int, []*types.Transaction, error) {
+func ProcessQiTx(tx *types.Transaction, updateState bool, currentHeader *types.WorkObject, statedb *state.StateDB, gp *GasPool, usedGas *uint64, signer types.Signer, location common.Location, chainId big.Int, etxRLimit, etxPLimit *int) (*big.Int, []*types.Transaction, error) {
 	// Sanity checks
 	if tx == nil || tx.Type() != types.QiTxType {
 		return nil, nil, fmt.Errorf("tx %032x is not a QiTx", tx.Hash())
@@ -624,7 +624,7 @@ func ProcessQiTx(tx *types.Transaction, updateState bool, currentHeader *types.H
 }
 
 // Apply State
-func (p *StateProcessor) Apply(batch ethdb.Batch, block *types.Block, newInboundEtxs types.Transactions) ([]*types.Log, error) {
+func (p *StateProcessor) Apply(batch ethdb.Batch, block *types.WorkObject, newInboundEtxs types.Transactions) ([]*types.Log, error) {
 	nodeLocation := p.hc.NodeLocation()
 	nodeCtx := p.hc.NodeCtx()
 	// Update the set of inbound ETXs which may be mined. This adds new inbound
@@ -711,7 +711,7 @@ func (p *StateProcessor) Apply(batch ethdb.Batch, block *types.Block, newInbound
 // and uses the input parameters for its environment. It returns the receipt
 // for the transaction, gas used and an error if the transaction failed,
 // indicating the block was invalid.
-func ApplyTransaction(config *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, usedGas *uint64, cfg vm.Config, etxRLimit, etxPLimit *int, logger *log.Logger) (*types.Receipt, error) {
+func ApplyTransaction(config *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.WorkObject, tx *types.Transaction, usedGas *uint64, cfg vm.Config, etxRLimit, etxPLimit *int, logger *log.Logger) (*types.Receipt, error) {
 	nodeCtx := config.Location.Context()
 	msg, err := tx.AsMessage(types.MakeSigner(config, header.Number(nodeCtx)), header.BaseFee())
 	if err != nil {
@@ -835,9 +835,9 @@ func (p *StateProcessor) ContractCodeWithPrefix(hash common.Hash) ([]byte, error
 //   - checklive: if true, then the live 'blockchain' state database is used. If the caller want to
 //     perform Commit or other 'save-to-disk' changes, this should be set to false to avoid
 //     storing trash persistently
-func (p *StateProcessor) StateAtBlock(block *types.Block, reexec uint64, base *state.StateDB, checkLive bool) (statedb *state.StateDB, err error) {
+func (p *StateProcessor) StateAtBlock(block *types.WorkObject, reexec uint64, base *state.StateDB, checkLive bool) (statedb *state.StateDB, err error) {
 	var (
-		current      *types.Header
+		current      *types.WorkObject
 		database     state.Database
 		utxoDatabase state.Database
 		report       = true
@@ -853,14 +853,14 @@ func (p *StateProcessor) StateAtBlock(block *types.Block, reexec uint64, base *s
 		}
 	}
 
-	var newHeads []*types.Header
+	var newHeads []*types.WorkObject
 	if base != nil {
 		// The optional base statedb is given, mark the start point as parent block
 		statedb, database, utxoDatabase, report = base, base.Database(), base.UTXODatabase(), false
 		current = p.hc.GetHeaderOrCandidate(block.ParentHash(nodeCtx), block.NumberU64(nodeCtx)-1)
 	} else {
 		// Otherwise try to reexec blocks until we find a state or reach our limit
-		current = types.CopyHeader(block.Header())
+		current = types.CopyWorkObject(block)
 
 		// Create an ephemeral trie.Database for isolating the live one. Otherwise
 		// the internal junks created by tracing will be persisted into the disk.
@@ -888,7 +888,7 @@ func (p *StateProcessor) StateAtBlock(block *types.Block, reexec uint64, base *s
 			if parent == nil {
 				return nil, fmt.Errorf("missing block %v %d", current.ParentHash(nodeCtx), current.NumberU64(nodeCtx)-1)
 			}
-			current = types.CopyHeader(parent)
+			current = types.CopyWorkObject(parent)
 
 			statedb, err = state.New(current.EVMRoot(), current.UTXORoot(), database, utxoDatabase, nil, nodeLocation)
 			if err == nil {
@@ -931,7 +931,7 @@ func (p *StateProcessor) StateAtBlock(block *types.Block, reexec uint64, base *s
 		inboundEtxs := rawdb.ReadInboundEtxs(p.hc.bc.db, current.Hash(), p.hc.NodeLocation())
 		etxSet.Update(inboundEtxs, current.NumberU64(nodeCtx), nodeLocation)
 
-		currentBlock := rawdb.ReadBlock(p.hc.bc.db, current.Hash(), current.NumberU64(nodeCtx), p.hc.NodeLocation())
+		currentBlock := rawdb.ReadWorkObject(p.hc.bc.db, current.Hash(), types.BlockObject)
 		if currentBlock == nil {
 			return nil, errors.New("detached block found trying to regenerate state")
 		}
@@ -973,7 +973,7 @@ func (p *StateProcessor) StateAtBlock(block *types.Block, reexec uint64, base *s
 }
 
 // stateAtTransaction returns the execution environment of a certain transaction.
-func (p *StateProcessor) StateAtTransaction(block *types.Block, txIndex int, reexec uint64) (Message, vm.BlockContext, *state.StateDB, error) {
+func (p *StateProcessor) StateAtTransaction(block *types.WorkObject, txIndex int, reexec uint64) (Message, vm.BlockContext, *state.StateDB, error) {
 	nodeCtx := p.hc.NodeCtx()
 	// Short circuit if it's genesis block.
 	if block.NumberU64(nodeCtx) == 0 {
@@ -999,7 +999,7 @@ func (p *StateProcessor) StateAtTransaction(block *types.Block, txIndex int, ree
 		// Assemble the transaction call message and return if the requested offset
 		msg, _ := tx.AsMessage(signer, block.BaseFee())
 		txContext := NewEVMTxContext(msg)
-		context := NewEVMBlockContext(block.Header(), p.hc, nil)
+		context := NewEVMBlockContext(block, p.hc, nil)
 		if idx == txIndex {
 			return msg, context, statedb, nil
 		}

@@ -33,7 +33,7 @@ var (
 
 // Seal implements consensus.Engine, attempting to find a nonce that satisfies
 // the header's difficulty requirements.
-func (blake3pow *Blake3pow) Seal(header *types.Header, results chan<- *types.Header, stop <-chan struct{}) error {
+func (blake3pow *Blake3pow) Seal(header *types.WorkObjectHeader, results chan<- *types.WorkObjectHeader, stop <-chan struct{}) error {
 	// If we're running a fake PoW, simply return a 0 nonce immediately
 	if blake3pow.config.PowMode == ModeFake || blake3pow.config.PowMode == ModeFullFake {
 		header.SetNonce(types.BlockNonce{})
@@ -73,7 +73,7 @@ func (blake3pow *Blake3pow) Seal(header *types.Header, results chan<- *types.Hea
 	}
 	var (
 		pend   sync.WaitGroup
-		locals = make(chan *types.Header)
+		locals = make(chan *types.WorkObjectHeader)
 	)
 	for i := 0; i < threads; i++ {
 		pend.Add(1)
@@ -84,7 +84,7 @@ func (blake3pow *Blake3pow) Seal(header *types.Header, results chan<- *types.Hea
 	}
 	// Wait until sealing is terminated or a nonce is found
 	go func() {
-		var result *types.Header
+		var result *types.WorkObjectHeader
 		select {
 		case <-stop:
 			// Outside abort, stop all miner threads
@@ -115,7 +115,7 @@ func (blake3pow *Blake3pow) Seal(header *types.Header, results chan<- *types.Hea
 
 // mine is the actual proof-of-work miner that searches for a nonce starting from
 // seed that results in correct final header difficulty.
-func (blake3pow *Blake3pow) mine(header *types.Header, id int, seed uint64, abort chan struct{}, found chan *types.Header) {
+func (blake3pow *Blake3pow) mine(header *types.WorkObjectHeader, id int, seed uint64, abort chan struct{}, found chan *types.WorkObjectHeader) {
 	// Extract some data from the header
 	var (
 		target = new(big.Int).Div(big2e256, header.Difficulty())
@@ -142,7 +142,6 @@ search:
 				attempts = 0
 			}
 			// Compute the PoW value of this nonce
-			header = types.CopyHeader(header)
 			header.SetNonce(types.EncodeNonce(nonce))
 			hash := header.Hash().Bytes()
 			if powBuffer.SetBytes(hash).Cmp(target) <= 0 {

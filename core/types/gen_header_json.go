@@ -19,8 +19,8 @@ func (h Header) MarshalJSON() ([]byte, error) {
 		ParentHash    []common.Hash  `json:"parentHash"          gencodec:"required"`
 		UncleHash     common.Hash    `json:"sha3Uncles"          gencodec:"required"`
 		Coinbase      common.Address `json:"miner"               gencodec:"required"`
-		EVMRoot          common.Hash    `json:"evmRoot"           gencodec:"required"`
-		UTXORoot		  common.Hash	 `json:"utxoRoot"              gencodec:"required"`
+		EVMRoot       common.Hash    `json:"evmRoot"           gencodec:"required"`
+		UTXORoot      common.Hash    `json:"utxoRoot"              gencodec:"required"`
 		TxHash        common.Hash    `json:"transactionsRoot"    gencodec:"required"`
 		EtxHash       common.Hash    `json:"extTransactionsRoot" gencodec:"required"`
 		EtxRollupHash common.Hash    `json:"extRollupRoot"       gencodec:"required"`
@@ -77,28 +77,28 @@ func (h Header) MarshalJSON() ([]byte, error) {
 // UnmarshalJSON unmarshals from JSON.
 func (h *Header) UnmarshalJSON(input []byte) error {
 	var dec struct {
-		ParentHash    []common.Hash   `json:"parentHash"          gencodec:"required"`
-		UncleHash     *common.Hash    `json:"sha3Uncles"          gencodec:"required"`
+		ParentHash    []common.Hash        `json:"parentHash"          gencodec:"required"`
+		UncleHash     *common.Hash         `json:"sha3Uncles"          gencodec:"required"`
 		Coinbase      *common.AddressBytes `json:"miner"               gencodec:"required"`
-		EVMRoot          *common.Hash    `json:"evmRoot"           gencodec:"required"`
-		UTXORoot		  *common.Hash	 `json:"utxoRoot"              gencodec:"required"`
-		TxHash        *common.Hash    `json:"transactionsRoot"    gencodec:"required"`
-		ReceiptHash   *common.Hash    `json:"receiptsRoot"        gencodec:"required"`
-		EtxHash       *common.Hash    `json:"extTransactionsRoot" gencodec:"required"`
-		EtxRollupHash *common.Hash    `json:"extRollupRoot"       gencodec:"required"`
-		ManifestHash  []common.Hash   `json:"manifestHash"        gencodec:"required"`
-		Difficulty    *hexutil.Big    `json:"difficulty"          gencodec:"required"`
-		ParentEntropy []*hexutil.Big  `json:"parentEntropy"       gencodec:"required"`
-		ParentDeltaS  []*hexutil.Big  `json:"parentDeltaS"        gencodec:"required"`
-		Number        []*hexutil.Big  `json:"number"              gencodec:"required"`
-		GasLimit      *hexutil.Uint64 `json:"gasLimit"            gencodec:"required"`
-		GasUsed       *hexutil.Uint64 `json:"gasUsed"             gencodec:"required"`
-		BaseFee       *hexutil.Big    `json:"baseFeePerGas"       gencodec:"required"`
-		Location      hexutil.Bytes   `json:"location"            gencodec:"required"`
-		Time          hexutil.Uint64  `json:"timestamp"           gencodec:"required"`
-		Extra         hexutil.Bytes   `json:"extraData"           gencodec:"required"`
-		MixHash       *common.Hash    `json:"MixHash"             gencodec:"required"`
-		Nonce         BlockNonce      `json:"nonce"`
+		EVMRoot       *common.Hash         `json:"evmRoot"           gencodec:"required"`
+		UTXORoot      *common.Hash         `json:"utxoRoot"              gencodec:"required"`
+		TxHash        *common.Hash         `json:"transactionsRoot"    gencodec:"required"`
+		ReceiptHash   *common.Hash         `json:"receiptsRoot"        gencodec:"required"`
+		EtxHash       *common.Hash         `json:"extTransactionsRoot" gencodec:"required"`
+		EtxRollupHash *common.Hash         `json:"extRollupRoot"       gencodec:"required"`
+		ManifestHash  []common.Hash        `json:"manifestHash"        gencodec:"required"`
+		Difficulty    *hexutil.Big         `json:"difficulty"          gencodec:"required"`
+		ParentEntropy []*hexutil.Big       `json:"parentEntropy"       gencodec:"required"`
+		ParentDeltaS  []*hexutil.Big       `json:"parentDeltaS"        gencodec:"required"`
+		Number        []*hexutil.Big       `json:"number"              gencodec:"required"`
+		GasLimit      *hexutil.Uint64      `json:"gasLimit"            gencodec:"required"`
+		GasUsed       *hexutil.Uint64      `json:"gasUsed"             gencodec:"required"`
+		BaseFee       *hexutil.Big         `json:"baseFeePerGas"       gencodec:"required"`
+		Location      hexutil.Bytes        `json:"location"            gencodec:"required"`
+		Time          hexutil.Uint64       `json:"timestamp"           gencodec:"required"`
+		Extra         hexutil.Bytes        `json:"extraData"           gencodec:"required"`
+		MixHash       *common.Hash         `json:"MixHash"             gencodec:"required"`
+		Nonce         BlockNonce           `json:"nonce"`
 	}
 	if err := json.Unmarshal(input, &dec); err != nil {
 		return err
@@ -234,5 +234,56 @@ func (t *Termini) UnmarshalJSON(input []byte) error {
 	}
 	t.SetDomTermini(dec.DomTermini)
 	t.SetSubTermini(dec.SubTermini)
+	return nil
+}
+
+func (wh *WorkObjectHeader) MarshalJSON() ([]byte, error) {
+	var enc struct {
+		HeaderHash common.Hash   `json:"woheaderHash" gencoden:"required"`
+		ParentHash common.Hash   `json:"woparentHash" gencoden:"required"`
+		Number     *hexutil.Big  `json:"wonumber" gencoden:"required"`
+		Difficulty *hexutil.Big  `json:"wodifficulty" gencoden:"required"`
+		TxHash     common.Hash   `json:"wotxHash" gencoden:"required"`
+		Location   hexutil.Bytes `json:"wolocation" gencoden:"required"`
+		Nonce      BlockNonce    `json:"wononce" gencoden:"required"`
+	}
+
+	enc.HeaderHash = wh.HeaderHash()
+	enc.Difficulty = (*hexutil.Big)(wh.Difficulty())
+	enc.Number = (*hexutil.Big)(wh.Number())
+	enc.TxHash = wh.TxHash()
+	enc.Location = hexutil.Bytes(wh.Location())
+	enc.Nonce = wh.Nonce()
+
+	raw, err := json.Marshal(&enc)
+	return raw, err
+}
+
+func (wh *WorkObjectHeader) UnmarshalJSON(input []byte) error {
+	var dec struct {
+		HeaderHash common.Hash     `json:"woheaderHash" gencoden:"required"`
+		ParentHash common.Hash     `json:"woparentHash" gencoden:"required"`
+		Number     *hexutil.Big    `json:"wonumber" gencoden:"required"`
+		Difficulty *hexutil.Big    `json:"wodifficulty" gencoden:"required"`
+		TxHash     common.Hash     `json:"wotxHash" gencoden:"required"`
+		Location   common.Location `json:"wolocation" gencoden:"required"`
+		Nonce      BlockNonce      `json:"wononce" gencoden:"required"`
+	}
+
+	err := json.Unmarshal(input, &dec)
+	if err != nil {
+		return err
+	}
+
+	wh.SetHeaderHash(dec.HeaderHash)
+	wh.SetParentHash(dec.ParentHash)
+	wh.SetNumber((*big.Int)(dec.Number))
+	wh.SetDifficulty((*big.Int)(dec.Difficulty))
+	wh.SetTxHash(dec.TxHash)
+	if len(dec.Location) > 0 {
+		wh.location = make([]byte, len(dec.Location))
+		copy(wh.location, dec.Location)
+	}
+	wh.SetNonce(dec.Nonce)
 	return nil
 }

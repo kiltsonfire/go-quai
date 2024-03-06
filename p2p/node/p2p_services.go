@@ -60,8 +60,8 @@ func (p *P2PNode) requestFromPeer(peerID peer.ID, location common.Location, data
 
 	// Check the received data type & hash matches the request
 	switch datatype.(type) {
-	case *types.Block:
-		if block, ok := recvdType.(*types.Block); ok && block.Hash() == data.(common.Hash) {
+	case *types.WorkObject:
+		if block, ok := recvdType.(*types.WorkObject); ok && block.Hash() == data.(common.Hash) {
 			return block, nil
 		}
 	case *types.Header:
