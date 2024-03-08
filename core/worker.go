@@ -560,13 +560,13 @@ func (w *worker) GeneratePendingHeader(block *types.WorkObject, fill bool) (*typ
 				"average": common.PrettyDuration(w.fillTransactionsRollingAverage.Average()),
 			}).Info("Filled and sorted pending transactions")
 		}
-		if coinbase.IsInQiLedgerScope() {
-			coinbaseTx, err := createCoinbaseTxWithFees(work.wo, work.utxoFees, work.state)
-			if err != nil {
-				return nil, err
-			}
-			work.txs[0] = coinbaseTx
-		}
+		// if coinbase.IsInQiLedgerScope() {
+		// 	coinbaseTx, err := createCoinbaseTxWithFees(work.wo, work.utxoFees, work.state)
+		// 	if err != nil {
+		// 		return nil, err
+		// 	}
+		// 	work.txs[0] = coinbaseTx
+		// }
 	}
 
 	// Create a local environment copy, avoid the data race with snapshot state.

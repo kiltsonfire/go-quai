@@ -686,7 +686,7 @@ func (p *StateProcessor) Apply(batch ethdb.Batch, block *types.WorkObject, newIn
 		return nil, err
 	}
 	time8 = common.PrettyDuration(time.Since(start))
-	rawdb.WriteEtxSet(batch, header.Hash(), header.NumberU64(nodeCtx), etxSet)
+	rawdb.WriteEtxSet(batch, block.Hash(), header.NumberU64(nodeCtx), etxSet)
 	time12 := common.PrettyDuration(time.Since(start))
 
 	p.logger.WithFields(log.Fields{

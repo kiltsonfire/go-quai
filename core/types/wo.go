@@ -101,7 +101,11 @@ func (wo *WorkObject) Manifest() BlockManifest {
 }
 
 func (wo *WorkObject) ParentHash(nodeCtx int) common.Hash {
-	return wo.woBody.header.parentHash[nodeCtx]
+	if nodeCtx == common.ZONE_CTX {
+		return wo.woHeader.parentHash
+	} else {
+		return wo.woBody.header.parentHash[nodeCtx]
+	}
 }
 
 func (wo *WorkObject) Number(nodeCtx int) *big.Int {

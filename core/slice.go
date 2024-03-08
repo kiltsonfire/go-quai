@@ -629,6 +629,7 @@ func (sl *Slice) readPhCache(hash common.Hash) (types.PendingHeader, bool) {
 
 // Write the phCache
 func (sl *Slice) writePhCache(hash common.Hash, pendingHeader types.PendingHeader) {
+	sl.miner.worker.AddPendingWorkObjectBody(pendingHeader.WorkObject())
 	sl.phCache.Add(hash, pendingHeader)
 	rawdb.WritePendingHeader(sl.sliceDb, hash, pendingHeader)
 }
@@ -1367,7 +1368,6 @@ func (sl *Slice) NewGenesisPendingHeader(domPendingHeader *types.WorkObject) {
 	if sl.hc.Empty() {
 		domPendingHeader.SetTime(uint64(time.Now().Unix()))
 		domPendingHeader.SetHeaderHash(domPendingHeader.Body().Header().Hash())
-		sl.miner.worker.AddPendingWorkObjectBody(domPendingHeader)
 		sl.writePhCache(sl.config.GenesisHash, types.NewPendingHeader(domPendingHeader, genesisTermini))
 	}
 }
