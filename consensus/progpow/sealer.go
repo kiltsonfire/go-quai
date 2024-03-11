@@ -31,7 +31,7 @@ var (
 	errInvalidSealResult = errors.New("invalid or stale proof-of-work solution")
 )
 
-func (progpow *Progpow) Seal(header *types.WorkObjectHeader, results chan<- *types.WorkObjectHeader, stop <-chan struct{}) error {
+func (progpow *Progpow) Seal(header *types.WorkObject, results chan<- *types.WorkObject, stop <-chan struct{}) error {
 	return nil
 }
 

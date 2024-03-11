@@ -287,3 +287,55 @@ func (wh *WorkObjectHeader) UnmarshalJSON(input []byte) error {
 	wh.SetNonce(dec.Nonce)
 	return nil
 }
+
+func (wb *WorkObjectBody) MarshalJSON() ([]byte, error) {
+	var enc struct {
+		Header *Header `json:"header" gencoden:"required"`
+		Transactions Transactions `json:"transactions" gencoden:"required"`
+		ExtTransactions Transactions `json:"extTransactions" gencoden:"required"`
+		Uncles WorkObjects `json:"uncles" gencoden:"required"`
+		Manifest BlockManifest `json:"manifest" gencoden:"required"`
+	}
+
+	enc.Header = wb.Header()
+	enc.Transactions = wb.Transactions()
+	enc.ExtTransactions = wb.ExtTransactions()
+	enc.Manifest = wb.Manifest()
+
+	raw, err := json.Marshal(&enc)
+	return raw, err
+}
+
+func (wb *WorkObjectBody) UnmarshalJSON(input []byte) error {
+	var dec struct {
+		Header *Header `json:"header" gencoden:"required"`
+		Transactions Transactions `json:"transactions" gencoden:"required"`
+		ExtTransactions Transactions `json:"extTransactions" gencoden:"required"`
+		Uncles WorkObjects `json:"uncles" gencoden:"required"`
+		Manifest BlockManifest `json:"manifest" gencoden:"required"`
+	}
+
+	err := json.Unmarshal(input, &dec)
+	if err != nil {
+		return err
+	}
+
+	wb.SetHeader(dec.Header)
+	wb.SetTransactions(dec.Transactions)
+	wb.SetExtTransactions(dec.ExtTransactions)
+	wb.SetManifest(dec.Manifest)
+	return nil
+}
+
+func (wo *WorkObject) MarshalJSON() ([]byte, error) {
+	var enc struct {
+		WoHeader *WorkObjectHeader `json:"woHeader" gencoden:"required"`
+		WoBody   *WorkObjectBody   `json:"woBody" gencoden:"required"`
+	}
+
+	enc.WoHeader = wo.WorkObjectHeader()
+	enc.WoBody = wo.Body()
+
+	raw, err := json.Marshal(&enc)
+	return raw, err
+}

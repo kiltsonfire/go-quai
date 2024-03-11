@@ -124,7 +124,7 @@ type Engine interface {
 	//
 	// Note, the method returns immediately and will send the result async. More
 	// than one result may also be returned depending on the consensus algorithm.
-	Seal(header *types.WorkObjectHeader, results chan<- *types.WorkObjectHeader, stop <-chan struct{}) error
+	Seal(header *types.WorkObject, results chan<- *types.WorkObject, stop <-chan struct{}) error
 
 	// CalcDifficulty is the difficulty adjustment algorithm. It returns the difficulty
 	// that a new block should have.

@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"sort"
@@ -600,6 +601,7 @@ func (c *Core) WriteBlock(block *types.WorkObject) {
 	if c.GetHeaderByHash(block.Hash()) == nil {
 		// Only add non dom blocks to the append queue
 		_, order, err := c.CalcOrder(block)
+		fmt.Println("order", order)
 		if err != nil {
 			return
 		}
@@ -698,7 +700,7 @@ func (c *Core) NewGenesisPendigHeader(pendingHeader *types.WorkObject) {
 	c.sl.NewGenesisPendingHeader(pendingHeader)
 }
 
-func (c *Core) GetPendingHeader() (*types.WorkObjectHeader, error) {
+func (c *Core) GetPendingHeader() (*types.WorkObject, error) {
 	return c.sl.GetPendingHeader()
 }
 

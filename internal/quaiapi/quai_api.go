@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/big"
 	"time"
 
@@ -644,6 +645,9 @@ func (s *PublicBlockChainQuaiAPI) ReceiveMinedHeader(ctx context.Context, raw js
 		return err
 	}
 	log.Global.Warnf("Header mined %v", woHeader)
+	if nodeCtx == 1 {
+		fmt.Println("Header mined", woHeader)
+	}
 	block, err := s.b.ConstructLocalMinedBlock(woHeader)
 	if err != nil && err.Error() == core.ErrBadSubManifest.Error() && nodeCtx < common.ZONE_CTX {
 		s.b.Logger().Info("filling sub manifest")
@@ -770,8 +774,8 @@ func (s *PublicBlockChainQuaiAPI) RequestDomToAppendOrFetch(ctx context.Context,
 }
 
 type NewGenesisWorkObject struct {
-	WoHeader *types.WorkObjectHeader `json:"woheader"`
-	Header   *types.Header           `json:"header"`
+	WoHeader *types.WorkObjectHeader `json:"woHeader"`
+	WoBody   *types.WorkObjectBody   `json:"woBody"`
 
 	// TODO: needs to decode transaction
 	// Transaction *types.Transaction      `json:"transaction"`
@@ -782,9 +786,8 @@ func (s *PublicBlockChainQuaiAPI) NewGenesisPendingHeader(ctx context.Context, r
 	if err := json.Unmarshal(raw, &pendingHeader); err != nil {
 		return
 	}
-	woBody := types.NewWorkObjectBody(pendingHeader.Header, nil, nil, nil, nil, nil, nil, s.b.NodeCtx())
 
-	s.b.NewGenesisPendingHeader(types.NewWorkObject(pendingHeader.WoHeader, woBody, &types.Transaction{}))
+	s.b.NewGenesisPendingHeader(types.NewWorkObject(pendingHeader.WoHeader, pendingHeader.WoBody, &types.Transaction{}))
 }
 
 func (s *PublicBlockChainQuaiAPI) GetPendingHeader(ctx context.Context) (map[string]interface{}, error) {
@@ -802,7 +805,7 @@ func (s *PublicBlockChainQuaiAPI) GetPendingHeader(ctx context.Context) (map[str
 		return nil, errors.New("no pending header found")
 	}
 	// Marshal the response.
-	marshaledPh := pendingHeader.RPCMarshalWorkObjectHeader()
+	marshaledPh := pendingHeader.RPCMarshalWorkObject()
 	return marshaledPh, nil
 }
 

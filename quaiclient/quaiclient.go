@@ -274,8 +274,8 @@ func (ec *Client) SetSyncTarget(ctx context.Context, header *types.WorkObject) {
 //// Miner APIS
 
 // GetPendingHeader gets the latest pending header from the chain.
-func (ec *Client) GetPendingHeader(ctx context.Context) (*types.WorkObjectHeader, error) {
-	var pendingHeader *types.WorkObjectHeader
+func (ec *Client) GetPendingHeader(ctx context.Context) (*types.WorkObject, error) {
+	var pendingHeader *types.WorkObject
 	err := ec.c.CallContext(ctx, &pendingHeader, "quai_getPendingHeader")
 	if err != nil {
 		return nil, err

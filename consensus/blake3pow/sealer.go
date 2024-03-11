@@ -33,7 +33,7 @@ var (
 
 // Seal implements consensus.Engine, attempting to find a nonce that satisfies
 // the header's difficulty requirements.
-func (blake3pow *Blake3pow) Seal(header *types.WorkObjectHeader, results chan<- *types.WorkObjectHeader, stop <-chan struct{}) error {
+func (blake3pow *Blake3pow) Seal(header *types.WorkObject, results chan<- *types.WorkObject, stop <-chan struct{}) error {
 	// If we're running a fake PoW, simply return a 0 nonce immediately
 	if blake3pow.config.PowMode == ModeFake || blake3pow.config.PowMode == ModeFullFake {
 		header.SetNonce(types.BlockNonce{})
@@ -73,7 +73,7 @@ func (blake3pow *Blake3pow) Seal(header *types.WorkObjectHeader, results chan<- 
 	}
 	var (
 		pend   sync.WaitGroup
-		locals = make(chan *types.WorkObjectHeader)
+		locals = make(chan *types.WorkObject)
 	)
 	for i := 0; i < threads; i++ {
 		pend.Add(1)
@@ -84,7 +84,7 @@ func (blake3pow *Blake3pow) Seal(header *types.WorkObjectHeader, results chan<- 
 	}
 	// Wait until sealing is terminated or a nonce is found
 	go func() {
-		var result *types.WorkObjectHeader
+		var result *types.WorkObject
 		select {
 		case <-stop:
 			// Outside abort, stop all miner threads
@@ -115,7 +115,7 @@ func (blake3pow *Blake3pow) Seal(header *types.WorkObjectHeader, results chan<- 
 
 // mine is the actual proof-of-work miner that searches for a nonce starting from
 // seed that results in correct final header difficulty.
-func (blake3pow *Blake3pow) mine(header *types.WorkObjectHeader, id int, seed uint64, abort chan struct{}, found chan *types.WorkObjectHeader) {
+func (blake3pow *Blake3pow) mine(header *types.WorkObject, id int, seed uint64, abort chan struct{}, found chan *types.WorkObject) {
 	// Extract some data from the header
 	var (
 		target = new(big.Int).Div(big2e256, header.Difficulty())

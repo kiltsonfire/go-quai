@@ -399,8 +399,8 @@ func CopyWorkObject(wo *WorkObject) *WorkObject {
 }
 func (wo *WorkObject) RPCMarshalWorkObject() map[string]interface{} {
 	result := map[string]interface{}{
-		"woheader": wo.woHeader.RPCMarshalWorkObjectHeader(),
-		"header":   wo.woBody.Header().RPCMarshalHeader(),
+		"woHeader": wo.woHeader.RPCMarshalWorkObjectHeader(),
+		"woBody":   wo.woBody.RPCMarshalWorkObjectBody(),
 		// "tx":     wo.tx,
 	}
 	return result
