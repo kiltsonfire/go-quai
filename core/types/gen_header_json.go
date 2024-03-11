@@ -339,3 +339,19 @@ func (wo *WorkObject) MarshalJSON() ([]byte, error) {
 	raw, err := json.Marshal(&enc)
 	return raw, err
 }
+
+func (wo *WorkObject) UnmarshalJSON(input []byte) error {
+	var dec struct {
+		WoHeader *WorkObjectHeader `json:"woHeader" gencoden:"required"`
+		WoBody   *WorkObjectBody   `json:"woBody" gencoden:"required"`
+	}
+
+	err := json.Unmarshal(input, &dec)
+	if err != nil {
+		return err
+	}
+
+	wo.SetWorkObjectHeader(dec.WoHeader)
+	wo.SetBody(dec.WoBody)
+	return nil
+}

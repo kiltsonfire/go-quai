@@ -212,6 +212,14 @@ func (wo *WorkObject) NumberArray() []*big.Int {
 	return wo.woBody.header.NumberArray()
 }
 
+func (wo *WorkObject) SetWorkObjectHeader(woHeader *WorkObjectHeader) {
+	wo.woHeader = woHeader
+}
+
+func (wo *WorkObject) SetBody(woBody *WorkObjectBody) {
+	wo.woBody = woBody
+}
+
 func (wo *WorkObject) SetHeader(header *Header) {
 	wo.woBody.header = header
 	wo.woHeader.SetHeaderHash(header.Hash())
@@ -809,7 +817,7 @@ func (wb *WorkObjectBody) ProtoDecode(data *ProtoWorkObjectBody) error {
 
 func (wb *WorkObjectBody) RPCMarshalWorkObjectBody() map[string]interface{} {
 	result := map[string]interface{}{
-		"header":          wb.Header(),
+		"header":          wb.header.RPCMarshalHeader(),
 		"transactions":    wb.Transactions(),
 		"extTransactions": wb.ExtTransactions(),
 		"uncles":          wb.Uncles(),
