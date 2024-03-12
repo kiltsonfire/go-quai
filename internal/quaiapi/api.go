@@ -1552,22 +1552,22 @@ func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction) (c
 // SendRawTransaction will add the signed transaction to the transaction pool.
 // The sender is responsible for signing the transaction and using the correct nonce.
 func (s *PublicTransactionPoolAPI) SendRawTransaction(ctx context.Context, input hexutil.Bytes) (common.Hash, error) {
-	tx := new(types.Transaction)
-	protoTransaction := new(types.ProtoTransaction)
+	tx := new(types.WorkObject)
+	protoTransaction := new(types.ProtoWorkObject)
 	err := proto.Unmarshal(input, protoTransaction)
 	if err != nil {
 		return common.Hash{}, err
 	}
-	err = tx.ProtoDecode(protoTransaction, s.b.NodeLocation())
+	err = tx.ProtoDecode(protoTransaction)
 	if err != nil {
 		return common.Hash{}, err
 	}
-	if tx.Type() != types.QiTxType {
-		if tx.To() != nil && tx.To().IsInQiLedgerScope() { // change after adding Quai->Qi conversion tx type
-			return common.Hash{}, common.MakeErrQiAddress(tx.To().Hex())
+	if tx.Tx().Type() != types.QiTxType {
+		if tx.Tx().To() != nil && tx.Tx().To().IsInQiLedgerScope() { // change after adding Quai->Qi conversion tx type
+			return common.Hash{}, common.MakeErrQiAddress(tx.Tx().To().Hex())
 		}
 	}
-	return SubmitTransaction(ctx, s.b, tx)
+	return SubmitTransaction(ctx, s.b, tx.Tx())
 }
 
 // PublicDebugAPI is the collection of Quai APIs exposed over the public
