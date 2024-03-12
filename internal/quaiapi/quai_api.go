@@ -835,7 +835,7 @@ func (s *PublicBlockChainQuaiAPI) SendPendingEtxsToDom(ctx context.Context, raw 
 }
 
 type SendPendingEtxsRollupToDomArgs struct {
-	Header     *types.Header      `json:"header"`
+	Header     *types.WorkObject  `json:"header"`
 	EtxsRollup types.Transactions `json:"etxsrollup"`
 }
 
@@ -875,7 +875,7 @@ func (s *PublicBlockChainQuaiAPI) GetPendingEtxsRollupFromSub(ctx context.Contex
 		return nil, err
 	}
 	fields := make(map[string]interface{})
-	fields["header"] = pEtxsRollup.Header.RPCMarshalHeader()
+	fields["header"] = pEtxsRollup.Header.RPCMarshalWorkObject()
 	fields["etxsrollup"] = pEtxsRollup.EtxsRollup
 
 	return fields, nil
@@ -896,7 +896,7 @@ func (s *PublicBlockChainQuaiAPI) GetPendingEtxsFromSub(ctx context.Context, raw
 		return nil, err
 	}
 	fields := make(map[string]interface{})
-	fields["header"] = pEtxs.Header.RPCMarshalHeader()
+	fields["header"] = pEtxs.Header.RPCMarshalWorkObject()
 	fields["etxs"] = pEtxs.Etxs
 
 	return fields, nil

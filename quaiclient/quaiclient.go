@@ -136,7 +136,7 @@ func (ec *Client) DownloadBlocksInManifest(ctx context.Context, hash common.Hash
 }
 
 func (ec *Client) SubRelayPendingHeader(ctx context.Context, pendingHeader types.PendingHeader, newEntropy *big.Int, location common.Location, subReorg bool, order int) {
-	data := map[string]interface{}{"header": pendingHeader.Header().RPCMarshalHeader()}
+	data := map[string]interface{}{"header": pendingHeader.WorkObject().RPCMarshalWorkObject()}
 	data["NewEntropy"] = newEntropy
 	data["termini"] = pendingHeader.Termini().RPCMarshalTermini()
 	data["Location"] = location
@@ -147,7 +147,7 @@ func (ec *Client) SubRelayPendingHeader(ctx context.Context, pendingHeader types
 }
 
 func (ec *Client) UpdateDom(ctx context.Context, oldTerminus common.Hash, pendingHeader types.PendingHeader, location common.Location) {
-	data := map[string]interface{}{"header": pendingHeader.Header().RPCMarshalHeader()}
+	data := map[string]interface{}{"header": pendingHeader.WorkObject().RPCMarshalWorkObject()}
 	data["OldTerminus"] = oldTerminus
 	data["Location"] = location
 	data["termini"] = pendingHeader.Termini().RPCMarshalTermini()
@@ -221,7 +221,7 @@ func (ec *Client) GetPendingEtxsFromSub(ctx context.Context, hash common.Hash, l
 
 func (ec *Client) SendPendingEtxsToDom(ctx context.Context, pEtxs types.PendingEtxs) error {
 	fields := make(map[string]interface{})
-	fields["header"] = pEtxs.Header.RPCMarshalHeader()
+	fields["header"] = pEtxs.Header.RPCMarshalWorkObject()
 	fields["etxs"] = pEtxs.Etxs
 	var raw json.RawMessage
 	err := ec.c.CallContext(ctx, &raw, "quai_sendPendingEtxsToDom", fields)
@@ -233,7 +233,7 @@ func (ec *Client) SendPendingEtxsToDom(ctx context.Context, pEtxs types.PendingE
 
 func (ec *Client) SendPendingEtxsRollupToDom(ctx context.Context, pEtxsRollup types.PendingEtxsRollup) error {
 	fields := make(map[string]interface{})
-	fields["header"] = pEtxsRollup.Header.RPCMarshalHeader()
+	fields["header"] = pEtxsRollup.Header.RPCMarshalWorkObject()
 	fields["etxsrollup"] = pEtxsRollup.EtxsRollup
 	var raw json.RawMessage
 	return ec.c.CallContext(ctx, &raw, "quai_sendPendingEtxsRollupToDom", fields)

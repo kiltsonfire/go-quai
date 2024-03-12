@@ -150,12 +150,12 @@ message ProtoEtxSetEntry {
 }
 
 message ProtoPendingEtxs {
-  optional ProtoHeader header = 1;
+  optional ProtoWorkObject header = 1;
   optional ProtoTransactions etxs = 2;
 }
 
 message ProtoPendingEtxsRollup {
-  optional ProtoHeader header = 1;
+  optional ProtoWorkObject header = 1;
   optional ProtoTransactions etxs_rollup = 2;
 }
 
