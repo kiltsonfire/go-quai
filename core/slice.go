@@ -86,6 +86,9 @@ type Slice struct {
 
 func NewSlice(db ethdb.Database, config *Config, txConfig *TxPoolConfig, txLookupLimit *uint64, isLocalBlock func(block *types.WorkObject) bool, chainConfig *params.ChainConfig, slicesRunning []common.Location, domClientUrl string, subClientUrls []string, engine consensus.Engine, cacheConfig *CacheConfig, indexerConfig *IndexerConfig, vmConfig vm.Config, genesis *Genesis, logger *log.Logger) (*Slice, error) {
 	nodeCtx := chainConfig.Location.Context()
+	if nodeCtx < 2 {
+		fmt.Println("DomBlock")
+	}
 	sl := &Slice{
 		config:         chainConfig,
 		engine:         engine,
@@ -1231,16 +1234,17 @@ func (sl *Slice) ConstructLocalBlock(header *types.WorkObject) (*types.WorkObjec
 // constructLocalMinedBlock takes a header and construct the Block locally by getting the block
 // body from the workers pendingBlockBodyCache. This method is used when the miner sends in the
 // header.
-func (sl *Slice) ConstructLocalMinedBlock(woHeader *types.WorkObjectHeader) (*types.WorkObject, error) {
+func (sl *Slice) ConstructLocalMinedBlock(wo *types.WorkObject) (*types.WorkObject, error) {
 	nodeCtx := sl.NodeLocation().Context()
-	var pendingBlockBody *types.WorkObjectBody
+	var pendingBlockBody *types.WorkObject
 	if nodeCtx == common.ZONE_CTX {
-		pendingBlockBody = sl.GetPendingBlockBody(woHeader)
+		pendingBlockBody = sl.GetPendingBlockBody(wo)
 		if pendingBlockBody == nil {
+			fmt.Println("wo.Hash:", wo.Hash(), "wo.Header:", wo.HeaderHash(), "wo.ParentHash:", wo.ParentHash(common.ZONE_CTX), "wo.Difficulty()", wo.Difficulty(), "wo.Location():", wo.Location())
 			return nil, ErrBodyNotFound
 		}
 	} else {
-		pendingBlockBody = &types.WorkObjectBody{}
+		pendingBlockBody = types.NewWorkObject(wo.WorkObjectHeader(), wo.Body(), &types.Transaction{})
 	}
 	// Load uncles because they are not included in the block response.
 	txs := make([]*types.Transaction, len(pendingBlockBody.Transactions()))
@@ -1264,7 +1268,7 @@ func (sl *Slice) ConstructLocalMinedBlock(woHeader *types.WorkObjectHeader) (*ty
 	pendingBlockBody.SetUncles(uncles)
 	pendingBlockBody.SetExtTransactions(etxs)
 	pendingBlockBody.SetManifest(subManifest)
-	block := types.NewWorkObject(woHeader, pendingBlockBody, &types.Transaction{})
+	block := types.NewWorkObject(wo.WorkObjectHeader(), wo.Body(), &types.Transaction{})
 
 	if err := sl.validator.ValidateBody(block); err != nil {
 		return block, err
@@ -1372,8 +1376,8 @@ func (sl *Slice) NewGenesisPendingHeader(domPendingHeader *types.WorkObject) {
 	}
 }
 
-func (sl *Slice) GetPendingBlockBody(woHeader *types.WorkObjectHeader) *types.WorkObjectBody {
-	return sl.miner.worker.GetPendingBlockBody(woHeader)
+func (sl *Slice) GetPendingBlockBody(wo *types.WorkObject) *types.WorkObject {
+	return sl.miner.worker.GetPendingBlockBody(wo)
 }
 
 func (sl *Slice) SubscribeMissingBlockEvent(ch chan<- types.BlockRequest) event.Subscription {

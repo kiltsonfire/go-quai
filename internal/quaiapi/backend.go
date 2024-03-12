@@ -75,7 +75,7 @@ type Backend interface {
 	WriteBlock(block *types.WorkObject)
 	Append(header *types.WorkObject, manifest types.BlockManifest, domPendingHeader *types.WorkObject, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.Transactions) (types.Transactions, bool, bool, error)
 	DownloadBlocksInManifest(hash common.Hash, manifest types.BlockManifest, entropy *big.Int)
-	ConstructLocalMinedBlock(header *types.WorkObjectHeader) (*types.WorkObject, error)
+	ConstructLocalMinedBlock(header *types.WorkObject) (*types.WorkObject, error)
 	InsertBlock(ctx context.Context, block *types.WorkObject) (int, error)
 	PendingBlock() *types.WorkObject
 	SubRelayPendingHeader(pendingHeader types.PendingHeader, newEntropy *big.Int, location common.Location, subReorg bool, order int)

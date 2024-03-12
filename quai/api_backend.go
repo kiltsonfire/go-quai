@@ -473,7 +473,7 @@ func (b *QuaiAPIBackend) DownloadBlocksInManifest(hash common.Hash, manifest typ
 	b.quai.core.DownloadBlocksInManifest(hash, manifest, entropy)
 }
 
-func (b *QuaiAPIBackend) ConstructLocalMinedBlock(header *types.WorkObjectHeader) (*types.WorkObject, error) {
+func (b *QuaiAPIBackend) ConstructLocalMinedBlock(header *types.WorkObject) (*types.WorkObject, error) {
 	return b.quai.core.ConstructLocalMinedBlock(header)
 }
 

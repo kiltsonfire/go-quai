@@ -284,8 +284,8 @@ func (ec *Client) GetPendingHeader(ctx context.Context) (*types.WorkObject, erro
 }
 
 // ReceiveMinedHeader sends a mined block back to the node
-func (ec *Client) ReceiveMinedHeader(ctx context.Context, header *types.WorkObjectHeader) error {
-	data := header.RPCMarshalWorkObjectHeader()
+func (ec *Client) ReceiveMinedHeader(ctx context.Context, header *types.WorkObject) error {
+	data := header.RPCMarshalWorkObject()
 	return ec.c.CallContext(ctx, nil, "quai_receiveMinedHeader", data)
 }
 

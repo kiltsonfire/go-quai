@@ -1097,14 +1097,14 @@ func (w *worker) FinalizeAssemble(chain consensus.ChainHeaderReader, header *typ
 // AddPendingBlockBody adds an entry in the lru cache for the given pendingBodyKey
 // maps it to body.
 func (w *worker) AddPendingWorkObjectBody(wb *types.WorkObject) {
-	w.pendingBlockBody.ContainsOrAdd(wb.SealHash(), wb.Body())
+	w.pendingBlockBody.ContainsOrAdd(wb.SealHash(), wb)
 }
 
 // GetPendingBlockBody gets the block body associated with the given header.
-func (w *worker) GetPendingBlockBody(woHeader *types.WorkObjectHeader) *types.WorkObjectBody {
+func (w *worker) GetPendingBlockBody(woHeader *types.WorkObject) *types.WorkObject {
 	body, ok := w.pendingBlockBody.Get(woHeader.SealHash())
 	if ok {
-		return body.(*types.WorkObjectBody)
+		return body.(*types.WorkObject)
 	}
 	w.logger.WithField("key", woHeader.SealHash()).Warn("pending block body not found for header")
 	return nil

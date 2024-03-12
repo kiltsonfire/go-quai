@@ -590,6 +590,9 @@ func (c *Core) WriteBlock(block *types.WorkObject) {
 	defer c.writeBlockLock.Unlock()
 	nodeCtx := c.NodeCtx()
 
+	if nodeCtx < 2 {
+		fmt.Println("Domblock")
+	}
 	if block.Location() == nil {
 		log.Global.Errorf("Block %d has nil location in %d context", block.NumberU64(c.sl.NodeCtx()), c.NodeCtx())
 		return
@@ -684,7 +687,7 @@ func (c *Core) DownloadBlocksInManifest(blockHash common.Hash, manifest types.Bl
 }
 
 // ConstructLocalBlock takes a header and construct the Block locally
-func (c *Core) ConstructLocalMinedBlock(woHeader *types.WorkObjectHeader) (*types.WorkObject, error) {
+func (c *Core) ConstructLocalMinedBlock(woHeader *types.WorkObject) (*types.WorkObject, error) {
 	return c.sl.ConstructLocalMinedBlock(woHeader)
 }
 

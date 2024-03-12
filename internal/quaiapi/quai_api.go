@@ -631,7 +631,7 @@ func (s *PublicBlockChainQuaiAPI) fillSubordinateManifest(b *types.WorkObject) (
 		if subManifest == nil || b.ManifestHash(nodeCtx+1) != types.DeriveSha(subManifest, trie.NewStackTrie(nil)) {
 			return nil, errors.New("reconstructed sub manifest does not match manifest hash")
 		}
-		return types.NewWorkObject(b.WorkObjectHeader(), types.NewWorkObjectBody(b.Header(), b.Transactions(), b.ExtTransactions(), b.Uncles(), subManifest, nil, nil, nodeCtx), &types.Transaction{}), nil
+		return types.NewWorkObject(b.WorkObjectHeader(), types.NewWorkObjectBody(b.Header(), b.Transactions(), b.ExtTransactions(), b.Uncles(), subManifest, nil, trie.NewStackTrie(nil), nodeCtx), &types.Transaction{}), nil
 		//return types.NewBlockWithHeader(b.Header()).WithBody(b.Transactions(), b.Uncles(), b.ExtTransactions(), subManifest), nil
 	}
 }
@@ -640,7 +640,7 @@ func (s *PublicBlockChainQuaiAPI) fillSubordinateManifest(b *types.WorkObject) (
 func (s *PublicBlockChainQuaiAPI) ReceiveMinedHeader(ctx context.Context, raw json.RawMessage) error {
 	nodeCtx := s.b.NodeCtx()
 	// Decode header and transactions.
-	var woHeader *types.WorkObjectHeader
+	var woHeader *types.WorkObject
 	if err := json.Unmarshal(raw, &woHeader); err != nil {
 		return err
 	}
