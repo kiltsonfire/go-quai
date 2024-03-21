@@ -15,6 +15,7 @@ import (
 	"github.com/dominant-strategies/go-quai/core"
 	"github.com/dominant-strategies/go-quai/core/state"
 	"github.com/dominant-strategies/go-quai/core/types"
+	"github.com/dominant-strategies/go-quai/core/vm"
 	"github.com/dominant-strategies/go-quai/log"
 	"github.com/dominant-strategies/go-quai/params"
 	"github.com/dominant-strategies/go-quai/trie"
@@ -610,6 +611,12 @@ func (progpow *Progpow) Finalize(chain consensus.ChainHeaderReader, header *type
 			}
 		}
 		core.AddGenesisUtxos(state, nodeLocation, progpow.logger)
+		// Create the lockup contract account
+		lockupContract, err := vm.LockupContractAddresses[[2]byte{nodeLocation[0], nodeLocation[1]}].InternalAndQuaiAddress()
+		if err != nil {
+			panic(err)
+		}
+		state.CreateAccount(lockupContract)
 	}
 	header.Header().SetUTXORoot(state.UTXORoot())
 	header.Header().SetEVMRoot(state.IntermediateRoot(true))

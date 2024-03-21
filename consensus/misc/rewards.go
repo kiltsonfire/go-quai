@@ -17,12 +17,20 @@ func CalculateReward(header *types.WorkObject) *big.Int {
 // Calculate the amount of Quai that Qi can be converted to. Expect the current Header and the Qi amount in "qits", returns the quai amount in "its"
 func QiToQuai(currentHeader *types.WorkObject, qiAmt *big.Int) *big.Int {
 	quaiPerQi := new(big.Int).Div(calculateQuaiReward(currentHeader), calculateQiReward(currentHeader))
+	result := new(big.Int).Mul(qiAmt, quaiPerQi)
+	if result.Cmp(big.NewInt(0)) == 0 {
+		return big.NewInt(1)
+	}
 	return new(big.Int).Mul(qiAmt, quaiPerQi)
 }
 
 // Calculate the amount of Qi that Quai can be converted to. Expect the current Header and the Quai amount in "its", returns the Qi amount in "qits"
 func QuaiToQi(currentHeader *types.WorkObject, quaiAmt *big.Int) *big.Int {
 	qiPerQuai := new(big.Int).Div(calculateQiReward(currentHeader), calculateQuaiReward(currentHeader))
+	result := new(big.Int).Mul(quaiAmt, qiPerQuai)
+	if result.Cmp(types.Denominations[0]) < 0 {
+		return types.Denominations[0]
+	}
 	return new(big.Int).Mul(quaiAmt, qiPerQuai)
 }
 
@@ -43,7 +51,7 @@ func FindMinDenominations(reward *big.Int) map[uint8]uint8 {
 	amount := new(big.Int).Set(reward)
 
 	// Iterate over the denominations in descending order (by key)
-	for i := 15; i >= 0; i-- {
+	for i := types.MaxDenomination; i >= 0; i-- {
 		denom := types.Denominations[uint8(i)]
 
 		// Calculate the number of times the denomination fits into the remaining amount
