@@ -33,7 +33,7 @@ var senderCacher = newTxSenderCacher(runtime.NumCPU())
 // ensure they process the early transactions fast.
 type txSenderCacherRequest struct {
 	signer types.Signer
-	txs    []*types.Transaction
+	txs    []*types.WorkObject
 	inc    int
 }
 
@@ -63,7 +63,7 @@ func (cacher *txSenderCacher) cache() {
 	for task := range cacher.tasks {
 		for i := 0; i < len(task.txs); i += task.inc {
 			if task.txs[i].Type() != types.QiTxType {
-				types.Sender(task.signer, task.txs[i])
+				types.Sender(task.signer, task.txs[i].Tx())
 			}
 		}
 	}
@@ -72,7 +72,7 @@ func (cacher *txSenderCacher) cache() {
 // recover recovers the senders from a batch of transactions and caches them
 // back into the same data structures. There is no validation being done, nor
 // any reaction to invalid signatures. That is up to calling code later.
-func (cacher *txSenderCacher) recover(signer types.Signer, txs []*types.Transaction) {
+func (cacher *txSenderCacher) recover(signer types.Signer, txs []*types.WorkObject) {
 	// If there's nothing to recover, abort
 	if len(txs) == 0 {
 		return

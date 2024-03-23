@@ -302,7 +302,7 @@ func (b *QuaiAPIBackend) SubscribeLogsEvent(ch chan<- []*types.Log) event.Subscr
 	return b.quai.Core().SubscribeLogsEvent(ch)
 }
 
-func (b *QuaiAPIBackend) SendTx(ctx context.Context, signedTx *types.Transaction) error {
+func (b *QuaiAPIBackend) SendTx(ctx context.Context, signedTx *types.WorkObject) error {
 	nodeCtx := b.quai.core.NodeCtx()
 	if nodeCtx != common.ZONE_CTX {
 		return errors.New("sendTx can only be called in zone chain")
@@ -310,7 +310,7 @@ func (b *QuaiAPIBackend) SendTx(ctx context.Context, signedTx *types.Transaction
 	return b.quai.Core().AddLocal(signedTx)
 }
 
-func (b *QuaiAPIBackend) SendRemoteTx(remoteTx *types.Transaction) error {
+func (b *QuaiAPIBackend) SendRemoteTx(remoteTx *types.WorkObject) error {
 	nodeCtx := b.quai.core.NodeCtx()
 	if nodeCtx != common.ZONE_CTX {
 		return errors.New("sendTx can only be called in zone chain")
@@ -318,7 +318,7 @@ func (b *QuaiAPIBackend) SendRemoteTx(remoteTx *types.Transaction) error {
 	return b.quai.Core().AddRemote(remoteTx)
 }
 
-func (b *QuaiAPIBackend) GetPoolTransactions() (types.Transactions, error) {
+func (b *QuaiAPIBackend) GetPoolTransactions() (types.WorkObjects, error) {
 	nodeCtx := b.quai.core.NodeCtx()
 	if nodeCtx != common.ZONE_CTX {
 		return nil, errors.New("getPoolTransactions can only be called in zone chain")
@@ -327,14 +327,14 @@ func (b *QuaiAPIBackend) GetPoolTransactions() (types.Transactions, error) {
 	if err != nil {
 		return nil, err
 	}
-	var txs types.Transactions
+	var txs types.WorkObjects
 	for _, batch := range pending {
 		txs = append(txs, batch...)
 	}
 	return txs, nil
 }
 
-func (b *QuaiAPIBackend) GetPoolTransaction(hash common.Hash) *types.Transaction {
+func (b *QuaiAPIBackend) GetPoolTransaction(hash common.Hash) *types.WorkObject {
 	nodeCtx := b.quai.core.NodeCtx()
 	if nodeCtx != common.ZONE_CTX {
 		return nil
@@ -342,12 +342,12 @@ func (b *QuaiAPIBackend) GetPoolTransaction(hash common.Hash) *types.Transaction
 	return b.quai.core.Get(hash)
 }
 
-func (b *QuaiAPIBackend) GetTransaction(ctx context.Context, txHash common.Hash) (*types.Transaction, common.Hash, uint64, uint64, error) {
+func (b *QuaiAPIBackend) GetTransaction(ctx context.Context, txHash common.Hash) (*types.WorkObject, common.Hash, uint64, uint64, error) {
 	nodeCtx := b.quai.core.NodeCtx()
 	if nodeCtx != common.ZONE_CTX {
 		return nil, common.Hash{}, 0, 0, errors.New("getTransaction can only be called in zone chain")
 	}
-	tx, blockHash, blockNumber, index := rawdb.ReadTransaction(b.quai.ChainDb(), txHash)
+	tx, blockHash, blockNumber, index := rawdb.ReadWorkObject(b.quai.ChainDb(), txHash, types.TxObject)
 	if tx == nil {
 		return nil, common.Hash{}, 0, 0, errors.New("transaction not found")
 	}

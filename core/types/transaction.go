@@ -749,8 +749,8 @@ func (tx *Transaction) GetEcdsaSignatureValues() (v, r, s *big.Int) {
 }
 
 // GasFeeCapCmp compares the fee cap of two transactions.
-func (tx *Transaction) GasFeeCapCmp(other *Transaction) int {
-	return tx.inner.gasFeeCap().Cmp(other.inner.gasFeeCap())
+func (tx *Transaction) GasFeeCapCmp(other *WorkObject) int {
+	return tx.inner.gasFeeCap().Cmp(other.Tx().inner.gasFeeCap())
 }
 
 // GasFeeCapIntCmp compares the fee cap of the transaction against the given fee cap.
@@ -759,8 +759,8 @@ func (tx *Transaction) GasFeeCapIntCmp(other *big.Int) int {
 }
 
 // GasTipCapCmp compares the gasTipCap of two transactions.
-func (tx *Transaction) GasTipCapCmp(other *Transaction) int {
-	return tx.inner.gasTipCap().Cmp(other.inner.gasTipCap())
+func (tx *Transaction) GasTipCapCmp(other *WorkObject) int {
+	return tx.inner.gasTipCap().Cmp(other.Tx().inner.gasTipCap())
 }
 
 // GasTipCapIntCmp compares the gasTipCap of the transaction against the given gasTipCap.
@@ -791,7 +791,7 @@ func (tx *Transaction) EffectiveGasTipValue(baseFee *big.Int) *big.Int {
 }
 
 // EffectiveGasTipCmp compares the effective gasTipCap of two transactions assuming the given base fee.
-func (tx *Transaction) EffectiveGasTipCmp(other *Transaction, baseFee *big.Int) int {
+func (tx *Transaction) EffectiveGasTipCmp(other *WorkObject, baseFee *big.Int) int {
 	if baseFee == nil {
 		return tx.GasTipCapCmp(other)
 	}
@@ -959,8 +959,8 @@ func (s Transactions) FilterConfirmationCtx(ctx int, nodeLocation common.Locatio
 }
 
 // TxDifference returns a new set which is the difference between a and b.
-func TxDifference(a, b Transactions) Transactions {
-	keep := make(Transactions, 0, len(a))
+func TxDifference(a, b WorkObjects) WorkObjects {
+	keep := make(WorkObjects, 0, len(a))
 
 	remove := make(map[common.Hash]struct{})
 	for _, tx := range b {
@@ -979,22 +979,22 @@ func TxDifference(a, b Transactions) Transactions {
 // TxByNonce implements the sort interface to allow sorting a list of transactions
 // by their nonces. This is usually only useful for sorting transactions from a
 // single account, otherwise a nonce comparison doesn't make much sense.
-type TxByNonce Transactions
+type TxByNonce WorkObjects
 
 func (s TxByNonce) Len() int           { return len(s) }
-func (s TxByNonce) Less(i, j int) bool { return s[i].Nonce() < s[j].Nonce() }
+func (s TxByNonce) Less(i, j int) bool { return s[i].TxNonce() < s[j].TxNonce() }
 func (s TxByNonce) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 
 // TxWithMinerFee wraps a transaction with its gas price or effective miner gasTipCap
 type TxWithMinerFee struct {
-	tx       *Transaction
+	tx       *WorkObject
 	minerFee *big.Int
 }
 
 // NewTxWithMinerFee creates a wrapped transaction, calculating the effective
 // miner gasTipCap if a base fee is provided.
 // Returns error in case of a negative effective miner gasTipCap.
-func NewTxWithMinerFee(tx *Transaction, baseFee *big.Int, qiTxFee *big.Int) (*TxWithMinerFee, error) {
+func NewTxWithMinerFee(tx *WorkObject, baseFee *big.Int, qiTxFee *big.Int) (*TxWithMinerFee, error) {
 	if tx.Type() == QiTxType {
 		return &TxWithMinerFee{
 			tx:       tx,
@@ -1021,7 +1021,7 @@ func (s TxByPriceAndTime) Less(i, j int) bool {
 	// deterministic sorting
 	cmp := s[i].minerFee.Cmp(s[j].minerFee)
 	if cmp == 0 {
-		return s[i].tx.time.Before(s[j].tx.time)
+		return s[i].tx.Tx().time.Before(s[j].tx.Tx().time)
 	}
 	return cmp > 0
 }
@@ -1043,10 +1043,10 @@ func (s *TxByPriceAndTime) Pop() interface{} {
 // transactions in a profit-maximizing sorted order, while supporting removing
 // entire batches of transactions for non-executable accounts.
 type TransactionsByPriceAndNonce struct {
-	txs     map[common.AddressBytes]Transactions // Per account nonce-sorted list of transactions
-	heads   TxByPriceAndTime                     // Next transaction for each unique account (price heap)
-	signer  Signer                               // Signer for the set of transactions
-	baseFee *big.Int                             // Current base fee
+	txs     map[common.AddressBytes]WorkObjects // Per account nonce-sorted list of transactions
+	heads   TxByPriceAndTime                    // Next transaction for each unique account (price heap)
+	signer  Signer                              // Signer for the set of transactions
+	baseFee *big.Int                            // Current base fee
 }
 
 // NewTransactionsByPriceAndNonce creates a transaction set that can retrieve
@@ -1054,12 +1054,12 @@ type TransactionsByPriceAndNonce struct {
 //
 // Note, the input map is reowned so the caller should not interact any more with
 // if after providing it to the constructor.
-func NewTransactionsByPriceAndNonce(signer Signer, qiTxs map[common.Hash]*TxWithMinerFee, txs map[common.AddressBytes]Transactions, baseFee *big.Int, sort bool) *TransactionsByPriceAndNonce {
+func NewTransactionsByPriceAndNonce(signer Signer, qiTxs map[common.Hash]*TxWithMinerFee, txs map[common.AddressBytes]WorkObjects, baseFee *big.Int, sort bool) *TransactionsByPriceAndNonce {
 	// Initialize a price and received time based heap with the head transactions
 	heads := make(TxByPriceAndTime, 0, len(txs))
 
 	for from, accTxs := range txs {
-		acc, err := Sender(signer, accTxs[0])
+		acc, err := Sender(signer, accTxs[0].Tx())
 		if err != nil {
 			continue
 		}
@@ -1089,7 +1089,7 @@ func NewTransactionsByPriceAndNonce(signer Signer, qiTxs map[common.Hash]*TxWith
 }
 
 // Peek returns the next transaction by price.
-func (t *TransactionsByPriceAndNonce) Peek() *Transaction {
+func (t *TransactionsByPriceAndNonce) Peek() *WorkObject {
 	if len(t.heads) == 0 {
 		return nil
 	}

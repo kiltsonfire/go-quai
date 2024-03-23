@@ -132,7 +132,7 @@ func (s *PublicTxPoolAPI) Content() map[string]map[string]map[string]*RPCTransac
 	for account, txs := range pending {
 		dump := make(map[string]*RPCTransaction)
 		for _, tx := range txs {
-			dump[fmt.Sprintf("%d", tx.Nonce())] = newRPCPendingTransaction(tx, curHeader, s.b.ChainConfig())
+			dump[fmt.Sprintf("%d", tx.Nonce())] = newRPCPendingTransaction(tx.Tx(), curHeader, s.b.ChainConfig())
 		}
 		content["pending"][account.Hex()] = dump
 	}
@@ -140,7 +140,7 @@ func (s *PublicTxPoolAPI) Content() map[string]map[string]map[string]*RPCTransac
 	for account, txs := range queue {
 		dump := make(map[string]*RPCTransaction)
 		for _, tx := range txs {
-			dump[fmt.Sprintf("%d", tx.Nonce())] = newRPCPendingTransaction(tx, curHeader, s.b.ChainConfig())
+			dump[fmt.Sprintf("%d", tx.Nonce())] = newRPCPendingTransaction(tx.Tx(), curHeader, s.b.ChainConfig())
 		}
 		content["queued"][account.Hex()] = dump
 	}
@@ -156,14 +156,14 @@ func (s *PublicTxPoolAPI) ContentFrom(addr common.Address) map[string]map[string
 	// Build the pending transactions
 	dump := make(map[string]*RPCTransaction, len(pending))
 	for _, tx := range pending {
-		dump[fmt.Sprintf("%d", tx.Nonce())] = newRPCPendingTransaction(tx, curHeader, s.b.ChainConfig())
+		dump[fmt.Sprintf("%d", tx.Nonce())] = newRPCPendingTransaction(tx.Tx(), curHeader, s.b.ChainConfig())
 	}
 	content["pending"] = dump
 
 	// Build the queued transactions
 	dump = make(map[string]*RPCTransaction, len(queue))
 	for _, tx := range queue {
-		dump[fmt.Sprintf("%d", tx.Nonce())] = newRPCPendingTransaction(tx, curHeader, s.b.ChainConfig())
+		dump[fmt.Sprintf("%d", tx.Nonce())] = newRPCPendingTransaction(tx.Tx(), curHeader, s.b.ChainConfig())
 	}
 	content["queued"] = dump
 
@@ -1039,7 +1039,7 @@ type RPCTransaction struct {
 
 // newRPCTransaction returns a transaction that will serialize to the RPC
 // representation, with the given location metadata set (if available).
-func newRPCTransaction(tx *types.WorkObject, blockHash common.Hash, blockNumber uint64, index uint64, baseFee *big.Int, nodeLocation common.Location) *RPCTransaction {
+func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber uint64, index uint64, baseFee *big.Int, nodeLocation common.Location) *RPCTransaction {
 	nodeCtx := nodeLocation.Context()
 	if nodeCtx != common.ZONE_CTX {
 		return nil
@@ -1064,7 +1064,7 @@ func newRPCTransaction(tx *types.WorkObject, blockHash common.Hash, blockNumber 
 	// transactions. For non-protected transactions, the signer is used
 	// because the return value of ChainId is zero for those transactions.
 	signer := types.LatestSignerForChainID(tx.ChainId(), nodeLocation)
-	from, _ := types.Sender(signer, tx.Tx())
+	from, _ := types.Sender(signer, tx)
 	switch tx.Type() {
 	case types.InternalTxType:
 		result = &RPCTransaction{
@@ -1073,7 +1073,7 @@ func newRPCTransaction(tx *types.WorkObject, blockHash common.Hash, blockNumber 
 			Gas:       hexutil.Uint64(tx.Gas()),
 			Hash:      tx.Hash(),
 			Input:     hexutil.Bytes(tx.Data()),
-			Nonce:     hexutil.Uint64(tx.TxNonce()),
+			Nonce:     hexutil.Uint64(tx.Nonce()),
 			To:        tx.To(),
 			Value:     (*hexutil.Big)(tx.Value()),
 			ChainID:   (*hexutil.Big)(tx.ChainId()),
@@ -1103,7 +1103,7 @@ func newRPCTransaction(tx *types.WorkObject, blockHash common.Hash, blockNumber 
 			Gas:         hexutil.Uint64(tx.Gas()),
 			Hash:        tx.Hash(),
 			Input:       hexutil.Bytes(tx.Data()),
-			Nonce:       hexutil.Uint64(tx.TxNonce()),
+			Nonce:       hexutil.Uint64(tx.Nonce()),
 			To:          tx.To(),
 			Value:       (*hexutil.Big)(tx.Value()),
 			ChainID:     (*hexutil.Big)(tx.ChainId()),
@@ -1135,7 +1135,7 @@ func newRPCTransaction(tx *types.WorkObject, blockHash common.Hash, blockNumber 
 }
 
 // newRPCPendingTransaction returns a pending transaction that will serialize to the RPC representation
-func newRPCPendingTransaction(tx *types.WorkObject, current *types.WorkObject, config *params.ChainConfig) *RPCTransaction {
+func newRPCPendingTransaction(tx *types.Transaction, current *types.WorkObject, config *params.ChainConfig) *RPCTransaction {
 	var baseFee *big.Int
 	if current != nil {
 		baseFee = misc.CalcBaseFee(config, current)
@@ -1146,11 +1146,11 @@ func newRPCPendingTransaction(tx *types.WorkObject, current *types.WorkObject, c
 // newRPCTransactionFromBlockIndex returns a transaction that will serialize to the RPC representation.
 func newRPCTransactionFromBlockIndex(b *types.WorkObject, index uint64, etxs bool, nodeLocation common.Location) *RPCTransaction {
 	nodeCtx := nodeLocation.Context()
-	var txs types.WorkObject
+	var txs types.Transactions
 	if etxs {
 		txs = b.ExtTransactions()
 	} else {
-		txs = b.Transactions()
+		txs = b.Transactions().Txs()
 	}
 	if index >= uint64(len(txs)) {
 		return nil
@@ -1164,7 +1164,7 @@ func newRPCRawTransactionFromBlockIndex(b *types.WorkObject, index uint64) hexut
 	if index >= uint64(len(txs)) {
 		return nil
 	}
-	blob, _ := txs[index].MarshalBinary()
+	blob, _ := txs[index].Tx().MarshalBinary()
 	return blob
 }
 
@@ -1400,11 +1400,11 @@ func (s *PublicTransactionPoolAPI) GetTransactionByHash(ctx context.Context, has
 		if err != nil {
 			return nil, err
 		}
-		return newRPCTransaction(tx, blockHash, blockNumber, index, header.BaseFee(), s.b.NodeLocation()), nil
+		return newRPCTransaction(tx.Tx(), blockHash, blockNumber, index, header.BaseFee(), s.b.NodeLocation()), nil
 	}
 	// No finalized transaction, try to retrieve it from the pool
 	if tx := s.b.GetPoolTransaction(hash); tx != nil {
-		return newRPCPendingTransaction(tx, s.b.CurrentBlock(), s.b.ChainConfig()), nil
+		return newRPCPendingTransaction(tx.Tx(), s.b.CurrentBlock(), s.b.ChainConfig()), nil
 	}
 
 	// Transaction unknown, return as such
@@ -1425,7 +1425,7 @@ func (s *PublicTransactionPoolAPI) GetRawTransactionByHash(ctx context.Context, 
 		}
 	}
 	// Serialize to RLP and return
-	return tx.MarshalBinary()
+	return tx.Tx().MarshalBinary()
 }
 
 // GetTransactionReceipt returns the transaction receipt for the given transaction hash.
@@ -1451,7 +1451,7 @@ func (s *PublicTransactionPoolAPI) GetTransactionReceipt(ctx context.Context, ha
 	// Derive the sender.
 	bigblock := new(big.Int).SetUint64(blockNumber)
 	signer := types.MakeSigner(s.b.ChainConfig(), bigblock)
-	from, _ := types.Sender(signer, tx)
+	from, _ := types.Sender(signer, tx.Tx())
 
 	fields := map[string]interface{}{
 		"blockHash":         blockHash,
@@ -1520,13 +1520,13 @@ func SubmitTransaction(ctx context.Context, b Backend, tx *types.WorkObject) (co
 		}
 		// Print a log with full tx details for manual investigations and interventions
 		signer := types.MakeSigner(b.ChainConfig(), b.CurrentHeader().Number(nodeCtx))
-		from, err := types.Sender(signer, tx)
+		from, err := types.Sender(signer, tx.Tx())
 		if err != nil {
 			return common.Hash{}, err
 		}
 
 		if tx.To() == nil {
-			addr := crypto.CreateAddress(from, tx.Nonce(), tx.Data(), nodeLocation)
+			addr := crypto.CreateAddress(from, tx.TxNonce(), tx.Data(), nodeLocation)
 			b.Logger().WithFields(log.Fields{
 				"hash":     tx.Hash().Hex(),
 				"from":     from,

@@ -1151,7 +1151,7 @@ func (c *Core) AddRemote(tx *types.Transaction) error {
 	return c.sl.txPool.AddRemote(tx)
 }
 
-func (c *Core) TxPoolPending(enforceTips bool) (map[common.AddressBytes]types.Transactions, error) {
+func (c *Core) TxPoolPending(enforceTips bool) (map[common.AddressBytes]types.WorkObjects, error) {
 	return c.sl.txPool.TxPoolPending(enforceTips)
 }
 
@@ -1171,11 +1171,11 @@ func (c *Core) Stats() (int, int) {
 	return c.sl.txPool.Stats()
 }
 
-func (c *Core) Content() (map[common.InternalAddress]types.Transactions, map[common.InternalAddress]types.Transactions) {
+func (c *Core) Content() (map[common.InternalAddress]types.WorkObjects, map[common.InternalAddress]types.WorkObjects) {
 	return c.sl.txPool.Content()
 }
 
-func (c *Core) ContentFrom(addr common.Address) (types.Transactions, types.Transactions) {
+func (c *Core) ContentFrom(addr common.Address) (types.WorkObjects, types.WorkObjects) {
 	internal, err := addr.InternalAndQuaiAddress()
 	if err != nil {
 		return nil, nil

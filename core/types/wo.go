@@ -511,7 +511,7 @@ func (wo *WorkObject) GetEcdsaSignatureValues() (v, r, s *big.Int) {
 	return wo.tx.GetEcdsaSignatureValues()
 }
 
-func (wo *WorkObject) GasFeeCapCmp(other *Transaction) int {
+func (wo *WorkObject) GasFeeCapCmp(other *WorkObject) int {
 	return wo.tx.GasFeeCapCmp(other)
 }
 
@@ -519,7 +519,7 @@ func (wo *WorkObject) GasFeeCapIntCmp(other *big.Int) int {
 	return wo.tx.GasFeeCapIntCmp(other)
 }
 
-func (wo *WorkObject) GasTipCapCmp(other *Transaction) int {
+func (wo *WorkObject) GasTipCapCmp(other *WorkObject) int {
 	return wo.tx.GasTipCapCmp(other)
 }
 
@@ -535,7 +535,7 @@ func (wo *WorkObject) EffectiveGasTipValue(baseFee *big.Int) *big.Int {
 	return wo.tx.EffectiveGasTipValue(baseFee)
 }
 
-func (wo *WorkObject) EffectiveGasTipCmp(other *Transaction, baseFee *big.Int) int {
+func (wo *WorkObject) EffectiveGasTipCmp(other *WorkObject, baseFee *big.Int) int {
 	return wo.tx.EffectiveGasTipCmp(other, baseFee)
 }
 

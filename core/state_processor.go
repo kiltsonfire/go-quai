@@ -470,7 +470,7 @@ func applyTransaction(msg types.Message, config *params.ChainConfig, bc ChainCon
 	return receipt, err
 }
 
-func ProcessQiTx(tx *types.Transaction, updateState bool, currentHeader *types.WorkObject, statedb *state.StateDB, gp *GasPool, usedGas *uint64, signer types.Signer, location common.Location, chainId big.Int, etxRLimit, etxPLimit *int) (*big.Int, []*types.Transaction, error) {
+func ProcessQiTx(tx *types.WorkObject, updateState bool, currentHeader *types.WorkObject, statedb *state.StateDB, gp *GasPool, usedGas *uint64, signer types.Signer, location common.Location, chainId big.Int, etxRLimit, etxPLimit *int) (*big.Int, []*types.Transaction, error) {
 	// Sanity checks
 	if tx == nil || tx.Type() != types.QiTxType {
 		return nil, nil, fmt.Errorf("tx %032x is not a QiTx", tx.Hash())

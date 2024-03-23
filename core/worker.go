@@ -1124,7 +1124,7 @@ func (w *worker) ComputeManifestHash(header *types.WorkObject) common.Hash {
 	return manifestHash
 }
 
-func (w *worker) FinalizeAssemble(chain consensus.ChainHeaderReader, header *types.WorkObject, parent *types.WorkObject, state *state.StateDB, txs []*types.Transaction, uncles []*types.WorkObject, etxs []*types.Transaction, subManifest types.BlockManifest, receipts []*types.Receipt) (*types.WorkObject, error) {
+func (w *worker) FinalizeAssemble(chain consensus.ChainHeaderReader, header *types.WorkObject, parent *types.WorkObject, state *state.StateDB, txs []*types.WorkObject, uncles []*types.WorkObject, etxs []*types.Transaction, subManifest types.BlockManifest, receipts []*types.Receipt) (*types.WorkObject, error) {
 	nodeCtx := w.hc.NodeCtx()
 	wo, err := w.engine.FinalizeAndAssemble(chain, header, state, txs, uncles, etxs, subManifest, receipts)
 	if err != nil {

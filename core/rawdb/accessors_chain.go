@@ -626,7 +626,8 @@ func ReadWorkObject(db ethdb.Reader, hash common.Hash, woType int) *types.WorkOb
 	if workObjectBody == nil {
 		return nil
 	}
-	return types.NewWorkObject(workObjectHeader, workObjectBody, types.NewEmptyTx()) //TODO: mmtx transaction
+	tx, _, _, _ := ReadTransaction(db, workObjectHeader.TxHash())
+	return types.NewWorkObject(workObjectHeader, workObjectBody, tx) //TODO: mmtx transaction
 }
 
 // WriteWorkObject writes the work object of the terminus hash.
