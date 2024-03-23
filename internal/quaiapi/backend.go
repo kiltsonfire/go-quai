@@ -73,7 +73,7 @@ type Backend interface {
 	SubscribeChainHeadEvent(ch chan<- core.ChainHeadEvent) event.Subscription
 	SubscribeChainSideEvent(ch chan<- core.ChainSideEvent) event.Subscription
 	WriteBlock(block *types.WorkObject)
-	Append(header *types.WorkObject, manifest types.BlockManifest, domPendingHeader *types.WorkObject, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.Transactions) (types.Transactions, bool, bool, error)
+	Append(header *types.WorkObject, manifest types.BlockManifest, domPendingHeader *types.WorkObject, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.WorkObjects) (types.WorkObjects, bool, bool, error)
 	DownloadBlocksInManifest(hash common.Hash, manifest types.BlockManifest, entropy *big.Int)
 	ConstructLocalMinedBlock(header *types.WorkObject) (*types.WorkObject, error)
 	InsertBlock(ctx context.Context, block *types.WorkObject) (int, error)
@@ -96,15 +96,15 @@ type Backend interface {
 	GetSlicesRunning() []common.Location
 
 	// Transaction pool API
-	SendTx(ctx context.Context, signedTx *types.Transaction) error
-	SendRemoteTx(tx *types.Transaction) error
-	GetTransaction(ctx context.Context, txHash common.Hash) (*types.Transaction, common.Hash, uint64, uint64, error)
-	GetPoolTransactions() (types.Transactions, error)
-	GetPoolTransaction(txHash common.Hash) *types.Transaction
+	SendTx(ctx context.Context, signedTx *types.WorkObject) error
+	SendRemoteTx(tx *types.WorkObject) error
+	GetTransaction(ctx context.Context, txHash common.Hash) (*types.WorkObject, common.Hash, uint64, uint64, error)
+	GetPoolTransactions() (types.WorkObject, error)
+	GetPoolTransaction(txHash common.Hash) *types.WorkObject
 	GetPoolNonce(ctx context.Context, addr common.Address) (uint64, error)
 	Stats() (pending int, queued int)
-	TxPoolContent() (map[common.InternalAddress]types.Transactions, map[common.InternalAddress]types.Transactions)
-	TxPoolContentFrom(addr common.Address) (types.Transactions, types.Transactions)
+	TxPoolContent() (map[common.InternalAddress]types.WorkObjects, map[common.InternalAddress]types.WorkObjects)
+	TxPoolContentFrom(addr common.Address) (types.WorkObjects, types.WorkObjects)
 	SubscribeNewTxsEvent(chan<- core.NewTxsEvent) event.Subscription
 
 	// Filter API

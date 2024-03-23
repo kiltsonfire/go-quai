@@ -1493,7 +1493,7 @@ func (s *PublicTransactionPoolAPI) GetTransactionReceipt(ctx context.Context, ha
 }
 
 // SubmitTransaction is a helper function that submits tx to txPool and logs a message.
-func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction) (common.Hash, error) {
+func SubmitTransaction(ctx context.Context, b Backend, tx *types.WorkObject) (common.Hash, error) {
 	if tx == nil {
 		return common.Hash{}, errors.New("transaction is nil")
 	}
@@ -1565,7 +1565,7 @@ func (s *PublicTransactionPoolAPI) SendRawTransaction(ctx context.Context, input
 			return common.Hash{}, common.MakeErrQiAddress(tx.Tx().To().Hex())
 		}
 	}
-	return SubmitTransaction(ctx, s.b, tx.Tx())
+	return SubmitTransaction(ctx, s.b, tx)
 }
 
 // PublicDebugAPI is the collection of Quai APIs exposed over the public
