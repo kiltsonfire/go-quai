@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/dominant-strategies/go-quai/common"
 	"github.com/dominant-strategies/go-quai/common/hexutil"
 	"github.com/dominant-strategies/go-quai/log"
@@ -399,6 +400,170 @@ func (wo *WorkObject) Size() common.StorageSize {
 		}
 	}
 	return -1
+}
+
+func (wo *WorkObject) Type() uint8 {
+	return wo.tx.Type()
+}
+
+func (wo *WorkObject) ChainId() *big.Int {
+	return wo.tx.ChainId()
+}
+
+func (wo *WorkObject) Data() []byte {
+	return wo.tx.Data()
+}
+
+func (wo *WorkObject) AccessList() AccessList {
+	return wo.tx.AccessList()
+}
+
+func (wo *WorkObject) Gas() uint64 {
+	return wo.tx.Gas()
+}
+
+func (wo *WorkObject) GasPrice() *big.Int {
+	return wo.tx.GasPrice()
+}
+
+func (wo *WorkObject) GasTipCap() *big.Int {
+	return wo.tx.GasTipCap()
+}
+
+func (wo *WorkObject) GasFeeCap() *big.Int {
+	return wo.tx.GasFeeCap()
+}
+
+func (wo *WorkObject) Value() *big.Int {
+	return wo.tx.Value()
+}
+
+func (wo *WorkObject) ETXGasLimit() uint64 {
+	return wo.tx.ETXGasLimit()
+}
+
+func (wo *WorkObject) ETXGasPrice() *big.Int {
+	return wo.tx.ETXGasPrice()
+}
+
+func (wo *WorkObject) ETXGasTip() *big.Int {
+	return wo.tx.ETXGasTip()
+}
+
+func (wo *WorkObject) ETXData() []byte {
+	return wo.tx.ETXData()
+}
+
+func (wo *WorkObject) ETXAccessList() AccessList {
+	return wo.tx.ETXAccessList()
+}
+
+func (wo *WorkObject) TxNonce() uint64 {
+	return wo.tx.Nonce()
+}
+
+func (wo *WorkObject) ETXSender() common.Address {
+	return wo.tx.ETXSender()
+}
+
+func (wo *WorkObject) OriginatingTxHash() common.Hash {
+	return wo.tx.OriginatingTxHash()
+}
+
+func (wo *WorkObject) ETXIndex() uint16 {
+	return wo.tx.ETXIndex()
+}
+
+func (wo *WorkObject) TxOut() TxOuts {
+	return wo.tx.TxOut()
+}
+
+func (wo *WorkObject) TxIn() TxIns {
+	return wo.tx.TxIn()
+}
+
+func (wo *WorkObject) GetSchnorrSignature() *schnorr.Signature {
+	return wo.tx.GetSchnorrSignature()
+}
+
+func (wo *WorkObject) IsInternalToExternalTx() (inner *InternalToExternalTx, ok bool) {
+	return wo.tx.IsInternalToExternalTx()
+}
+
+func (wo *WorkObject) From() *common.Address {
+	return wo.tx.From()
+}
+
+func (wo *WorkObject) To() *common.Address {
+	return wo.tx.To()
+}
+
+func (wo *WorkObject) SetTo(addr common.Address) {
+	wo.tx.SetTo(addr)
+}
+
+func (wo *WorkObject) Cost() *big.Int {
+	return wo.tx.Cost()
+}
+
+func (wo *WorkObject) GetEcdsaSignatureValues() (v, r, s *big.Int) {
+	return wo.tx.GetEcdsaSignatureValues()
+}
+
+func (wo *WorkObject) GasFeeCapCmp(other *Transaction) int {
+	return wo.tx.GasFeeCapCmp(other)
+}
+
+func (wo *WorkObject) GasFeeCapIntCmp(other *big.Int) int {
+	return wo.tx.GasFeeCapIntCmp(other)
+}
+
+func (wo *WorkObject) GasTipCapCmp(other *Transaction) int {
+	return wo.tx.GasTipCapCmp(other)
+}
+
+func (wo *WorkObject) GasTipCapIntCmp(other *big.Int) int {
+	return wo.tx.GasTipCapIntCmp(other)
+}
+
+func (wo *WorkObject) EffectiveGasTip(baseFee *big.Int) (*big.Int, error) {
+	return wo.tx.EffectiveGasTip(baseFee)
+}
+
+func (wo *WorkObject) EffectiveGasTipValue(baseFee *big.Int) *big.Int {
+	return wo.tx.EffectiveGasTipValue(baseFee)
+}
+
+func (wo *WorkObject) EffectiveGasTipCmp(other *Transaction, baseFee *big.Int) int {
+	return wo.tx.EffectiveGasTipCmp(other, baseFee)
+}
+
+func (wo *WorkObject) EffectiveGasTipIntCmp(other *big.Int, baseFee *big.Int) int {
+	return wo.tx.EffectiveGasTipIntCmp(other, baseFee)
+}
+
+func (wo *WorkObject) TransactionHash() common.Hash {
+	return wo.tx.Hash()
+}
+
+func (wo *WorkObject) FromChain(nodeLocation common.Location) common.Location {
+	return wo.tx.FromChain(nodeLocation)
+}
+
+func (wo *WorkObject) ConfirmationCtx(nodeLocation common.Location) int {
+	return wo.tx.ConfirmationCtx(nodeLocation)
+}
+
+func (wo *WorkObject) TxSize() common.StorageSize {
+	return wo.tx.Size()
+}
+
+func (wo *WorkObject) WithSignature(signer Signer, sig []byte) (*Transaction, error) {
+	return wo.tx.WithSignature(signer, sig)
+}
+
+func (wo *WorkObject) TxType() byte {
+	return wo.tx.Type()
 }
 
 func NewWorkObject(woHeader *WorkObjectHeader, woBody *WorkObjectBody, tx *Transaction) *WorkObject {
