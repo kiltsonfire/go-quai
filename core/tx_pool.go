@@ -1550,7 +1550,7 @@ func (pool *TxPool) reset(oldHead, newHead *types.WorkObject) {
 					return
 				}
 				for rem.NumberU64(nodeCtx) > add.NumberU64(nodeCtx) {
-					discarded = append(discarded, rem.Transactions()...)
+					discarded = append(discarded, rem.Transactions().Txs()...)
 					if rem = pool.chain.GetBlock(rem.ParentHash(nodeCtx), rem.NumberU64(nodeCtx)-1); rem == nil {
 						pool.logger.WithFields(log.Fields{
 							"block": oldHead.Number(nodeCtx),
@@ -1560,7 +1560,7 @@ func (pool *TxPool) reset(oldHead, newHead *types.WorkObject) {
 					}
 				}
 				for add.NumberU64(nodeCtx) > rem.NumberU64(nodeCtx) {
-					included = append(included, add.Transactions()...)
+					included = append(included, add.Transactions().Txs()...)
 					if add = pool.chain.GetBlock(add.ParentHash(nodeCtx), add.NumberU64(nodeCtx)-1); add == nil {
 						pool.logger.WithFields(log.Fields{
 							"block": newHead.Number(nodeCtx),
@@ -1570,7 +1570,7 @@ func (pool *TxPool) reset(oldHead, newHead *types.WorkObject) {
 					}
 				}
 				for rem.Hash() != add.Hash() {
-					discarded = append(discarded, rem.Transactions()...)
+					discarded = append(discarded, rem.Transactions().Txs()...)
 					if rem = pool.chain.GetBlock(rem.ParentHash(nodeCtx), rem.NumberU64(nodeCtx)-1); rem == nil {
 						pool.logger.WithFields(log.Fields{
 							"block": oldHead.Number(nodeCtx),
@@ -1578,7 +1578,7 @@ func (pool *TxPool) reset(oldHead, newHead *types.WorkObject) {
 						}).Error("Unrooted old chain seen by tx pool")
 						return
 					}
-					included = append(included, add.Transactions()...)
+					included = append(included, add.Transactions().Txs()...)
 					if add = pool.chain.GetBlock(add.ParentHash(nodeCtx), add.NumberU64(nodeCtx)-1); add == nil {
 						pool.logger.WithFields(log.Fields{
 							"block": newHead.Number(nodeCtx),
@@ -1593,7 +1593,7 @@ func (pool *TxPool) reset(oldHead, newHead *types.WorkObject) {
 	} else {
 		block := pool.chain.GetBlock(newHead.Hash(), newHead.Number(pool.chainconfig.Location.Context()).Uint64())
 		pool.utxoMu.Lock()
-		pool.removeUtxoTxsLocked(block.QiTransactions())
+		pool.removeUtxoTxsLocked(block.QiTransactions().Txs())
 		pool.utxoMu.Unlock()
 		pool.logger.WithField("count", len(block.QiTransactions())).Debug("Removed utxo txs from pool")
 	}

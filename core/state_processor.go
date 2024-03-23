@@ -263,11 +263,11 @@ func (p *StateProcessor) Process(block *types.WorkObject, etxSet *types.EtxSet) 
 	for i, tx := range block.Transactions() {
 		startProcess := time.Now()
 		if tx.Type() == types.QiTxType {
-			if i == 0 && types.IsCoinBaseTx(tx, header.ParentHash(nodeCtx)) {
+			if i == 0 && types.IsCoinBaseTx(tx.Tx(), header.ParentHash(nodeCtx)) {
 				// coinbase tx currently exempt from gas and outputs are added after all txs are processed
 				continue
 			}
-			fees, etxs, err := ProcessQiTx(tx, true, header, statedb, gp, usedGas, p.hc.pool.signer, p.hc.NodeLocation(), *p.config.ChainID, &etxRLimit, &etxPLimit)
+			fees, etxs, err := ProcessQiTx(tx.Tx(), true, header, statedb, gp, usedGas, p.hc.pool.signer, p.hc.NodeLocation(), *p.config.ChainID, &etxRLimit, &etxPLimit)
 			if err != nil {
 				return nil, nil, nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 			}
@@ -275,7 +275,7 @@ func (p *StateProcessor) Process(block *types.WorkObject, etxSet *types.EtxSet) 
 			totalFees.Add(totalFees, fees)
 			continue
 		}
-		msg, err := tx.AsMessageWithSender(types.MakeSigner(p.config, header.Number(nodeCtx)), header.BaseFee(), senders[tx.Hash()])
+		msg, err := tx.Tx().AsMessageWithSender(types.MakeSigner(p.config, header.Number(nodeCtx)), header.BaseFee(), senders[tx.Hash()])
 		if err != nil {
 			return nil, nil, nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 		}
@@ -310,8 +310,8 @@ func (p *StateProcessor) Process(block *types.WorkObject, etxSet *types.EtxSet) 
 				timeEtx += timeEtxDelta
 				continue
 			} else {
-				prevZeroBal := prepareApplyETX(statedb, tx, nodeLocation)
-				receipt, err = applyTransaction(msg, p.config, p.hc, nil, gp, statedb, blockNumber, blockHash, tx, usedGas, vmenv, &etxRLimit, &etxPLimit, p.logger)
+				prevZeroBal := prepareApplyETX(statedb, tx.Tx(), nodeLocation)
+				receipt, err = applyTransaction(msg, p.config, p.hc, nil, gp, statedb, blockNumber, blockHash, tx.Tx(), usedGas, vmenv, &etxRLimit, &etxPLimit, p.logger)
 				statedb.SetBalance(common.ZeroInternal(nodeLocation), prevZeroBal) // Reset the balance to what it previously was. Residual balance will be lost
 				if err != nil {
 					return nil, nil, nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
@@ -323,7 +323,7 @@ func (p *StateProcessor) Process(block *types.WorkObject, etxSet *types.EtxSet) 
 		} else if tx.Type() == types.InternalTxType || tx.Type() == types.InternalToExternalTxType {
 			startTimeTx := time.Now()
 
-			receipt, err = applyTransaction(msg, p.config, p.hc, nil, gp, statedb, blockNumber, blockHash, tx, usedGas, vmenv, &etxRLimit, &etxPLimit, p.logger)
+			receipt, err = applyTransaction(msg, p.config, p.hc, nil, gp, statedb, blockNumber, blockHash, tx.Tx(), usedGas, vmenv, &etxRLimit, &etxPLimit, p.logger)
 			if err != nil {
 				return nil, nil, nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 			}
@@ -339,7 +339,7 @@ func (p *StateProcessor) Process(block *types.WorkObject, etxSet *types.EtxSet) 
 
 	qiTransactions := block.QiTransactions()
 	// Coinbase check
-	if len(qiTransactions) > 0 && types.IsCoinBaseTx(qiTransactions[0], header.ParentHash(nodeCtx)) {
+	if len(qiTransactions) > 0 && types.IsCoinBaseTx(qiTransactions[0].Tx(), header.ParentHash(nodeCtx)) {
 		totalCoinbaseOut := big.NewInt(0)
 		for _, txOut := range qiTransactions[0].TxOut() {
 			totalCoinbaseOut.Add(totalCoinbaseOut, types.Denominations[txOut.Denomination])
@@ -377,7 +377,7 @@ func (p *StateProcessor) Process(block *types.WorkObject, etxSet *types.EtxSet) 
 
 	time4 := common.PrettyDuration(time.Since(start))
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
-	p.engine.Finalize(p.hc, block, statedb, block.Transactions(), block.Uncles())
+	p.engine.Finalize(p.hc, block, statedb, block.Transactions().Txs(), block.Uncles())
 	time5 := common.PrettyDuration(time.Since(start))
 
 	p.logger.WithFields(log.Fields{
@@ -1006,7 +1006,7 @@ func (p *StateProcessor) StateAtTransaction(block *types.WorkObject, txIndex int
 	signer := types.MakeSigner(p.hc.Config(), block.Number(nodeCtx))
 	for idx, tx := range block.Transactions() {
 		// Assemble the transaction call message and return if the requested offset
-		msg, _ := tx.AsMessage(signer, block.BaseFee())
+		msg, _ := tx.Tx().AsMessage(signer, block.BaseFee())
 		txContext := NewEVMTxContext(msg)
 		context := NewEVMBlockContext(block, p.hc, nil)
 		if idx == txIndex {

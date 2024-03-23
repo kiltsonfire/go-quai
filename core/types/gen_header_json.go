@@ -283,7 +283,7 @@ func (wh *WorkObjectHeader) UnmarshalJSON(input []byte) error {
 func (wb *WorkObjectBody) MarshalJSON() ([]byte, error) {
 	var enc struct {
 		Header *Header `json:"header" gencoden:"required"`
-		Transactions Transactions `json:"transactions" gencoden:"required"`
+		Transactions WorkObjects `json:"transactions" gencoden:"required"`
 		ExtTransactions Transactions `json:"extTransactions" gencoden:"required"`
 		Uncles WorkObjects `json:"uncles" gencoden:"required"`
 		Manifest BlockManifest `json:"manifest" gencoden:"required"`
@@ -301,8 +301,8 @@ func (wb *WorkObjectBody) MarshalJSON() ([]byte, error) {
 func (wb *WorkObjectBody) UnmarshalJSON(input []byte) error {
 	var dec struct {
 		Header *Header `json:"header" gencoden:"required"`
-		Transactions Transactions `json:"transactions" gencoden:"required"`
-		ExtTransactions Transactions `json:"extTransactions" gencoden:"required"`
+		Transactions WorkObjects `json:"transactions" gencoden:"required"`
+		ExtTransactions Transactions`json:"extTransactions" gencoden:"required"`
 		Uncles WorkObjects `json:"uncles" gencoden:"required"`
 		Manifest BlockManifest `json:"manifest" gencoden:"required"`
 	}

@@ -145,11 +145,11 @@ type results struct {
 }
 
 type txSorter struct {
-	txs     []*types.Transaction
+	txs     []*types.WorkObject
 	baseFee *big.Int
 }
 
-func newSorter(txs []*types.Transaction, baseFee *big.Int) *txSorter {
+func newSorter(txs []*types.WorkObject, baseFee *big.Int) *txSorter {
 	return &txSorter{
 		txs:     txs,
 		baseFee: baseFee,
@@ -182,7 +182,7 @@ func (oracle *Oracle) getBlockValues(ctx context.Context, signer types.Signer, b
 		return
 	}
 	// Sort the transaction by effective tip in ascending sort.
-	txs := make([]*types.Transaction, len(block.Transactions()))
+	txs := make([]*types.WorkObject, len(block.Transactions()))
 	copy(txs, block.Transactions())
 	sorter := newSorter(txs, block.BaseFee())
 	sort.Sort(sorter)
@@ -193,7 +193,7 @@ func (oracle *Oracle) getBlockValues(ctx context.Context, signer types.Signer, b
 		if ignoreUnder != nil && tip.Cmp(ignoreUnder) == -1 {
 			continue
 		}
-		sender, err := types.Sender(signer, tx)
+		sender, err := types.Sender(signer, tx.Tx())
 		if err == nil && sender != block.Coinbase() {
 			prices = append(prices, tip)
 			if len(prices) >= limit {

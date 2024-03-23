@@ -189,7 +189,7 @@ func (s *PublicTxPoolAPI) Inspect() map[string]map[string]map[string]string {
 	pending, queue := s.b.TxPoolContent()
 
 	// Define a formatter to flatten a transaction into a string
-	var format = func(tx *types.Transaction) string {
+	var format = func(tx *types.WorkObject) string {
 		if to := tx.To(); to != nil {
 			return fmt.Sprintf("%s: %v wei + %v gas × %v wei", tx.To().Hex(), tx.Value(), tx.Gas(), tx.GasPrice())
 		}
@@ -954,11 +954,11 @@ func RPCMarshalETHBlock(block *types.WorkObject, inclTx bool, fullTx bool, nodeL
 	fields["size"] = hexutil.Uint64(block.Size())
 
 	if inclTx {
-		formatTx := func(tx *types.Transaction) (interface{}, error) {
+		formatTx := func(tx *types.WorkObject) (interface{}, error) {
 			return tx.Hash(), nil
 		}
 		if fullTx {
-			formatTx = func(tx *types.Transaction) (interface{}, error) {
+			formatTx = func(tx *types.WorkObject) (interface{}, error) {
 				return newRPCTransactionFromBlockHash(block, tx.Hash(), false, nodeLocation), nil
 			}
 		}
@@ -1039,7 +1039,7 @@ type RPCTransaction struct {
 
 // newRPCTransaction returns a transaction that will serialize to the RPC
 // representation, with the given location metadata set (if available).
-func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber uint64, index uint64, baseFee *big.Int, nodeLocation common.Location) *RPCTransaction {
+func newRPCTransaction(tx *types.WorkObject, blockHash common.Hash, blockNumber uint64, index uint64, baseFee *big.Int, nodeLocation common.Location) *RPCTransaction {
 	nodeCtx := nodeLocation.Context()
 	if nodeCtx != common.ZONE_CTX {
 		return nil
@@ -1064,7 +1064,7 @@ func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber
 	// transactions. For non-protected transactions, the signer is used
 	// because the return value of ChainId is zero for those transactions.
 	signer := types.LatestSignerForChainID(tx.ChainId(), nodeLocation)
-	from, _ := types.Sender(signer, tx)
+	from, _ := types.Sender(signer, tx.Tx())
 	switch tx.Type() {
 	case types.InternalTxType:
 		result = &RPCTransaction{
@@ -1073,7 +1073,7 @@ func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber
 			Gas:       hexutil.Uint64(tx.Gas()),
 			Hash:      tx.Hash(),
 			Input:     hexutil.Bytes(tx.Data()),
-			Nonce:     hexutil.Uint64(tx.Nonce()),
+			Nonce:     hexutil.Uint64(tx.TxNonce()),
 			To:        tx.To(),
 			Value:     (*hexutil.Big)(tx.Value()),
 			ChainID:   (*hexutil.Big)(tx.ChainId()),
@@ -1103,7 +1103,7 @@ func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber
 			Gas:         hexutil.Uint64(tx.Gas()),
 			Hash:        tx.Hash(),
 			Input:       hexutil.Bytes(tx.Data()),
-			Nonce:       hexutil.Uint64(tx.Nonce()),
+			Nonce:       hexutil.Uint64(tx.TxNonce()),
 			To:          tx.To(),
 			Value:       (*hexutil.Big)(tx.Value()),
 			ChainID:     (*hexutil.Big)(tx.ChainId()),
@@ -1135,7 +1135,7 @@ func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber
 }
 
 // newRPCPendingTransaction returns a pending transaction that will serialize to the RPC representation
-func newRPCPendingTransaction(tx *types.Transaction, current *types.WorkObject, config *params.ChainConfig) *RPCTransaction {
+func newRPCPendingTransaction(tx *types.WorkObject, current *types.WorkObject, config *params.ChainConfig) *RPCTransaction {
 	var baseFee *big.Int
 	if current != nil {
 		baseFee = misc.CalcBaseFee(config, current)
@@ -1146,7 +1146,7 @@ func newRPCPendingTransaction(tx *types.Transaction, current *types.WorkObject, 
 // newRPCTransactionFromBlockIndex returns a transaction that will serialize to the RPC representation.
 func newRPCTransactionFromBlockIndex(b *types.WorkObject, index uint64, etxs bool, nodeLocation common.Location) *RPCTransaction {
 	nodeCtx := nodeLocation.Context()
-	var txs types.Transactions
+	var txs types.WorkObject
 	if etxs {
 		txs = b.ExtTransactions()
 	} else {

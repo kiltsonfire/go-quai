@@ -192,7 +192,7 @@ func EmptyHeader(nodeCtx int) *WorkObject {
 	wo.woHeader.SetNonce(EncodeNonce(0))
 	wo.woBody.SetHeader(h)
 	wo.woBody.SetUncles([]*WorkObject{})
-	wo.woBody.SetTransactions([]*Transaction{})
+	wo.woBody.SetTransactions([]*WorkObject{})
 	wo.woBody.SetExtTransactions([]*Transaction{})
 	wo.woBody.SetManifest(BlockManifest{})
 	return NewWorkObjectWithHeader(wo, &Transaction{}, nodeCtx)

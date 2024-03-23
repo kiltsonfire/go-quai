@@ -88,7 +88,7 @@ message ProtoWorkObjectHeader {
 
 message ProtoWorkObjectBody {
   optional ProtoHeader header = 1;
-  optional ProtoTransactions transactions = 2;
+  optional ProtoWorkObjects transactions = 2;
   optional ProtoTransactions ext_transactions = 3;
   optional ProtoWorkObjects uncles = 4;
   optional ProtoManifest manifest = 5;

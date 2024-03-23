@@ -1,6 +1,7 @@
 package types
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"math/big"
@@ -43,9 +44,9 @@ type WorkObjectHeader struct {
 
 type WorkObjectBody struct {
 	header          *Header
-	transactions    Transactions
+	transactions    WorkObjects
 	extTransactions Transactions
-	uncles          []*WorkObject
+	uncles          WorkObjects
 	manifest        BlockManifest
 }
 
@@ -86,7 +87,7 @@ func (wo *WorkObject) NumberU64(nodeCtx int) uint64 {
 	}
 }
 
-func (wo *WorkObject) Transactions() Transactions {
+func (wo *WorkObject) Transactions() WorkObjects {
 	return wo.woBody.transactions
 }
 
@@ -94,7 +95,7 @@ func (wo *WorkObject) ExtTransactions() Transactions {
 	return wo.woBody.ExtTransactions()
 }
 
-func (wo *WorkObject) Uncles() []*WorkObject {
+func (wo *WorkObject) Uncles() WorkObjects {
 	return wo.woBody.uncles
 }
 
@@ -250,11 +251,11 @@ func (wo *WorkObject) SetHeader(header *Header) {
 	wo.woBody.header = header
 }
 
-func (wo *WorkObject) SetTransactions(transactions []*Transaction) {
+func (wo *WorkObject) SetTransactions(transactions []*WorkObject) {
 	wo.woBody.transactions = transactions
 }
 
-func (wo *WorkObject) SetExtTransactions(transactions []*Transaction) {
+func (wo *WorkObject) SetExtTransactions(transactions Transactions) {
 	wo.woBody.extTransactions = transactions
 }
 
@@ -381,11 +382,11 @@ func (wo *WorkObject) SetAppendTime(appendTime time.Duration) {
 	wo.appendTime.Store(appendTime)
 }
 
-func (wo *WorkObject) QiTransactions() []*Transaction {
+func (wo *WorkObject) QiTransactions() WorkObjects {
 	return wo.woBody.QiTransactions()
 }
 
-func (wo *WorkObject) QuaiTransactions() []*Transaction {
+func (wo *WorkObject) QuaiTransactions() WorkObjects {
 	return wo.woBody.QuaiTransactions()
 }
 
@@ -580,7 +581,7 @@ func NewWorkObject(woHeader *WorkObjectHeader, woBody *WorkObjectBody, tx *Trans
 	return newWo
 }
 
-func NewBlock(header *WorkObject, txs []*Transaction, uncles []*WorkObject, etxs []*Transaction, subManifest BlockManifest, receipts []*Receipt, hasher TrieHasher, nodeCtx int) *WorkObject {
+func NewBlock(header *WorkObject, txs []*WorkObject, uncles []*WorkObject, etxs Transactions, subManifest BlockManifest, receipts []*Receipt, hasher TrieHasher, nodeCtx int) *WorkObject {
 	b := &WorkObject{
 		woHeader: CopyWorkObjectHeader(header.woHeader),
 		woBody:   &WorkObjectBody{},
@@ -592,8 +593,8 @@ func NewBlock(header *WorkObject, txs []*Transaction, uncles []*WorkObject, etxs
 	if len(txs) == 0 {
 		b.woBody.header.SetTxHash(EmptyRootHash)
 	} else {
-		b.woBody.header.SetTxHash(DeriveSha(Transactions(txs), hasher))
-		b.woBody.transactions = make(Transactions, len(txs))
+		b.woBody.header.SetTxHash(DeriveSha(WorkObjects(txs), hasher))
+		b.woBody.transactions = make(WorkObjects, len(txs))
 		copy(b.woBody.transactions, txs)
 	}
 
@@ -899,7 +900,7 @@ func (wb *WorkObjectBody) Header() *Header {
 	return wb.header
 }
 
-func (wb *WorkObjectBody) Transactions() Transactions {
+func (wb *WorkObjectBody) Transactions() []*WorkObject {
 	return wb.transactions
 }
 
@@ -919,8 +920,8 @@ func (wb *WorkObjectBody) SetHeader(header *Header) {
 	wb.header = header
 }
 
-func (wb *WorkObjectBody) SetTransactions(txs Transactions) {
-	wb.transactions = make(Transactions, len(txs))
+func (wb *WorkObjectBody) SetTransactions(txs []*WorkObject) {
+	wb.transactions = make(WorkObjects, len(txs))
 	copy(wb.transactions, txs)
 }
 
@@ -939,15 +940,15 @@ func (wb *WorkObjectBody) SetManifest(manifest BlockManifest) {
 	copy(wb.manifest, manifest)
 }
 
-func NewWorkObjectBody(header *WorkObject, txs []*Transaction, etxs []*Transaction, uncles []*WorkObject, subManifest BlockManifest, receipts []*Receipt, hasher TrieHasher, nodeCtx int) *WorkObjectBody {
+func NewWorkObjectBody(header *WorkObject, txs []*WorkObject, etxs Transactions, uncles []*WorkObject, subManifest BlockManifest, receipts []*Receipt, hasher TrieHasher, nodeCtx int) *WorkObjectBody {
 	wb := &WorkObjectBody{header: CopyHeader(header.Body().header)}
 
 	// TODO: panic if len(txs) != len(receipts)
 	if len(txs) == 0 {
 		wb.header.SetTxHash(EmptyRootHash)
 	} else {
-		wb.header.SetTxHash(DeriveSha(Transactions(txs), hasher))
-		wb.transactions = make(Transactions, len(txs))
+		wb.header.SetTxHash(DeriveSha(WorkObjects(txs), hasher))
+		wb.transactions = make(WorkObjects, len(txs))
 		copy(wb.transactions, txs)
 	}
 
@@ -1003,7 +1004,7 @@ func CopyWorkObjectBody(wb *WorkObjectBody) *WorkObjectBody {
 	return cpy
 }
 
-func CopyWorkObjectBodyFromParts(header *Header, transactions []*Transaction, extTransactions []*Transaction, uncles []*WorkObject, manifest BlockManifest) *WorkObjectBody {
+func CopyWorkObjectBodyFromParts(header *Header, transactions []*WorkObject, extTransactions Transactions, uncles []*WorkObject, manifest BlockManifest) *WorkObjectBody {
 	cpy := &WorkObjectBody{header: CopyHeader(header)}
 	cpy.SetTransactions(transactions)
 	cpy.SetExtTransactions(extTransactions)
@@ -1057,7 +1058,7 @@ func (wb *WorkObjectBody) ProtoDecode(data *ProtoWorkObjectBody, location common
 	if err != nil {
 		return err
 	}
-	wb.transactions = Transactions{}
+	wb.transactions = WorkObjects{}
 	err = wb.transactions.ProtoDecode(data.GetTransactions(), location)
 	if err != nil {
 		return err
@@ -1096,9 +1097,9 @@ func (wb *WorkObjectBody) RPCMarshalWorkObjectBody() map[string]interface{} {
 	return result
 }
 
-func (wb *WorkObjectBody) QiTransactions() []*Transaction {
+func (wb *WorkObjectBody) QiTransactions() []*WorkObject {
 	// TODO: cache the UTXO loop
-	qiTxs := make([]*Transaction, 0)
+	qiTxs := make([]*WorkObject, 0)
 	for _, t := range wb.Transactions() {
 		if t.Type() == QiTxType {
 			qiTxs = append(qiTxs, t)
@@ -1107,8 +1108,8 @@ func (wb *WorkObjectBody) QiTransactions() []*Transaction {
 	return qiTxs
 }
 
-func (wb *WorkObjectBody) QuaiTransactions() []*Transaction {
-	quaiTxs := make([]*Transaction, 0)
+func (wb *WorkObjectBody) QuaiTransactions() []*WorkObject {
+	quaiTxs := make([]*WorkObject, 0)
 	for _, t := range wb.Transactions() {
 		if t.Type() != QiTxType {
 			quaiTxs = append(quaiTxs, t)
@@ -1122,4 +1123,44 @@ func CalcUncleHash(uncles []*WorkObject) common.Hash {
 		return EmptyUncleHash
 	}
 	return RlpHash(uncles)
+}
+
+func (wos WorkObjects) Txs() []*Transaction {
+	txs := make([]*Transaction, len(wos))
+	for i, wo := range wos {
+		txs[i] = wo.Tx()
+	}
+	return txs
+}
+
+func (wos WorkObjects) Len() int { return len(wos) }
+
+func (wos WorkObjects) EncodeIndex(i int, w *bytes.Buffer) {
+	tx := wos[i]
+	tx.Tx().encodeTyped(w)
+}
+
+func (wos WorkObjects) ProtoEncode() (*ProtoWorkObjects, error) {
+	protoWorkObjects := &ProtoWorkObjects{}
+	protoWorkObjects.WorkObjects = make([]*ProtoWorkObject, len(wos))
+	for i, wo := range wos {
+		protoWo, err := wo.ProtoEncode()
+		if err != nil {
+			return nil, err
+		}
+		protoWorkObjects.WorkObjects[i] = protoWo
+	}
+	return protoWorkObjects, nil
+}
+
+func (wos *WorkObjects) ProtoDecode(data *ProtoWorkObjects, location common.Location) error {
+	for _, protoWo := range data.WorkObjects {
+		wo := &WorkObject{}
+		err := wo.ProtoDecode(protoWo)
+		if err != nil {
+			return err
+		}
+		*wos = append(*wos, wo)
+	}
+	return nil
 }

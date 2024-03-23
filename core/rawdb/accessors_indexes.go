@@ -121,7 +121,7 @@ func ReadTransaction(db ethdb.Reader, hash common.Hash) (*types.Transaction, com
 	}
 	for txIndex, tx := range body.Transactions() {
 		if tx.Hash() == hash {
-			return tx, blockHash, *blockNumber, uint64(txIndex)
+			return tx.Tx(), blockHash, *blockNumber, uint64(txIndex)
 		}
 	}
 	log.Global.WithFields(log.Fields{

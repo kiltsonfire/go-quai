@@ -1249,7 +1249,7 @@ func (sl *Slice) ConstructLocalMinedBlock(wo *types.WorkObject) (*types.WorkObje
 		pendingBlockBody = types.NewWorkObject(wo.WorkObjectHeader(), wo.Body(), types.NewEmptyTx())
 	}
 	// Load uncles because they are not included in the block response.
-	txs := make([]*types.Transaction, len(pendingBlockBody.Transactions()))
+	txs := make([]*types.WorkObject, len(pendingBlockBody.Transactions()))
 	for i, tx := range pendingBlockBody.Transactions() {
 		txs[i] = tx
 	}
