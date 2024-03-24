@@ -32,8 +32,8 @@ type ExternalTx struct {
 // PendingEtxsRollup is Header and EtxRollups of that header that should
 // be forward propagated
 type PendingEtxsRollup struct {
-	Header     *WorkObject  `json:"header" gencodec:"required"`
-	EtxsRollup Transactions `json:"etxsrollup" gencodec:"required"`
+	Header     *WorkObject `json:"header" gencodec:"required"`
+	EtxsRollup WorkObjects `json:"etxsrollup" gencodec:"required"`
 }
 
 func (p *PendingEtxsRollup) IsValid(hasher TrieHasher) bool {
@@ -70,7 +70,7 @@ func (p *PendingEtxsRollup) ProtoDecode(protoPendingEtxsRollup *ProtoPendingEtxs
 	if err != nil {
 		return err
 	}
-	p.EtxsRollup = Transactions{}
+	p.EtxsRollup = WorkObjects{}
 	err = p.EtxsRollup.ProtoDecode(protoPendingEtxsRollup.GetEtxsRollup(), location)
 	if err != nil {
 		return err
@@ -87,8 +87,8 @@ func (p *PendingEtxsRollup) ProtoDecode(protoPendingEtxsRollup *ProtoPendingEtxs
 // itself, so the Etxs list will just contain the ETXs emitted directly in that
 // zone block (a.k.a. a singleton).
 type PendingEtxs struct {
-	Header *WorkObject  `json:"header" gencodec:"required"`
-	Etxs   Transactions `json:"etxs"   gencodec:"required"`
+	Header *WorkObject `json:"header" gencodec:"required"`
+	Etxs   WorkObjects `json:"etxs"   gencodec:"required"`
 }
 
 func (p *PendingEtxs) IsValid(hasher TrieHasher) bool {
@@ -125,7 +125,7 @@ func (p *PendingEtxs) ProtoDecode(protoPendingEtxs *ProtoPendingEtxs) error {
 	if err != nil {
 		return err
 	}
-	p.Etxs = Transactions{}
+	p.Etxs = WorkObjects{}
 	err = p.Etxs.ProtoDecode(protoPendingEtxs.GetEtxs(), p.Header.Location())
 	if err != nil {
 		return err

@@ -89,7 +89,7 @@ message ProtoWorkObjectHeader {
 message ProtoWorkObjectBody {
   optional ProtoHeader header = 1;
   optional ProtoWorkObjects transactions = 2;
-  optional ProtoTransactions ext_transactions = 3;
+  optional ProtoWorkObjects ext_transactions = 3;
   optional ProtoWorkObjects uncles = 4;
   optional ProtoManifest manifest = 5;
 }
@@ -113,7 +113,7 @@ message ProtoReceiptForStorage {
   common.ProtoHash tx_hash = 3;
   common.ProtoAddress contract_address = 4;
   ProtoLogsForStorage logs = 5;
-  ProtoTransactions etxs = 6;
+  ProtoWorkObjects etxs = 6;
   uint64 gas_used = 7;
 }
 
@@ -145,12 +145,12 @@ message ProtoEtxSet {
 
 message ProtoPendingEtxs {
   optional ProtoWorkObject header = 1;
-  optional ProtoTransactions etxs = 2;
+  optional ProtoWorkObjects etxs = 2;
 }
 
 message ProtoPendingEtxsRollup {
   optional ProtoWorkObject header = 1;
-  optional ProtoTransactions etxs_rollup = 2;
+  optional ProtoWorkObjects etxs_rollup = 2;
 }
 
 message ProtoTxIns { repeated ProtoTxIn tx_ins = 1; }

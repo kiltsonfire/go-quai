@@ -634,7 +634,7 @@ func (c *Core) WriteBlock(block *types.WorkObject) {
 	}
 }
 
-func (c *Core) Append(header *types.WorkObject, manifest types.BlockManifest, domPendingHeader *types.WorkObject, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.Transactions) (types.Transactions, bool, bool, error) {
+func (c *Core) Append(header *types.WorkObject, manifest types.BlockManifest, domPendingHeader *types.WorkObject, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.WorkObjects) (types.WorkObjects, bool, bool, error) {
 	nodeCtx := c.NodeCtx()
 	newPendingEtxs, subReorg, setHead, err := c.sl.Append(header, domPendingHeader, domTerminus, domOrigin, newInboundEtxs)
 	if err != nil {
@@ -1143,11 +1143,11 @@ func (c *Core) SetGasPrice(price *big.Int) {
 	c.sl.txPool.SetGasPrice(price)
 }
 
-func (c *Core) AddLocal(tx *types.Transaction) error {
+func (c *Core) AddLocal(tx *types.WorkObject) error {
 	return c.sl.txPool.AddLocal(tx)
 }
 
-func (c *Core) AddRemote(tx *types.Transaction) error {
+func (c *Core) AddRemote(tx *types.WorkObject) error {
 	return c.sl.txPool.AddRemote(tx)
 }
 
@@ -1155,7 +1155,7 @@ func (c *Core) TxPoolPending(enforceTips bool) (map[common.AddressBytes]types.Wo
 	return c.sl.txPool.TxPoolPending(enforceTips)
 }
 
-func (c *Core) Get(hash common.Hash) *types.Transaction {
+func (c *Core) Get(hash common.Hash) *types.WorkObject {
 	return c.sl.txPool.Get(hash)
 }
 

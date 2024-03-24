@@ -28,7 +28,7 @@ func (r Receipt) MarshalJSON() ([]byte, error) {
 		BlockHash         common.Hash    `json:"blockHash,omitempty"`
 		BlockNumber       *hexutil.Big   `json:"blockNumber,omitempty"`
 		TransactionIndex  hexutil.Uint   `json:"transactionIndex"`
-		Etxs              []*Transaction `json:"etxs"`
+		Etxs              []*WorkObject  `json:"etxs"`
 	}
 	var enc Receipt
 	enc.Type = hexutil.Uint64(r.Type)
@@ -62,7 +62,7 @@ func (r *Receipt) UnmarshalJSON(input []byte) error {
 		BlockHash         *common.Hash    `json:"blockHash,omitempty"`
 		BlockNumber       *hexutil.Big    `json:"blockNumber,omitempty"`
 		TransactionIndex  *hexutil.Uint   `json:"transactionIndex"`
-		Etxs              []*Transaction  `json:"etxs"`
+		Etxs              []*WorkObject   `json:"etxs"`
 	}
 	var dec Receipt
 	if err := json.Unmarshal(input, &dec); err != nil {

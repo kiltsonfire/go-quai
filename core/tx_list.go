@@ -266,8 +266,8 @@ func newTxList(strict bool) *txList {
 
 // Overlaps returns whether the transaction specified has the same nonce as one
 // already contained within the list.
-func (l *txList) Overlaps(tx *types.Transaction) bool {
-	return l.txs.Get(tx.Nonce()) != nil
+func (l *txList) Overlaps(tx *types.WorkObject) bool {
+	return l.txs.Get(tx.TxNonce()) != nil
 }
 
 // Add tries to insert a new transaction into the list, returning whether the
@@ -607,9 +607,9 @@ func (l *txPricedList) Reheap() {
 	// is more efficiently. Also, Underpriced would work suboptimally the first time
 	// if the floating queue was empty.
 	floatingCount := len(l.urgent.list) * floatingRatio / (urgentRatio + floatingRatio)
-	l.floating.list = make(types.Transactions, floatingCount)
+	l.floating.list = make(types.WorkObjects, floatingCount)
 	for i := 0; i < floatingCount; i++ {
-		l.floating.list[i] = heap.Pop(&l.urgent).(*types.Transaction)
+		l.floating.list[i] = heap.Pop(&l.urgent).(*types.WorkObject)
 	}
 	heap.Init(&l.floating)
 }

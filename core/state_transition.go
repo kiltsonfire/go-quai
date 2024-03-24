@@ -94,11 +94,11 @@ type Message interface {
 // ExecutionResult includes all output after executing given evm
 // message no matter the execution itself is successful or not.
 type ExecutionResult struct {
-	UsedGas      uint64               // Total used gas but include the refunded gas
-	Err          error                // Any error encountered during the execution(listed in core/vm/errors.go)
-	ReturnData   []byte               // Returned data from evm(function result or data supplied with revert opcode)
-	Etxs         []*types.Transaction // External transactions generated from opETX
-	ContractAddr *common.Address      // Address of the contract created by the message
+	UsedGas      uint64              // Total used gas but include the refunded gas
+	Err          error               // Any error encountered during the execution(listed in core/vm/errors.go)
+	ReturnData   []byte              // Returned data from evm(function result or data supplied with revert opcode)
+	Etxs         []*types.WorkObject // External transactions generated from opETX
+	ContractAddr *common.Address     // Address of the contract created by the message
 }
 
 // Unwrap returns the internal evm error which allows us for further
@@ -383,9 +383,9 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 
 	// At this point, the execution completed, so the ETX cache can be dumped and reset
 	st.evm.ETXCacheLock.Lock()
-	etxs := make([]*types.Transaction, len(st.evm.ETXCache))
+	etxs := make([]*types.WorkObject, len(st.evm.ETXCache))
 	copy(etxs, st.evm.ETXCache)
-	st.evm.ETXCache = make([]*types.Transaction, 0)
+	st.evm.ETXCache = make([]*types.WorkObject, 0)
 	st.evm.ETXCacheLock.Unlock()
 
 	// refunds are capped to gasUsed / 5

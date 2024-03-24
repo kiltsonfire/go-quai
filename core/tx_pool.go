@@ -826,7 +826,7 @@ func (pool *TxPool) add(tx *types.WorkObject, local bool) (replaced bool, err er
 	if err != nil {
 		return false, err
 	}
-	if list := pool.pending[internal]; list != nil && list.Overlaps(tx.Tx()) {
+	if list := pool.pending[internal]; list != nil && list.Overlaps(tx) {
 		// Nonce already pending, check if required price bump is met
 		inserted, old := list.Add(tx, pool.config.PriceBump)
 		if !inserted {
@@ -1155,14 +1155,14 @@ func (pool *TxPool) addUtxoTx(tx *types.WorkObject) error {
 	return nil
 }
 
-func (pool *TxPool) RemoveUtxoTx(tx *types.Transaction) {
+func (pool *TxPool) RemoveUtxoTx(tx *types.WorkObject) {
 	pool.utxoMu.Lock()
 	delete(pool.utxoPool, tx.Hash())
 	pool.utxoMu.Unlock()
 }
 
 // Mempool lock must be held.
-func (pool *TxPool) removeUtxoTxsLocked(txs []*types.Transaction) {
+func (pool *TxPool) removeUtxoTxsLocked(txs []*types.WorkObject) {
 	for _, tx := range txs {
 		delete(pool.utxoPool, tx.Hash())
 	}
@@ -1593,7 +1593,7 @@ func (pool *TxPool) reset(oldHead, newHead *types.WorkObject) {
 	} else {
 		block := pool.chain.GetBlock(newHead.Hash(), newHead.Number(pool.chainconfig.Location.Context()).Uint64())
 		pool.utxoMu.Lock()
-		pool.removeUtxoTxsLocked(block.QiTransactions().Txs())
+		pool.removeUtxoTxsLocked(block.QiTransactions())
 		pool.utxoMu.Unlock()
 		pool.logger.WithField("count", len(block.QiTransactions())).Debug("Removed utxo txs from pool")
 	}

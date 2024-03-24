@@ -122,7 +122,7 @@ func (tx *QiTx) setEcdsaSignatureValues(chainID, v, r, s *big.Int) {
 	panic("Qi TX does not have ECDSA signature values")
 }
 
-func CalculateQiTxGas(transaction *Transaction) uint64 {
+func CalculateQiTxGas(transaction *WorkObject) uint64 {
 	if transaction.Type() != QiTxType {
 		panic("CalculateQiTxGas called on a transaction that is not a Qi transaction")
 	}

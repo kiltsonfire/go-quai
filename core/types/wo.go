@@ -45,7 +45,7 @@ type WorkObjectHeader struct {
 type WorkObjectBody struct {
 	header          *Header
 	transactions    WorkObjects
-	extTransactions Transactions
+	extTransactions WorkObjects
 	uncles          WorkObjects
 	manifest        BlockManifest
 }
@@ -91,7 +91,7 @@ func (wo *WorkObject) Transactions() WorkObjects {
 	return wo.woBody.transactions
 }
 
-func (wo *WorkObject) ExtTransactions() Transactions {
+func (wo *WorkObject) ExtTransactions() WorkObjects {
 	return wo.woBody.ExtTransactions()
 }
 
@@ -255,7 +255,7 @@ func (wo *WorkObject) SetTransactions(transactions []*WorkObject) {
 	wo.woBody.transactions = transactions
 }
 
-func (wo *WorkObject) SetExtTransactions(transactions Transactions) {
+func (wo *WorkObject) SetExtTransactions(transactions WorkObjects) {
 	wo.woBody.extTransactions = transactions
 }
 
@@ -581,7 +581,7 @@ func NewWorkObject(woHeader *WorkObjectHeader, woBody *WorkObjectBody, tx *Trans
 	return newWo
 }
 
-func NewBlock(header *WorkObject, txs []*WorkObject, uncles []*WorkObject, etxs Transactions, subManifest BlockManifest, receipts []*Receipt, hasher TrieHasher, nodeCtx int) *WorkObject {
+func NewBlock(header *WorkObject, txs []*WorkObject, uncles []*WorkObject, etxs WorkObjects, subManifest BlockManifest, receipts []*Receipt, hasher TrieHasher, nodeCtx int) *WorkObject {
 	b := &WorkObject{
 		woHeader: CopyWorkObjectHeader(header.woHeader),
 		woBody:   &WorkObjectBody{},
@@ -617,8 +617,8 @@ func NewBlock(header *WorkObject, txs []*WorkObject, uncles []*WorkObject, etxs 
 	if len(etxs) == 0 {
 		b.woBody.header.SetEtxHash(EmptyRootHash)
 	} else {
-		b.woBody.header.SetEtxHash(DeriveSha(Transactions(etxs), hasher))
-		b.woBody.extTransactions = make(Transactions, len(etxs))
+		b.woBody.header.SetEtxHash(DeriveSha(WorkObjects(etxs), hasher))
+		b.woBody.extTransactions = make(WorkObjects, len(etxs))
 		copy(b.woBody.extTransactions, etxs)
 	}
 
@@ -904,7 +904,7 @@ func (wb *WorkObjectBody) Transactions() []*WorkObject {
 	return wb.transactions
 }
 
-func (wb *WorkObjectBody) ExtTransactions() Transactions {
+func (wb *WorkObjectBody) ExtTransactions() WorkObjects {
 	return wb.extTransactions
 }
 
@@ -925,8 +925,8 @@ func (wb *WorkObjectBody) SetTransactions(txs []*WorkObject) {
 	copy(wb.transactions, txs)
 }
 
-func (wb *WorkObjectBody) SetExtTransactions(etxs Transactions) {
-	wb.extTransactions = make(Transactions, len(etxs))
+func (wb *WorkObjectBody) SetExtTransactions(etxs WorkObjects) {
+	wb.extTransactions = make(WorkObjects, len(etxs))
 	copy(wb.extTransactions, etxs)
 }
 
@@ -940,7 +940,7 @@ func (wb *WorkObjectBody) SetManifest(manifest BlockManifest) {
 	copy(wb.manifest, manifest)
 }
 
-func NewWorkObjectBody(header *WorkObject, txs []*WorkObject, etxs Transactions, uncles []*WorkObject, subManifest BlockManifest, receipts []*Receipt, hasher TrieHasher, nodeCtx int) *WorkObjectBody {
+func NewWorkObjectBody(header *WorkObject, txs []*WorkObject, etxs WorkObjects, uncles []*WorkObject, subManifest BlockManifest, receipts []*Receipt, hasher TrieHasher, nodeCtx int) *WorkObjectBody {
 	wb := &WorkObjectBody{header: CopyHeader(header.Body().header)}
 
 	// TODO: panic if len(txs) != len(receipts)
@@ -971,8 +971,8 @@ func NewWorkObjectBody(header *WorkObject, txs []*WorkObject, etxs Transactions,
 	if len(etxs) == 0 {
 		wb.header.SetEtxHash(EmptyRootHash)
 	} else {
-		wb.header.SetEtxHash(DeriveSha(Transactions(etxs), hasher))
-		wb.extTransactions = make(Transactions, len(etxs))
+		wb.header.SetEtxHash(DeriveSha(WorkObjects(etxs), hasher))
+		wb.extTransactions = make(WorkObjects, len(etxs))
 		copy(wb.extTransactions, etxs)
 	}
 
@@ -1004,7 +1004,7 @@ func CopyWorkObjectBody(wb *WorkObjectBody) *WorkObjectBody {
 	return cpy
 }
 
-func CopyWorkObjectBodyFromParts(header *Header, transactions []*WorkObject, extTransactions Transactions, uncles []*WorkObject, manifest BlockManifest) *WorkObjectBody {
+func CopyWorkObjectBodyFromParts(header *Header, transactions []*WorkObject, extTransactions WorkObjects, uncles []*WorkObject, manifest BlockManifest) *WorkObjectBody {
 	cpy := &WorkObjectBody{header: CopyHeader(header)}
 	cpy.SetTransactions(transactions)
 	cpy.SetExtTransactions(extTransactions)
@@ -1063,7 +1063,7 @@ func (wb *WorkObjectBody) ProtoDecode(data *ProtoWorkObjectBody, location common
 	if err != nil {
 		return err
 	}
-	wb.extTransactions = Transactions{}
+	wb.extTransactions = WorkObjects{}
 	err = wb.extTransactions.ProtoDecode(data.GetExtTransactions(), location)
 	if err != nil {
 		return err
@@ -1163,4 +1163,44 @@ func (wos *WorkObjects) ProtoDecode(data *ProtoWorkObjects, location common.Loca
 		*wos = append(*wos, wo)
 	}
 	return nil
+}
+
+func (wos WorkObjects) FilterToLocation(l common.Location) WorkObjects {
+	filteredList := WorkObjects{}
+	for _, wo := range wos {
+		toChain := *wo.To().Location()
+		if l.Equal(toChain) {
+			filteredList = append(filteredList, wo)
+		}
+	}
+	return filteredList
+}
+
+func (wos WorkObjects) FilterConfirmationCtx(ctx int, nodeLocation common.Location) WorkObjects {
+	filteredList := WorkObjects{}
+	for _, wo := range wos {
+		if wo.ConfirmationCtx(nodeLocation) == ctx {
+			filteredList = append(filteredList, wo)
+		}
+	}
+	return filteredList
+}
+
+func (wos WorkObjects) FilterToSlice(slice common.Location, minCtx int) WorkObjects {
+	filteredList := WorkObjects{}
+	for _, wo := range wos {
+		toChain := wo.To().Location()
+		if toChain.InSameSliceAs(slice) {
+			filteredList = append(filteredList, wo)
+		}
+	}
+	return filteredList
+}
+
+func (wos WorkObjects) GetTransactions() []*Transaction {
+	txs := make([]*Transaction, len(wos))
+	for i, wo := range wos {
+		txs[i] = wo.Tx()
+	}
+	return txs
 }

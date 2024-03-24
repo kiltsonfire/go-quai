@@ -1146,16 +1146,16 @@ func newRPCPendingTransaction(tx *types.Transaction, current *types.WorkObject, 
 // newRPCTransactionFromBlockIndex returns a transaction that will serialize to the RPC representation.
 func newRPCTransactionFromBlockIndex(b *types.WorkObject, index uint64, etxs bool, nodeLocation common.Location) *RPCTransaction {
 	nodeCtx := nodeLocation.Context()
-	var txs types.Transactions
+	var txs types.WorkObjects
 	if etxs {
 		txs = b.ExtTransactions()
 	} else {
-		txs = b.Transactions().Txs()
+		txs = b.Transactions()
 	}
 	if index >= uint64(len(txs)) {
 		return nil
 	}
-	return newRPCTransaction(txs[index], b.Hash(), b.NumberU64(nodeCtx), index, b.BaseFee(), nodeLocation)
+	return newRPCTransaction(txs[index].Tx(), b.Hash(), b.NumberU64(nodeCtx), index, b.BaseFee(), nodeLocation)
 }
 
 // newRPCRawTransactionFromBlockIndex returns the bytes of a transaction given a block and a transaction index.

@@ -91,9 +91,9 @@ type Termini struct {
 }
 
 type appendReturns struct {
-	Etxs     types.Transactions `json:"pendingEtxs"`
-	SubReorg bool               `json:"subReorg"`
-	SetHead  bool               `json:"setHead"`
+	Etxs     types.WorkObjects `json:"pendingEtxs"`
+	SubReorg bool              `json:"subReorg"`
+	SetHead  bool              `json:"setHead"`
 }
 
 // SubscribePendingHeader subscribes to notifications about the current pending block on the node.
@@ -101,7 +101,7 @@ func (ec *Client) SubscribePendingHeader(ctx context.Context, ch chan<- *types.W
 	return ec.c.QuaiSubscribe(ctx, ch, "pendingHeader")
 }
 
-func (ec *Client) Append(ctx context.Context, header *types.WorkObject, manifest types.BlockManifest, domPendingHeader *types.WorkObject, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.Transactions) (types.Transactions, bool, bool, error) {
+func (ec *Client) Append(ctx context.Context, header *types.WorkObject, manifest types.BlockManifest, domPendingHeader *types.WorkObject, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.WorkObjects) (types.WorkObjects, bool, bool, error) {
 	fields := map[string]interface{}{
 		"header":           header.RPCMarshalWorkObject(),
 		"manifest":         manifest,

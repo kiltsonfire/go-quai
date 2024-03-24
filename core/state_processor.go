@@ -198,7 +198,7 @@ func NewStateProcessor(config *params.ChainConfig, hc *HeaderChain, engine conse
 // Process returns the receipts and logs accumulated during the process and
 // returns the amount of gas that was used in the process. If any of the
 // transactions failed to execute due to insufficient gas it will return an error.
-func (p *StateProcessor) Process(block *types.WorkObject, etxSet *types.EtxSet) (types.Receipts, []*types.Transaction, []*types.Log, *state.StateDB, uint64, error) {
+func (p *StateProcessor) Process(block *types.WorkObject, etxSet *types.EtxSet) (types.Receipts, []*types.WorkObject, []*types.Log, *state.StateDB, uint64, error) {
 	var (
 		receipts     types.Receipts
 		usedGas      = new(uint64)
@@ -214,14 +214,14 @@ func (p *StateProcessor) Process(block *types.WorkObject, etxSet *types.EtxSet) 
 	start := time.Now()
 	parent := p.hc.GetBlock(block.ParentHash(nodeCtx), block.NumberU64(nodeCtx)-1)
 	if parent == nil {
-		return types.Receipts{}, []*types.Transaction{}, []*types.Log{}, nil, 0, errors.New("parent block is nil for the block given to process")
+		return types.Receipts{}, []*types.WorkObject{}, []*types.Log{}, nil, 0, errors.New("parent block is nil for the block given to process")
 	}
 	time1 := common.PrettyDuration(time.Since(start))
 
 	// Initialize a statedb
 	statedb, err := state.New(parent.Header().EVMRoot(), parent.Header().UTXORoot(), p.stateCache, p.utxoCache, p.snaps, nodeLocation)
 	if err != nil {
-		return types.Receipts{}, []*types.Transaction{}, []*types.Log{}, nil, 0, err
+		return types.Receipts{}, []*types.WorkObject{}, []*types.Log{}, nil, 0, err
 	}
 	time2 := common.PrettyDuration(time.Since(start))
 
@@ -259,15 +259,15 @@ func (p *StateProcessor) Process(block *types.WorkObject, etxSet *types.EtxSet) 
 	maximumEtxGas := minimumEtxGas * params.MaximumEtxGasMultiplier  // 40% of the block gas limit
 	totalEtxGas := uint64(0)
 	totalFees := big.NewInt(0)
-	qiEtxs := make([]*types.Transaction, 0)
+	qiEtxs := make([]*types.WorkObject, 0)
 	for i, tx := range block.Transactions() {
 		startProcess := time.Now()
 		if tx.Type() == types.QiTxType {
-			if i == 0 && types.IsCoinBaseTx(tx.Tx(), header.ParentHash(nodeCtx)) {
+			if i == 0 && types.IsCoinBaseTx(tx, header.ParentHash(nodeCtx)) {
 				// coinbase tx currently exempt from gas and outputs are added after all txs are processed
 				continue
 			}
-			fees, etxs, err := ProcessQiTx(tx.Tx(), true, header, statedb, gp, usedGas, p.hc.pool.signer, p.hc.NodeLocation(), *p.config.ChainID, &etxRLimit, &etxPLimit)
+			fees, etxs, err := ProcessQiTx(tx, true, header, statedb, gp, usedGas, p.hc.pool.signer, p.hc.NodeLocation(), *p.config.ChainID, &etxRLimit, &etxPLimit)
 			if err != nil {
 				return nil, nil, nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 			}
@@ -339,7 +339,7 @@ func (p *StateProcessor) Process(block *types.WorkObject, etxSet *types.EtxSet) 
 
 	qiTransactions := block.QiTransactions()
 	// Coinbase check
-	if len(qiTransactions) > 0 && types.IsCoinBaseTx(qiTransactions[0].Tx(), header.ParentHash(nodeCtx)) {
+	if len(qiTransactions) > 0 && types.IsCoinBaseTx(qiTransactions[0], header.ParentHash(nodeCtx)) {
 		totalCoinbaseOut := big.NewInt(0)
 		for _, txOut := range qiTransactions[0].TxOut() {
 			totalCoinbaseOut.Add(totalCoinbaseOut, types.Denominations[txOut.Denomination])
@@ -470,7 +470,7 @@ func applyTransaction(msg types.Message, config *params.ChainConfig, bc ChainCon
 	return receipt, err
 }
 
-func ProcessQiTx(tx *types.WorkObject, updateState bool, currentHeader *types.WorkObject, statedb *state.StateDB, gp *GasPool, usedGas *uint64, signer types.Signer, location common.Location, chainId big.Int, etxRLimit, etxPLimit *int) (*big.Int, []*types.Transaction, error) {
+func ProcessQiTx(tx *types.WorkObject, updateState bool, currentHeader *types.WorkObject, statedb *state.StateDB, gp *GasPool, usedGas *uint64, signer types.Signer, location common.Location, chainId big.Int, etxRLimit, etxPLimit *int) (*big.Int, []*types.WorkObject, error) {
 	// Sanity checks
 	if tx == nil || tx.Type() != types.QiTxType {
 		return nil, nil, fmt.Errorf("tx %032x is not a QiTx", tx.Hash())
@@ -531,7 +531,7 @@ func ProcessQiTx(tx *types.WorkObject, updateState bool, currentHeader *types.Wo
 	}
 	var ETXRCount int
 	var ETXPCount int
-	etxs := make([]*types.Transaction, 0)
+	etxs := make([]*types.WorkObject, 0)
 	totalQitOut := big.NewInt(0)
 	for txOutIdx, txOut := range tx.TxOut() {
 		// It would be impossible for a tx to have this many outputs based on block gas limit, but cap it here anyways
@@ -576,7 +576,7 @@ func ProcessQiTx(tx *types.WorkObject, updateState bool, currentHeader *types.Wo
 
 			// We should require some kind of extra fee here
 			etxInner := types.ExternalTx{Value: big.NewInt(int64(txOut.Denomination)), To: &toAddr, Sender: common.ZeroAddress(location), OriginatingTxHash: tx.Hash(), ETXIndex: uint16(txOutIdx), Gas: params.TxGas, ChainID: &chainId}
-			etx := types.NewTx(&etxInner)
+			etx := types.NewWorkObject(currentHeader.WorkObjectHeader(), currentHeader.Body(), types.NewTx(&etxInner))
 			etxs = append(etxs, etx)
 			log.Global.Debug("Added UTXO ETX to ETX list")
 		} else {
@@ -609,7 +609,7 @@ func ProcessQiTx(tx *types.WorkObject, updateState bool, currentHeader *types.Wo
 		finalKey = pubKeys[0]
 	}
 
-	txDigestHash := signer.Hash(tx)
+	txDigestHash := signer.Hash(tx.Tx())
 	if !tx.GetSchnorrSignature().Verify(txDigestHash[:], finalKey) {
 		return nil, nil, errors.New("invalid signature for digest hash " + txDigestHash.String())
 	}

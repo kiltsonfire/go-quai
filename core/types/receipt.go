@@ -67,10 +67,10 @@ type Receipt struct {
 
 	// Inclusion information: These fields provide information about the inclusion of the
 	// transaction corresponding to this receipt.
-	BlockHash        common.Hash  `json:"blockHash,omitempty"`
-	BlockNumber      *big.Int     `json:"blockNumber,omitempty"`
-	TransactionIndex uint         `json:"transactionIndex"`
-	Etxs             Transactions `json:"etxs"`
+	BlockHash        common.Hash `json:"blockHash,omitempty"`
+	BlockNumber      *big.Int    `json:"blockNumber,omitempty"`
+	TransactionIndex uint        `json:"transactionIndex"`
+	Etxs             WorkObjects `json:"etxs"`
 }
 
 type receiptMarshaling struct {
@@ -89,7 +89,7 @@ type receiptRLP struct {
 	CumulativeGasUsed uint64
 	Bloom             Bloom
 	Logs              []*Log
-	Etxs              []*Transaction
+	Etxs              []*WorkObject
 }
 
 // storedReceiptRLP is the storage encoding of a receipt used in database version 4.
@@ -99,7 +99,7 @@ type storedReceiptRLP struct {
 	TxHash            common.Hash
 	ContractAddress   common.Address
 	Logs              []*LogForStorage
-	Etxs              []*Transaction
+	Etxs              []*WorkObject
 	GasUsed           uint64
 }
 
@@ -281,9 +281,9 @@ func (r *ReceiptForStorage) ProtoDecode(protoReceipt *ProtoReceiptForStorage, lo
 		}
 		r.Logs = append(r.Logs, (*Log)(log))
 	}
-	for _, protoEtx := range protoReceipt.Etxs.GetTransactions() {
-		etx := new(Transaction)
-		err := etx.ProtoDecode(protoEtx, location)
+	for _, protoEtx := range protoReceipt.Etxs.GetWorkObjects() {
+		etx := new(WorkObject)
+		err := etx.ProtoDecode(protoEtx)
 		if err != nil {
 			return err
 		}
@@ -300,13 +300,13 @@ func (r *ReceiptForStorage) EncodeRLP(w io.Writer) error {
 		PostStateOrStatus: (*Receipt)(r).statusEncoding(),
 		CumulativeGasUsed: r.CumulativeGasUsed,
 		Logs:              make([]*LogForStorage, len(r.Logs)),
-		Etxs:              make([]*Transaction, len(r.Etxs)),
+		Etxs:              make([]*WorkObject, len(r.Etxs)),
 	}
 	for i, log := range r.Logs {
 		enc.Logs[i] = (*LogForStorage)(log)
 	}
 	for i, etx := range r.Etxs {
-		enc.Etxs[i] = (*Transaction)(etx)
+		enc.Etxs[i] = (*WorkObject)(etx)
 	}
 	return rlp.Encode(w, enc)
 }
@@ -338,9 +338,9 @@ func decodeStoredReceiptRLP(r *ReceiptForStorage, blob []byte) error {
 	for i, log := range stored.Logs {
 		r.Logs[i] = (*Log)(log)
 	}
-	r.Etxs = make([]*Transaction, len(stored.Etxs))
+	r.Etxs = make([]*WorkObject, len(stored.Etxs))
 	for i, etx := range stored.Etxs {
-		r.Etxs[i] = (*Transaction)(etx)
+		r.Etxs[i] = (*WorkObject)(etx)
 	}
 	r.Bloom = CreateBloom(Receipts{(*Receipt)(r)})
 

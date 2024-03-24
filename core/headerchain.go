@@ -144,9 +144,9 @@ func NewHeaderChain(db ethdb.Database, engine consensus.Engine, pEtxsRollupFetch
 
 // CollectSubRollup collects the rollup of ETXs emitted from the subordinate
 // chain in the slice which emitted the given block.
-func (hc *HeaderChain) CollectSubRollup(b *types.WorkObject) (types.Transactions, error) {
+func (hc *HeaderChain) CollectSubRollup(b *types.WorkObject) (types.WorkObjects, error) {
 	nodeCtx := hc.NodeCtx()
-	subRollup := types.Transactions{}
+	subRollup := types.WorkObjects{}
 	if nodeCtx < common.ZONE_CTX {
 		// Since in prime the pending etxs are stored in 2 parts, pendingEtxsRollup
 		// consists of region header and subrollups
@@ -228,7 +228,7 @@ func (hc *HeaderChain) GetBloom(hash common.Hash) (*types.Bloom, error) {
 
 // Collect all emmitted ETXs since the last coincident block, but excluding
 // those emitted in this block
-func (hc *HeaderChain) CollectEtxRollup(b *types.WorkObject) (types.Transactions, error) {
+func (hc *HeaderChain) CollectEtxRollup(b *types.WorkObject) (types.WorkObjects, error) {
 	if b.NumberU64(hc.NodeCtx()) == 0 && b.Hash() == hc.config.GenesisHash {
 		return b.ExtTransactions(), nil
 	}
@@ -239,7 +239,7 @@ func (hc *HeaderChain) CollectEtxRollup(b *types.WorkObject) (types.Transactions
 	return hc.collectInclusiveEtxRollup(parent)
 }
 
-func (hc *HeaderChain) collectInclusiveEtxRollup(b *types.WorkObject) (types.Transactions, error) {
+func (hc *HeaderChain) collectInclusiveEtxRollup(b *types.WorkObject) (types.WorkObjects, error) {
 	// Initialize the rollup with ETXs emitted by this block
 	newEtxs := b.ExtTransactions()
 	// Terminate the search if we reached genesis

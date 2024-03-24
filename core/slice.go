@@ -150,7 +150,7 @@ func NewSlice(db ethdb.Database, config *Config, txConfig *TxPoolConfig, txLooku
 // Append takes a proposed header and constructs a local block and attempts to hierarchically append it to the block graph.
 // If this is called from a dominant context a domTerminus must be provided else a common.Hash{} should be used and domOrigin should be set to true.
 // Return of this function is the Etxs generated in the Zone Block, subReorg bool that tells dom if should be mined on, setHead bool that determines if we should set the block as the current head and the error
-func (sl *Slice) Append(header *types.WorkObject, domPendingHeader *types.WorkObject, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.Transactions) (types.Transactions, bool, bool, error) {
+func (sl *Slice) Append(header *types.WorkObject, domPendingHeader *types.WorkObject, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.WorkObjects) (types.WorkObjects, bool, bool, error) {
 	start := time.Now()
 	if len(header.Transactions()) > 0 {
 		fmt.Println("block has a tx")
@@ -246,7 +246,7 @@ func (sl *Slice) Append(header *types.WorkObject, domPendingHeader *types.WorkOb
 	if !domOrigin && nodeCtx != common.ZONE_CTX {
 		cachedInboundEtxs, exists := sl.inboundEtxsCache.Get(block.Hash())
 		if exists && cachedInboundEtxs != nil {
-			newInboundEtxs = cachedInboundEtxs.(types.Transactions)
+			newInboundEtxs = cachedInboundEtxs.(types.WorkObjects)
 		} else {
 			newInboundEtxs, _, err = sl.CollectNewlyConfirmedEtxs(block, block.Location())
 			if err != nil {
@@ -271,7 +271,7 @@ func (sl *Slice) Append(header *types.WorkObject, domPendingHeader *types.WorkOb
 	time5 := common.PrettyDuration(time.Since(start))
 
 	time6 := common.PrettyDuration(time.Since(start))
-	var subPendingEtxs types.Transactions
+	var subPendingEtxs types.WorkObjects
 	var subReorg bool
 	var setHead bool
 	var time6_1 common.PrettyDuration
@@ -334,7 +334,7 @@ func (sl *Slice) Append(header *types.WorkObject, domPendingHeader *types.WorkOb
 		if order < nodeCtx {
 			// Store the inbound etxs for dom blocks that did not get picked and use
 			// it in the future if dom switch happens
-			rawdb.WriteInboundEtxs(sl.sliceDb, block.Hash(), newInboundEtxs)
+			rawdb.WriteWorkObjects(sl.sliceDb, newInboundEtxs, types.TxObject, nodeCtx)
 		}
 
 		setHead = sl.poem(sl.engine.TotalLogS(block), sl.engine.TotalLogS(sl.hc.CurrentHeader()))
@@ -689,16 +689,16 @@ func (sl *Slice) generateSlicePendingHeader(block *types.WorkObject, newTermini 
 }
 
 // CollectNewlyConfirmedEtxs collects all newly confirmed ETXs since the last coincident with the given location
-func (sl *Slice) CollectNewlyConfirmedEtxs(block *types.WorkObject, location common.Location) (types.Transactions, types.Transactions, error) {
+func (sl *Slice) CollectNewlyConfirmedEtxs(block *types.WorkObject, location common.Location) (types.WorkObjects, types.WorkObjects, error) {
 	nodeLocation := sl.NodeLocation()
 	nodeCtx := sl.NodeCtx()
 	// Collect rollup of ETXs from the subordinate node's manifest
-	subRollup := types.Transactions{}
+	subRollup := types.WorkObjects{}
 	var err error
 	if nodeCtx < common.ZONE_CTX {
 		rollup, exists := sl.hc.subRollupCache.Get(block.Hash())
 		if exists && rollup != nil {
-			subRollup = rollup.(types.Transactions)
+			subRollup = rollup.(types.WorkObjects)
 			sl.logger.WithFields(log.Fields{
 				"Hash": block.Hash(),
 				"len":  len(subRollup),
@@ -1198,7 +1198,7 @@ func (sl *Slice) init(genesis *Genesis) error {
 		sl.WriteBestPhKey(genesisHash)
 		sl.hc.SetCurrentHeader(genesisHeader)
 		// Create empty pending ETX entry for genesis block -- genesis may not emit ETXs
-		emptyPendingEtxs := types.Transactions{}
+		emptyPendingEtxs := types.WorkObjects{}
 		rawdb.WritePendingEtxs(sl.sliceDb, types.PendingEtxs{Header: genesisHeader, Etxs: emptyPendingEtxs})
 		rawdb.WritePendingEtxsRollup(sl.sliceDb, types.PendingEtxsRollup{Header: genesisHeader, EtxsRollup: emptyPendingEtxs})
 		err := sl.hc.AddBloom(types.Bloom{}, genesisHeader.Hash())
@@ -1258,7 +1258,7 @@ func (sl *Slice) ConstructLocalMinedBlock(wo *types.WorkObject) (*types.WorkObje
 		uncles[i] = uncle
 		sl.logger.WithField("hash", uncle.Hash()).Debug("Pending Block uncle")
 	}
-	etxs := make(types.Transactions, len(pendingBlockBody.ExtTransactions()))
+	etxs := make(types.WorkObjects, len(pendingBlockBody.ExtTransactions()))
 	for i, etx := range pendingBlockBody.ExtTransactions() {
 		etxs[i] = etx
 	}

@@ -654,6 +654,12 @@ func DeleteBlockWithoutNumber(db ethdb.KeyValueWriter, hash common.Hash, number 
 	deleteHeaderWithoutNumber(db, hash, number)
 }
 
+func WriteWorkObjects(db ethdb.KeyValueWriter, workObjects types.WorkObjects, woType int, nodeCtx int) {
+	for _, workObject := range workObjects {
+		WriteWorkObject(db, workObject.Hash(), workObject, woType, nodeCtx)
+	}
+}
+
 // ReadWorkObjectBody retreive's the work object body stored in hash.
 func ReadWorkObjectBody(db ethdb.Reader, hash common.Hash, location common.Location) *types.WorkObjectBody {
 	key := workObjectBodyKey(hash)

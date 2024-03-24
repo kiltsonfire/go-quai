@@ -101,7 +101,7 @@ func (v *BlockValidator) ValidateBody(block *types.WorkObject) error {
 // transition, such as amount of used gas, the receipt roots and the state root
 // itself. ValidateState returns a database batch if the validation was a success
 // otherwise nil and an error is returned.
-func (v *BlockValidator) ValidateState(block *types.WorkObject, statedb *state.StateDB, receipts types.Receipts, utxoEtxs []*types.Transaction, etxSet *types.EtxSet, usedGas uint64) error {
+func (v *BlockValidator) ValidateState(block *types.WorkObject, statedb *state.StateDB, receipts types.Receipts, utxoEtxs []*types.WorkObject, etxSet *types.EtxSet, usedGas uint64) error {
 	start := time.Now()
 	header := types.CopyHeader(block.Header())
 	time1 := common.PrettyDuration(time.Since(start))
@@ -126,7 +126,7 @@ func (v *BlockValidator) ValidateState(block *types.WorkObject, statedb *state.S
 	}
 	time5 := common.PrettyDuration(time.Since(start))
 	// Collect ETXs emitted from each successful transaction
-	var emittedEtxs types.Transactions
+	var emittedEtxs types.WorkObjects
 	for _, receipt := range receipts {
 		if receipt.Status == types.ReceiptStatusSuccessful {
 			emittedEtxs = append(emittedEtxs, receipt.Etxs...)
