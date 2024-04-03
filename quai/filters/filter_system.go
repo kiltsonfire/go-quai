@@ -73,7 +73,7 @@ type subscription struct {
 	logsCrit  quai.FilterQuery
 	logs      chan []*types.Log
 	hashes    chan []common.Hash
-	headers   chan []*types.WorkObject
+	headers   chan *types.WorkObjects
 	header    chan *types.WorkObject
 	installed chan struct{} // closed when the filter is installed
 	err       chan error    // closed when the filter is uninstalled
@@ -240,7 +240,7 @@ func (es *EventSystem) subscribeMinedPendingLogs(crit quai.FilterQuery, logs cha
 		created:   time.Now(),
 		logs:      logs,
 		hashes:    make(chan []common.Hash),
-		headers:   make(chan []*types.WorkObject),
+		headers:   make(chan *types.WorkObjects),
 		installed: make(chan struct{}),
 		err:       make(chan error),
 	}
@@ -257,7 +257,7 @@ func (es *EventSystem) subscribeLogs(crit quai.FilterQuery, logs chan []*types.L
 		created:   time.Now(),
 		logs:      logs,
 		hashes:    make(chan []common.Hash),
-		headers:   make(chan []*types.WorkObject),
+		headers:   make(chan *types.WorkObjects),
 		installed: make(chan struct{}),
 		err:       make(chan error),
 	}
@@ -274,7 +274,7 @@ func (es *EventSystem) subscribePendingLogs(crit quai.FilterQuery, logs chan []*
 		created:   time.Now(),
 		logs:      logs,
 		hashes:    make(chan []common.Hash),
-		headers:   make(chan []*types.WorkObject),
+		headers:   make(chan *types.WorkObjects),
 		installed: make(chan struct{}),
 		err:       make(chan error),
 	}
@@ -283,7 +283,7 @@ func (es *EventSystem) subscribePendingLogs(crit quai.FilterQuery, logs chan []*
 
 // SubscribeNewHeads creates a subscription that writes the header of a block that is
 // imported in the chain.
-func (es *EventSystem) SubscribeNewHeads(headers chan []*types.WorkObject) *Subscription {
+func (es *EventSystem) SubscribeNewHeads(headers chan *types.WorkObjects) *Subscription {
 	sub := &subscription{
 		id:        rpc.NewID(),
 		typ:       BlocksSubscription,
@@ -306,7 +306,7 @@ func (es *EventSystem) SubscribePendingTxs(hashes chan []common.Hash) *Subscript
 		created:   time.Now(),
 		logs:      make(chan []*types.Log),
 		hashes:    hashes,
-		headers:   make(chan []*types.WorkObject),
+		headers:   make(chan *types.WorkObjects),
 		installed: make(chan struct{}),
 		err:       make(chan error),
 	}
@@ -360,7 +360,7 @@ func (es *EventSystem) handleTxsEvent(filters filterIndex, ev core.NewTxsEvent) 
 
 func (es *EventSystem) handleChainEvent(filters filterIndex, ev core.ChainEvent) {
 	for _, f := range filters[BlocksSubscription] {
-		f.headers <- []*types.WorkObject{ev.Block}
+		f.headers <- &types.WorkObjects{ev.Block}
 	}
 }
 
