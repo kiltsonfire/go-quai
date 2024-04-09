@@ -33,6 +33,11 @@ message ProtoHeader {
   optional common.ProtoHash etx_eligible_slices = 25;
   optional common.ProtoHash prime_terminus = 26;
   optional common.ProtoHash interlink_root_hash = 27;
+  optional bytes quai_to_qi = 28;
+  optional bytes qi_to_quai = 29;
+  optional bytes exchange_rate = 30;
+  optional bytes mined_quai = 31;
+  optional bytes mined_qi = 32;
 }
 
 message ProtoTransaction {

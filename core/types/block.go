@@ -106,7 +106,7 @@ type Header struct {
 	parentUncledSubDeltaS []*big.Int     `json:"parentUncledSubDeltaS" gencodec:"required"`
 	efficiencyScore       uint16         `json:"efficiencyScore"       gencodec:"required"`
 	thresholdCount        uint16         `json:"thresholdCount"        gencodec:"required"`
-	expansionNumber       uint8          `json:"expansionNumber"     	gencodec:"required"`
+	expansionNumber       uint8          `json:"expansionNumber"       gencodec:"required"`
 	etxEligibleSlices     common.Hash    `json:"etxEligibleSlices"     gencodec:"required"`
 	primeTerminus         common.Hash    `json:"primeTerminus"         gencodec:"required"`
 	interlinkRootHash     common.Hash    `json:"interlinkRootHash"     gencodec:"required"`
@@ -116,6 +116,11 @@ type Header struct {
 	gasUsed               uint64         `json:"gasUsed"               gencodec:"required"`
 	baseFee               *big.Int       `json:"baseFeePerGas"         gencodec:"required"`
 	extra                 []byte         `json:"extraData"             gencodec:"required"`
+	quaiToQi              *big.Int       `json:"quaiToQiRatio"         gencodec:"required"`
+	qiToQuai              *big.Int       `json:"qiToQuaiRatio"         gencodec:"required"`
+	exchangeRate          *big.Int       `json:"exchangeRate"          gencodec:"required"`
+	minedQuai             *big.Int       `json:"minedQuai"             gencodec:"required"`
+	minedQi               *big.Int       `json:"minedQi"               gencodec:"required"`
 
 	// caches
 	hash     atomic.Value
@@ -137,6 +142,11 @@ type headerMarshaling struct {
 	Time                  hexutil.Uint64
 	Extr                  hexutil.Bytes
 	Hash                  common.Hash `json:"hash"` // adds call to Hash() in MarshalJSON
+	QuaiToQi              *hexutil.Big
+	QiToQuai              *hexutil.Big
+	ExchangeRate          *hexutil.Big
+	MinedQuai             *hexutil.Big
+	MinedQi               *hexutil.Big
 }
 
 // Construct an empty header
@@ -165,6 +175,11 @@ func EmptyHeader(nodeCtx int) *WorkObject {
 	h.etxEligibleSlices = EmptyHash
 	h.primeTerminus = EmptyRootHash
 	h.interlinkRootHash = EmptyRootHash
+	h.quaiToQi = big.NewInt(0)
+	h.qiToQuai = big.NewInt(0)
+	h.exchangeRate = big.NewInt(0)
+	h.minedQuai = big.NewInt(0)
+	h.minedQi = big.NewInt(0)
 
 	for i := 0; i < common.HierarchyDepth; i++ {
 		h.manifestHash[i] = EmptyRootHash
@@ -236,6 +251,11 @@ func (h *Header) ProtoEncode() (*ProtoHeader, error) {
 		ExpansionNumber:   &expansionNumber,
 		BaseFee:           h.BaseFee().Bytes(),
 		Extra:             h.Extra(),
+		QuaiToQi:          h.QuaiToQi().Bytes(),
+		QiToQuai:          h.QiToQuai().Bytes(),
+		ExchangeRate:      h.ExchangeRate().Bytes(),
+		MinedQuai:         h.MinedQuai().Bytes(),
+		MinedQi:           h.MinedQi().Bytes(),
 	}
 
 	for i := 0; i < common.HierarchyDepth; i++ {
@@ -334,6 +354,21 @@ func (h *Header) ProtoDecode(protoHeader *ProtoHeader, location common.Location)
 	if protoHeader.PrimeTerminus == nil {
 		return errors.New("missing required field 'PrimeTerminus' in Header")
 	}
+	if protoHeader.QuaiToQi == nil {
+		return errors.New("missing required field 'QuaiToQi' in Header")
+	}
+	if protoHeader.QiToQuai == nil {
+		return errors.New("missing required field 'QiToQuai' in Header")
+	}
+	if protoHeader.ExchangeRate == nil {
+		return errors.New("missing required field 'ExchangeRate' in Header")
+	}
+	if protoHeader.MinedQuai == nil {
+		return errors.New("missing required field 'MinedQuai' in Header")
+	}
+	if protoHeader.MinedQi == nil {
+		return errors.New("missing required field 'MinedQi' in Header")
+	}
 
 	// Initialize the array fields before setting
 	h.parentHash = make([]common.Hash, common.HierarchyDepth-1)
@@ -374,6 +409,11 @@ func (h *Header) ProtoDecode(protoHeader *ProtoHeader, location common.Location)
 	h.SetThresholdCount(uint16(protoHeader.GetThresholdCount()))
 	h.SetExpansionNumber(uint8(protoHeader.GetExpansionNumber()))
 	h.SetEtxEligibleSlices(common.BytesToHash(protoHeader.GetEtxEligibleSlices().GetValue()))
+	h.SetQuaiToQi(new(big.Int).SetBytes(protoHeader.GetQuaiToQi()))
+	h.SetQiToQuai(new(big.Int).SetBytes(protoHeader.GetQiToQuai()))
+	h.SetExchangeRate(new(big.Int).SetBytes(protoHeader.GetExchangeRate()))
+	h.SetMinedQuai(new(big.Int).SetBytes(protoHeader.GetMinedQuai()))
+	h.SetMinedQi(new(big.Int).SetBytes(protoHeader.GetMinedQi()))
 
 	return nil
 }
@@ -411,6 +451,11 @@ func (h *Header) RPCMarshalHeader() map[string]interface{} {
 		"thresholdCount":      hexutil.Uint64(h.ThresholdCount()),
 		"expansionNumber":     hexutil.Uint64(h.ExpansionNumber()),
 		"etxEligibleSlices":   h.EtxEligibleSlices(),
+		"quaiToQi":            (*hexutil.Big)(h.QuaiToQi()),
+		"qiToQuai":            (*hexutil.Big)(h.QiToQuai()),
+		"exchangeRate":        (*hexutil.Big)(h.ExchangeRate()),
+		"minedQuai":           (*hexutil.Big)(h.MinedQuai()),
+		"minedQi":             (*hexutil.Big)(h.MinedQi()),
 	}
 
 	number := make([]*hexutil.Big, common.HierarchyDepth)
@@ -516,6 +561,22 @@ func (h *Header) BaseFee() *big.Int {
 func (h *Header) Extra() []byte                  { return common.CopyBytes(h.extra) }
 func (h *Header) PrimeTerminus() common.Hash     { return h.primeTerminus }
 func (h *Header) InterlinkRootHash() common.Hash { return h.interlinkRootHash }
+
+func (h *Header) QuaiToQi() *big.Int {
+	return h.quaiToQi
+}
+func (h *Header) QiToQuai() *big.Int {
+	return h.qiToQuai
+}
+func (h *Header) ExchangeRate() *big.Int {
+	return h.exchangeRate
+}
+func (h *Header) MinedQuai() *big.Int {
+	return h.minedQuai
+}
+func (h *Header) MinedQi() *big.Int {
+	return h.minedQi
+}
 
 func (h *Header) SetParentHash(val common.Hash, nodeCtx int) {
 	h.hash = atomic.Value{}     // clear hash cache
@@ -653,6 +714,32 @@ func (h *Header) SetExtra(val []byte) {
 	copy(h.extra, val)
 }
 
+func (h *Header) SetQuaiToQi(val *big.Int) {
+	h.hash = atomic.Value{}
+	h.sealHash = atomic.Value{}
+	h.quaiToQi = new(big.Int).Set(val)
+}
+func (h *Header) SetQiToQuai(val *big.Int) {
+	h.hash = atomic.Value{}
+	h.sealHash = atomic.Value{}
+	h.qiToQuai = new(big.Int).Set(val)
+}
+func (h *Header) SetExchangeRate(val *big.Int) {
+	h.hash = atomic.Value{}
+	h.sealHash = atomic.Value{}
+	h.exchangeRate = new(big.Int).Set(val)
+}
+func (h *Header) SetMinedQuai(val *big.Int) {
+	h.hash = atomic.Value{}
+	h.sealHash = atomic.Value{}
+	h.minedQuai = new(big.Int).Set(val)
+}
+func (h *Header) SetMinedQi(val *big.Int) {
+	h.hash = atomic.Value{}
+	h.sealHash = atomic.Value{}
+	h.minedQi = new(big.Int).Set(val)
+}
+
 // Array accessors
 func (h *Header) ParentHashArray() []common.Hash   { return h.parentHash }
 func (h *Header) ManifestHashArray() []common.Hash { return h.manifestHash }
@@ -701,6 +788,11 @@ func (h *Header) SealEncode() *ProtoHeader {
 		ThresholdCount:    &thresholdCount,
 		ExpansionNumber:   &expansionNumber,
 		Extra:             h.Extra(),
+		QiToQuai:          h.QiToQuai().Bytes(),
+		QuaiToQi:          h.QuaiToQi().Bytes(),
+		ExchangeRate:      h.ExchangeRate().Bytes(),
+		MinedQuai:         h.MinedQuai().Bytes(),
+		MinedQi:           h.MinedQi().Bytes(),
 	}
 
 	for i := 0; i < common.HierarchyDepth; i++ {
@@ -875,6 +967,11 @@ func CopyHeader(h *Header) *Header {
 	cpy.SetExpansionNumber(h.ExpansionNumber())
 	cpy.SetEtxEligibleSlices(h.EtxEligibleSlices())
 	cpy.SetBaseFee(h.BaseFee())
+	cpy.SetQuaiToQi(h.QuaiToQi())
+	cpy.SetQiToQuai(h.QiToQuai())
+	cpy.SetExchangeRate(h.ExchangeRate())
+	cpy.SetMinedQuai(h.MinedQuai())
+	cpy.SetMinedQi(h.MinedQi())
 	return &cpy
 }
 
