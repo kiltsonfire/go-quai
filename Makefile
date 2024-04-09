@@ -30,7 +30,7 @@ mocks:
 ## generate protobuf files
 protogen:
 	@echo "Generating protobuf files"
-	@find . -name '*.proto' -exec protoc --go_out=. --go_opt=paths=source_relative {} \;
+	@find . -name '*.proto' -exec protoc --go_out=. --experimental_allow_proto3_optional --go_opt=paths=source_relative {} \;
 
 debug:
 	go build -gcflags=all="-N -l" -v -o build/bin/go-quai ./cmd/go-quai
