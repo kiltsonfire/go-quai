@@ -1131,6 +1131,21 @@ func (w *worker) prepareWork(genParams *generateParams, wo *types.WorkObject) (*
 		newWo.Header().SetInterlinkRootHash(interlinkRootHash)
 	}
 
+	if nodeCtx == common.PRIME_CTX {
+		if w.hc.IsGenesisHash(parent.Hash()) {
+			header.SetQiToQuai(big.NewInt(0))
+			header.SetQuaiToQi(big.NewInt(0))
+			header.SetExchangeRate(parent.Header().ExchangeRate())
+		} else {
+			newQiToQuai, newQuaiToQi, newExchangeRate, err := w.calculateExchangeRate(parent)
+			if err != nil {
+				header.SetQiToQuai(newQiToQuai)
+				header.SetQuaiToQi(newQuaiToQi)
+				header.SetExchangeRate(newExchangeRate)
+			}
+		}
+	}
+
 	// Only zone should calculate state
 	if nodeCtx == common.ZONE_CTX && w.hc.ProcessingState() {
 		newWo.Header().SetExtra(w.extra)
@@ -1190,6 +1205,31 @@ func (w *worker) prepareWork(genParams *generateParams, wo *types.WorkObject) (*
 		return &environment{wo: proposedWo}, nil
 	}
 
+}
+
+// calculateExchangeRate calculates the exchange rate for the block
+func (w *worker) calculateExchangeRate(parent *types.Block) (*big.Int, *big.Int, *big.Int, error) {
+	qiToQuai := parent.Header().QiToQuai()
+	quaiToQi := parent.Header().QuaiToQi()
+
+	//Calculate the new amounts of qi and quai being exchanged
+	for _, etx := range parent.ExtTransactions() {
+		if etx.Conversion() {
+			if etx.To().IsInQuaiLedgerScope() {
+				qiToQuai = new(big.Int).Add(etx.Value(), qiToQuai)
+			} else if etx.To().IsInQiLedgerScope() {
+				quaiToQi = new(big.Int).Add(etx.Value(), quaiToQi)
+			}
+		}
+	}
+
+	//Calculate the new exchange rate
+	//calculate the new error rate this value should range from -1 to 1
+	errorRate := new(big.Int).Div(new(big.Int).Sub(qiToQuai, quaiToQi), new(big.Int).Add(qiToQuai, quaiToQi))
+
+	exchangeRate := new(big.Int).Add(parent.Header().ExchangeRate(), errorRate)
+
+	return qiToQuai, quaiToQi, exchangeRate, nil
 }
 
 // fillTransactions retrieves the pending transactions from the txpool and fills them
