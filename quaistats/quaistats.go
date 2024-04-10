@@ -1256,17 +1256,18 @@ func (s *Service) assembleBlockDetailStats(block *types.WorkObject) *blockDetail
 			woCount += 1
 		}
 	}
+	diffToBigBits := s.engine.DiffToBigBits(block)
 	qiType := block.Coinbase().IsInQiLedgerScope()
 	difficulty := block.Difficulty().String()
-	quaiPerQi := misc.QiToQuai(block.WorkObjectHeader(), big.NewInt(1)).String()
+	quaiPerQi := misc.QiToQuai(block, big.NewInt(1), diffToBigBits).String()
 	var quaiReward *big.Int
 	var qiReward *big.Int
 	if qiType {
-		qiReward = misc.CalculateReward(block.WorkObjectHeader())
-		quaiReward = misc.QiToQuai(block.WorkObjectHeader(), qiReward)
+		qiReward = misc.CalculateReward(block, diffToBigBits)
+		quaiReward = misc.QiToQuai(block, qiReward, diffToBigBits)
 	} else {
-		quaiReward = misc.CalculateReward(block.WorkObjectHeader())
-		qiReward = misc.QuaiToQi(block.WorkObjectHeader(), quaiReward)
+		quaiReward = misc.CalculateReward(block, diffToBigBits)
+		qiReward = misc.QuaiToQi(block, quaiReward, diffToBigBits)
 	}
 
 	// Assemble and return the block stats

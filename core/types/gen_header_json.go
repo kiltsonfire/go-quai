@@ -12,7 +12,6 @@ import (
 )
 
 var _ = (*headerMarshaling)(nil)
-
 // MarshalJSON marshals as JSON.
 func (h Header) MarshalJSON() ([]byte, error) {
 	var enc struct {
@@ -41,6 +40,14 @@ func (h Header) MarshalJSON() ([]byte, error) {
 		GasUsed     					hexutil.Uint64		 	`json:"gasUsed"            			gencodec:"required"`
 		BaseFee     					*hexutil.Big   		 	`json:"baseFeePerGas"      			gencodec:"required"`
 		Extra       					hexutil.Bytes  		 	`json:"extraData"          			gencodec:"required"`
+		QuaiToQi    					*hexutil.Big   		 	`json:"quaiToQi"          			gencodec:"required"`
+		QiToQuai    					*hexutil.Big   		 	`json:"qiToQuai"          			gencodec:"required"`
+		ExchangeRate					*hexutil.Big   		 	`json:"exchangeRate"      			gencodec:"required"`
+		MinedQuai						*hexutil.Big   		 	`json:"minedQuai"          			gencodec:"required"`
+		MinedQi							*hexutil.Big   		 	`json:"minedQi"          			gencodec:"required"`
+		deltaQi							*hexutil.Big   		 	`json:"deltaQi"          			gencodec:"required"`
+		deltaQuai						*hexutil.Big   		 	`json:"deltaQuai"          			gencodec:"required"`
+
 	}
 	// Initialize the enc struct
 	enc.ParentEntropy = make([]*hexutil.Big, common.HierarchyDepth)
@@ -78,6 +85,13 @@ func (h Header) MarshalJSON() ([]byte, error) {
 	enc.EtxEligibleSlices = h.EtxEligibleSlices()
 	enc.BaseFee = (*hexutil.Big)(h.BaseFee())
 	enc.Extra = hexutil.Bytes(h.Extra())
+	enc.QuaiToQi = (*hexutil.Big)(h.QuaiToQi())
+	enc.QiToQuai = (*hexutil.Big)(h.QiToQuai())
+	enc.ExchangeRate = (*hexutil.Big)(h.ExchangeRate())
+	enc.MinedQuai = (*hexutil.Big)(h.MinedQuai())
+	enc.MinedQi = (*hexutil.Big)(h.MinedQi())
+	enc.deltaQi = (*hexutil.Big)(h.DeltaQi())
+	enc.deltaQuai = (*hexutil.Big)(h.DeltaQuai())
 	raw, err := json.Marshal(&enc)
 	return raw, err
 }
@@ -110,6 +124,13 @@ func (h *Header) UnmarshalJSON(input []byte) error {
 		GasUsed     					*hexutil.Uint64		 	`json:"gasUsed"            			gencodec:"required"`
 		BaseFee     					*hexutil.Big   		 	`json:"baseFeePerGas"      			gencodec:"required"`
 		Extra       					hexutil.Bytes  		 	`json:"extraData"          			gencodec:"required"`
+		QuaiToQi    					*hexutil.Big   		 	`json:"quaiToQi"          			gencodec:"required"`
+		QiToQuai    					*hexutil.Big   		 	`json:"qiToQuai"          			gencodec:"required"`
+		ExchangeRate					*hexutil.Big   		 	`json:"exchangeRate"      			gencodec:"required"`
+		MinedQuai						*hexutil.Big   		 	`json:"minedQuai"          			gencodec:"required"`
+		MinedQi							*hexutil.Big   		 	`json:"minedQi"          			gencodec:"required"`
+		DeltaQi							*hexutil.Big   		 	`json:"deltaQi"          			gencodec:"required"`
+		DeltaQuai						*hexutil.Big   		 	`json:"deltaQuai"          			gencodec:"required"`
 	}
 	if err := json.Unmarshal(input, &dec); err != nil {
 		return err
@@ -133,7 +154,7 @@ func (h *Header) UnmarshalJSON(input []byte) error {
 		return errors.New("missing required field 'extTransactionsRoot' for Header")
 	}
 	if dec.EtxSetRoot == nil {
-		return errors.New("missing required field 'etxSetRoot' for Header")
+		return errors.New("missing required field 'etxSetHash' for Header")
 	}
 	if dec.EtxRollupHash == nil {
 		return errors.New("missing required field 'extRollupRoot' for Header")
@@ -182,6 +203,27 @@ func (h *Header) UnmarshalJSON(input []byte) error {
 	}
 	if dec.BaseFee == nil {
 		return errors.New("missing required field 'baseFee' for Header")
+	}
+	if dec.QuaiToQi == nil {
+		return errors.New("missing required field 'quaiToQi' for Header")
+	}
+	if dec.QiToQuai == nil {
+		return errors.New("missing required field 'qiToQuai' for Header")
+	}
+	if dec.ExchangeRate == nil {
+		return errors.New("missing required field 'exchangeRate' for Header")
+	}
+	if dec.MinedQuai == nil {
+		return errors.New("missing required field 'minedQuai' for Header")
+	}
+	if dec.MinedQi == nil {
+		return errors.New("missing required field 'minedQi' for Header")
+	}
+	if dec.DeltaQi == nil {
+		return errors.New("missing required field 'deltaQi' for Header")
+	}
+	if dec.DeltaQuai == nil {
+		return errors.New("missing required field 'deltaQuai' for Header")
 	}
 	if dec.Extra == nil {
 		return errors.New("missing required field 'extraData' for Header")
@@ -237,6 +279,13 @@ func (h *Header) UnmarshalJSON(input []byte) error {
 	h.SetEtxEligibleSlices(*dec.EtxEligibleSlices)
 	h.SetBaseFee((*big.Int)(dec.BaseFee))
 	h.SetExtra(dec.Extra)
+	h.SetQuaiToQi((*big.Int)(dec.QuaiToQi))
+	h.SetQiToQuai((*big.Int)(dec.QiToQuai))
+	h.SetExchangeRate((*big.Int)(dec.ExchangeRate))
+	h.SetMinedQuai((*big.Int)(dec.MinedQuai))
+	h.SetMinedQi((*big.Int)(dec.MinedQi))
+	h.SetDeltaQi((*big.Int)(dec.DeltaQi))
+	h.SetDeltaQuai((*big.Int)(dec.DeltaQuai))
 	return nil
 }
 

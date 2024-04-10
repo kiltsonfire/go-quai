@@ -313,7 +313,7 @@ func (p *StateProcessor) Process(block *types.WorkObject) (types.Receipts, []*ty
 
 	// Add an etx for each workshare for it to be rewarded
 	for i, uncle := range block.Uncles() {
-		reward := misc.CalculateReward(uncle)
+		reward := misc.CalculateReward(block, p.engine.DiffToBigBits(block))
 		uncleCoinbase := uncle.Coinbase()
 		// parent hash encoding for populating into the originating tx hash for coinbase
 		origin := block.ParentHash(nodeCtx)
@@ -352,7 +352,7 @@ func (p *StateProcessor) Process(block *types.WorkObject) (types.Receipts, []*ty
 				if primeTerminus == nil {
 					return nil, nil, nil, nil, 0, fmt.Errorf("could not find prime terminus header %032x", header.PrimeTerminus())
 				}
-				totalFees.Add(totalFees, misc.QiToQuai(primeTerminus.WorkObjectHeader(), fees))
+				totalFees.Add(totalFees, misc.QiToQuai(primeTerminus, fees, p.engine.DiffToBigBits(parent)))
 			}
 			totalEtxCoinbaseTime += time.Since(startEtxCoinbase)
 			totalQiTime += time.Since(qiTimeBefore)
@@ -442,7 +442,7 @@ func (p *StateProcessor) Process(block *types.WorkObject) (types.Receipts, []*ty
 					if primeTerminus == nil {
 						return nil, nil, nil, nil, 0, fmt.Errorf("could not find prime terminus header %032x", header.PrimeTerminus())
 					}
-					value := misc.QuaiToQi(primeTerminus.WorkObjectHeader(), etx.Value()) // convert Quai to Qi
+					value := misc.QuaiToQi(primeTerminus, etx.Value(), p.engine.DiffToBigBits(parent)) // convert Quai to Qi
 					txGas := etx.Gas()
 					if txGas < params.TxGas {
 						continue
@@ -502,8 +502,7 @@ func (p *StateProcessor) Process(block *types.WorkObject) (types.Receipts, []*ty
 					if primeTerminus == nil {
 						return nil, nil, nil, nil, 0, fmt.Errorf("could not find prime terminus header %032x", header.PrimeTerminus())
 					}
-					// Convert Qi to Quai
-					msg.SetValue(misc.QiToQuai(primeTerminus.WorkObjectHeader(), etx.Value()))
+					msg.SetValue(misc.QiToQuai(primeTerminus, etx.Value(), p.engine.DiffToBigBits(primeTerminus)))
 					msg.SetData([]byte{}) // data is not used in conversion
 					p.logger.Infof("Converting Qi to Quai for ETX %032x with value %d lock %d\n", tx.Hash(), msg.Value().Uint64(), msg.Lock().Uint64())
 				}
@@ -521,7 +520,7 @@ func (p *StateProcessor) Process(block *types.WorkObject) (types.Receipts, []*ty
 					if primeTerminus == nil {
 						return nil, nil, nil, nil, 0, fmt.Errorf("could not find prime terminus header %032x", header.PrimeTerminus())
 					}
-					totalFees.Add(totalFees, misc.QuaiToQi(primeTerminus.WorkObjectHeader(), quaiFees))
+					totalFees.Add(totalFees, misc.QuaiToQi(primeTerminus, quaiFees, p.engine.DiffToBigBits(parent)))
 				}
 				totalEtxGas += receipt.GasUsed
 				timeDelta := time.Since(startTimeEtx)
@@ -544,7 +543,7 @@ func (p *StateProcessor) Process(block *types.WorkObject) (types.Receipts, []*ty
 				if primeTerminus == nil {
 					return nil, nil, nil, nil, 0, fmt.Errorf("could not find prime terminus header %032x", header.PrimeTerminus())
 				}
-				totalFees.Add(totalFees, misc.QuaiToQi(primeTerminus.WorkObjectHeader(), quaiFees))
+				totalFees.Add(totalFees, misc.QuaiToQi(primeTerminus, quaiFees, p.engine.DiffToBigBits(parent)))
 			}
 		} else {
 			return nil, nil, nil, nil, 0, ErrTxTypeNotSupported
@@ -579,7 +578,7 @@ func (p *StateProcessor) Process(block *types.WorkObject) (types.Receipts, []*ty
 		return nil, nil, nil, nil, 0, fmt.Errorf("total gas used by ETXs %d is not within the range %d to %d", totalEtxGas, minimumEtxGas, maximumEtxGas)
 	}
 
-	coinbaseReward := misc.CalculateReward(block.WorkObjectHeader())
+	coinbaseReward := misc.CalculateReward(block, p.engine.DiffToBigBits(block))
 	blockReward := new(big.Int).Add(coinbaseReward, totalFees)
 	// parent hash encoding for populating into the originating tx hash for coinbase
 	origin := block.ParentHash(nodeCtx)
@@ -860,7 +859,7 @@ func ValidateQiTxOutputsAndSignature(tx *types.Transaction, chain ChainContext, 
 		return nil, fmt.Errorf("tx %032x has too many ETXs to calculate required gas", tx.Hash())
 	}
 	minimumFeeInQuai := new(big.Int).Mul(big.NewInt(int64(requiredGas)), currentHeader.BaseFee())
-	minimumFee := misc.QuaiToQi(currentHeader.WorkObjectHeader(), minimumFeeInQuai)
+	minimumFee := misc.QuaiToQi(currentHeader, minimumFeeInQuai, chain.Engine().DiffToBigBits(currentHeader))
 	if txFeeInQit.Cmp(minimumFee) < 0 {
 		return nil, fmt.Errorf("tx %032x has insufficient fee for base fee, have %d want %d", tx.Hash(), txFeeInQit.Uint64(), minimumFee.Uint64())
 	}
@@ -1093,7 +1092,8 @@ func ProcessQiTx(tx *types.Transaction, chain ChainContext, updateState bool, ch
 		return nil, nil, fmt.Errorf("tx %032x has too many ETXs to calculate required gas", tx.Hash()), nil
 	}
 	minimumFeeInQuai := new(big.Int).Mul(big.NewInt(int64(requiredGas)), currentHeader.BaseFee())
-	minimumFee := misc.QuaiToQi(currentHeader.WorkObjectHeader(), minimumFeeInQuai)
+	minimumFee := misc.QuaiToQi(currentHeader, minimumFeeInQuai, chain.Engine().DiffToBigBits(currentHeader))
+	log.Global.Infof("Minimum fee for tx %032x is %d", tx.Hash(), minimumFee.Uint64())
 	if txFeeInQit.Cmp(minimumFee) < 0 {
 		return nil, nil, fmt.Errorf("tx %032x has insufficient fee for base fee, have %d want %d", tx.Hash(), txFeeInQit.Uint64(), minimumFee.Uint64()), nil
 	}
@@ -1101,9 +1101,10 @@ func ProcessQiTx(tx *types.Transaction, chain ChainContext, updateState bool, ch
 	txFeeInQit.Sub(txFeeInQit, minimumFee)
 	if conversion {
 		// Since this transaction contains a conversion, the rest of the tx gas is given to conversion
-		remainingTxFeeInQuai := misc.QiToQuai(currentHeader.WorkObjectHeader(), txFeeInQit)
+		remainingTxFeeInQuai := misc.QiToQuai(currentHeader, txFeeInQit, chain.Engine().DiffToBigBits(currentHeader))
 		// Fee is basefee * gas, so gas remaining is fee remaining / basefee
 		remainingGas := new(big.Int).Div(remainingTxFeeInQuai, currentHeader.BaseFee())
+		remainingGas.Div(remainingGas, big.NewInt(int64(len(etxs))))
 		if remainingGas.Uint64() > (currentHeader.GasLimit() / params.MinimumEtxGasDivisor) {
 			// Limit ETX gas to max ETX gas limit (the rest is burned)
 			remainingGas = new(big.Int).SetUint64(currentHeader.GasLimit() / params.MinimumEtxGasDivisor)
@@ -1264,7 +1265,7 @@ func (p *StateProcessor) Apply(batch ethdb.Batch, block *types.WorkObject) ([]*t
 // and uses the input parameters for its environment. It returns the receipt
 // for the transaction, gas used and an error if the transaction failed,
 // indicating the block was invalid.
-func ApplyTransaction(config *params.ChainConfig, parent *types.WorkObject, parentOrder int, bc ChainContext, author *common.Address, gp *types.GasPool, statedb *state.StateDB, header *types.WorkObject, tx *types.Transaction, usedGas *uint64, cfg vm.Config, etxRLimit, etxPLimit *int, logger *log.Logger) (*types.Receipt, *big.Int, error) {
+func (p *StateProcessor) ApplyTransaction(config *params.ChainConfig, parent *types.WorkObject, parentOrder int, bc ChainContext, author *common.Address, gp *types.GasPool, statedb *state.StateDB, header *types.WorkObject, tx *types.Transaction, usedGas *uint64, cfg vm.Config, etxRLimit, etxPLimit *int, logger *log.Logger) (*types.Receipt, *big.Int, error) {
 	nodeCtx := config.Location.Context()
 	msg, err := tx.AsMessage(types.MakeSigner(config, header.Number(nodeCtx)), header.BaseFee())
 	if err != nil {
@@ -1282,7 +1283,7 @@ func ApplyTransaction(config *params.ChainConfig, parent *types.WorkObject, pare
 			}
 		}
 		// Convert Qi to Quai
-		msg.SetValue(misc.QiToQuai(primeTerminus.WorkObjectHeader(), tx.Value()))
+		msg.SetValue(misc.QiToQuai(primeTerminus, tx.Value(), p.engine.DiffToBigBits(parent)))
 		msg.SetData([]byte{}) // data is not used in conversion
 	}
 	// Create a new context to be used in the EVM environment

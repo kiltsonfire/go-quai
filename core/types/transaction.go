@@ -28,6 +28,7 @@ import (
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/dominant-strategies/go-quai/common"
 	"github.com/dominant-strategies/go-quai/common/math"
+	"github.com/dominant-strategies/go-quai/params"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dominant-strategies/go-quai/crypto"
@@ -766,6 +767,27 @@ func (tx *Transaction) FromChain(nodeLocation common.Location) common.Location {
 	}
 	tx.fromChain.Store(loc)
 	return loc
+}
+
+// ConfirmationCtx indicates the chain context at which this ETX becomes
+// confirmed and referencable to the destination chain
+func (tx *Transaction) ConfirmationCtx(nodeLocation common.Location) int {
+	if ctx := tx.confirmCtx.Load(); ctx != nil {
+		return ctx.(int)
+	}
+	if tx.ETXSender().Location().Equal(*tx.To().Location()) {
+		// If the ETX sender and the destination chain are the same, the ETX is a conversion tx
+		return params.ConversionConfirmationContext
+	}
+
+	ctx := tx.To().Location().CommonDom(tx.FromChain(nodeLocation)).Context()
+	tx.confirmCtx.Store(ctx)
+	return ctx
+}
+
+// Conversion returns true if the transaction is a Quai to Qi or Qi to Quai conversion transaction
+func (tx *Transaction) Conversion() bool {
+	return tx.Type() == ExternalTxType && tx.ETXSender().Location().Equal(*tx.To().Location())
 }
 
 // Size returns the true RLP encoded storage size of the transaction, either by

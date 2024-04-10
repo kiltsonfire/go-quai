@@ -270,13 +270,18 @@ func (g *Genesis) ToBlock(startingExpansionNumber uint64) *types.WorkObject {
 	wo := types.EmptyWorkObject(g.Config.Location.Context())
 	wo.WorkObjectHeader().SetNonce(types.EncodeNonce(g.Nonce))
 	wo.WorkObjectHeader().SetDifficulty(g.Difficulty)
-	wo.WorkObjectHeader().SetPrimeTerminusNumber(big.NewInt(0))
 	wo.WorkObjectHeader().SetTime(g.Timestamp)
-	wo.WorkObjectHeader().SetCoinbase(common.Zero)
 	wo.Header().SetExtra(g.ExtraData)
 	wo.Header().SetGasLimit(g.GasLimit)
 	wo.Header().SetGasUsed(0)
 	wo.Header().SetExpansionNumber(uint8(startingExpansionNumber))
+	wo.Header().SetExchangeRate(params.InitExchangeRate)
+	wo.Header().SetQuaiToQi(big.NewInt(0))
+	wo.Header().SetQiToQuai(big.NewInt(0))
+	wo.Header().SetMinedQi(big.NewInt(0))
+	wo.Header().SetMinedQuai(big.NewInt(0))
+	wo.Header().SetDeltaQi(big.NewInt(0))
+	wo.Header().SetDeltaQuai(big.NewInt(0))
 	if startingExpansionNumber > 0 {
 		// Fill each byte with 0xFF to set all bits to 1
 		var etxEligibleSlices common.Hash

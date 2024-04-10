@@ -540,7 +540,7 @@ func (w *worker) GeneratePendingHeader(block *types.WorkObject, fill bool) (*typ
 
 		// Add an etx for each workshare for it to be rewarded
 		for i, uncle := range uncles {
-			reward := misc.CalculateReward(uncle)
+			reward := misc.CalculateReward(block, w.engine.DiffToBigBits(block))
 			uncleCoinbase := uncle.Coinbase()
 			work.etxs = append(work.etxs, types.NewTx(&types.ExternalTx{To: &uncleCoinbase, Value: reward, IsCoinbase: true, OriginatingTxHash: origin, ETXIndex: uint16(i) + 1, Sender: uncleCoinbase}))
 		}
@@ -576,14 +576,14 @@ func (w *worker) GeneratePendingHeader(block *types.WorkObject, fill bool) (*typ
 			}
 		}
 		if coinbase.IsInQiLedgerScope() {
-			coinbaseReward := misc.CalculateReward(work.wo.WorkObjectHeader())
-			blockFees := new(big.Int).Add(work.utxoFees, misc.QuaiToQi(primeTerminus.WorkObjectHeader(), work.quaiFees))
+			coinbaseReward := misc.CalculateReward(work.wo, w.engine.DiffToBigBits(work.wo))
+			blockFees := new(big.Int).Add(work.utxoFees, misc.QuaiToQi(primeTerminus, work.quaiFees, w.engine.DiffToBigBits(primeTerminus)))
 			blockReward := new(big.Int).Add(coinbaseReward, blockFees)
 			coinbaseEtx := types.NewTx(&types.ExternalTx{To: &coinbase, Value: blockReward, IsCoinbase: true, OriginatingTxHash: origin, ETXIndex: 0, Sender: coinbase})
 			work.etxs[0] = coinbaseEtx
 		} else if coinbase.IsInQuaiLedgerScope() {
-			coinbaseReward := misc.CalculateReward(work.wo.WorkObjectHeader())
-			blockFees := new(big.Int).Add(work.quaiFees, misc.QiToQuai(primeTerminus.WorkObjectHeader(), work.utxoFees))
+			coinbaseReward := misc.CalculateReward(work.wo, w.engine.DiffToBigBits(work.wo))
+			blockFees := new(big.Int).Add(work.quaiFees, misc.QiToQuai(primeTerminus, work.utxoFees, w.engine.DiffToBigBits(primeTerminus)))
 			blockReward := new(big.Int).Add(coinbaseReward, blockFees)
 			coinbaseEtx := types.NewTx(&types.ExternalTx{To: &coinbase, Value: blockReward, IsCoinbase: true, OriginatingTxHash: origin, ETXIndex: 0, Sender: coinbase})
 			work.etxs[0] = coinbaseEtx
@@ -802,7 +802,7 @@ func (w *worker) commitTransaction(env *environment, parent *types.WorkObject, t
 				return nil, false, err
 			}
 			gasUsed += params.TxGas
-			value := misc.QuaiToQi(primeTerminus.WorkObjectHeader(), tx.Value())
+			value := misc.QuaiToQi(primeTerminus, tx.Value(), w.engine.DiffToBigBits(primeTerminus))
 			denominations := misc.FindMinDenominations(value)
 			outputIndex := uint16(0)
 
@@ -846,7 +846,7 @@ func (w *worker) commitTransaction(env *environment, parent *types.WorkObject, t
 	snap := env.state.Snapshot()
 	// retrieve the gas used int and pass in the reference to the ApplyTransaction
 	gasUsed := env.wo.GasUsed()
-	receipt, quaiFees, err := ApplyTransaction(w.chainConfig, parent, *env.parentOrder, w.hc, &env.coinbase, env.gasPool, env.state, env.wo, tx, &gasUsed, *w.hc.bc.processor.GetVMConfig(), &env.etxRLimit, &env.etxPLimit, w.logger)
+	receipt, quaiFees, err := w.hc.bc.processor.ApplyTransaction(w.chainConfig, parent, *env.parentOrder, w.hc, &env.coinbase, env.gasPool, env.state, env.wo, tx, &gasUsed, *w.hc.bc.processor.GetVMConfig(), &env.etxRLimit, &env.etxPLimit, w.logger)
 	if err != nil {
 		w.logger.WithFields(log.Fields{
 			"err":     err,
@@ -1236,6 +1236,31 @@ func (w *worker) prepareWork(genParams *generateParams, wo *types.WorkObject) (*
 		rawdb.WriteInterlinkHashes(w.workerDb, parent.Hash(), interlinkHashes)
 		interlinkRootHash := types.DeriveSha(interlinkHashes, trie.NewStackTrie(nil))
 		newWo.Header().SetInterlinkRootHash(interlinkRootHash)
+	}
+
+	if nodeCtx == common.PRIME_CTX {
+		if w.hc.IsGenesisHash(parent.Hash()) {
+			newWo.Header().SetQiToQuai(big.NewInt(0))
+			newWo.Header().SetQuaiToQi(big.NewInt(0))
+			newWo.Header().SetExchangeRate(parent.Header().ExchangeRate())
+		} else {
+			newQiToQuai, newQuaiToQi, newExchangeRate, err := misc.CalculateExchangeRate(parent)
+			if err != nil {
+				newWo.Header().SetQiToQuai(newQiToQuai)
+				newWo.Header().SetQuaiToQi(newQuaiToQi)
+				newWo.Header().SetExchangeRate(newExchangeRate)
+			}
+		}
+	} else {
+		if w.hc.IsGenesisHash(parent.Hash()) {
+			newWo.Header().SetQiToQuai(big.NewInt(0))
+			newWo.Header().SetQuaiToQi(big.NewInt(0))
+			newWo.Header().SetExchangeRate(parent.Header().ExchangeRate())
+		} else {
+			newWo.Header().SetQiToQuai(parent.Header().QiToQuai())
+			newWo.Header().SetQuaiToQi(parent.Header().QuaiToQi())
+			newWo.Header().SetExchangeRate(parent.Header().ExchangeRate())
+		}
 	}
 
 	// Only zone should calculate state
@@ -1681,7 +1706,7 @@ func (w *worker) processQiTx(tx *types.Transaction, env *environment, parent *ty
 		return fmt.Errorf("tx %032x has too many ETXs to calculate required gas", tx.Hash())
 	}
 	minimumFeeInQuai := new(big.Int).Mul(big.NewInt(int64(requiredGas)), env.wo.BaseFee())
-	minimumFee := misc.QuaiToQi(env.wo.WorkObjectHeader(), minimumFeeInQuai)
+	minimumFee := misc.QuaiToQi(env.wo, minimumFeeInQuai, w.engine.DiffToBigBits(env.wo))
 	if txFeeInQit.Cmp(minimumFee) < 0 {
 		return fmt.Errorf("tx %032x has insufficient fee for base fee * gas, have %d want %d", tx.Hash(), txFeeInQit.Uint64(), minimumFee.Uint64())
 	}
@@ -1690,9 +1715,10 @@ func (w *worker) processQiTx(tx *types.Transaction, env *environment, parent *ty
 
 	if conversion {
 		// Since this transaction contains a conversion, the rest of the tx gas is given to conversion
-		remainingTxFeeInQuai := misc.QiToQuai(env.wo.WorkObjectHeader(), txFeeInQit)
+		remainingTxFeeInQuai := misc.QiToQuai(env.wo, txFeeInQit, w.engine.DiffToBigBits(env.wo))
 		// Fee is basefee * gas, so gas remaining is fee remaining / basefee
 		remainingGas := new(big.Int).Div(remainingTxFeeInQuai, env.wo.BaseFee())
+		remainingGas.Div(remainingGas, big.NewInt(int64(len(etxs))))
 		if remainingGas.Uint64() > (env.wo.GasLimit() / params.MinimumEtxGasDivisor) {
 			// Limit ETX gas to max ETX gas limit (the rest is burned)
 			remainingGas = new(big.Int).SetUint64(env.wo.GasLimit() / params.MinimumEtxGasDivisor)
