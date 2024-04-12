@@ -162,6 +162,9 @@ type Engine interface {
 	// VerifySeal computes the PowHash and checks if work meets the difficulty
 	// requirement specified in header
 	VerifySeal(header *types.WorkObjectHeader) (common.Hash, error)
+
+	// DiffToBigBits converts a difficulty to a big integer representation
+	DiffToBigBits(header *types.WorkObject) *big.Int
 }
 
 func TargetToDifficulty(target *big.Int) *big.Int {

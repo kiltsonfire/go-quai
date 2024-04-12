@@ -38,6 +38,8 @@ message ProtoHeader {
   optional bytes exchange_rate = 30;
   optional bytes mined_quai = 31;
   optional bytes mined_qi = 32;
+  optional bytes delta_quai = 33;
+  optional bytes delta_qi = 34;
 }
 
 message ProtoTransaction {

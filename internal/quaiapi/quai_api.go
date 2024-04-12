@@ -909,7 +909,7 @@ func (s *PublicBlockChainQuaiAPI) QiRateAtBlock(ctx context.Context, blockRef in
 		return nil
 	}
 
-	return misc.QiToQuai(header, new(big.Int).SetUint64(qiAmount))
+	return misc.QiToQuai(header, new(big.Int).SetUint64(qiAmount), s.b.Engine().DiffToBigBits(header))
 }
 
 // Calculate the amount of Qi that Quai can be converted to. Expect the current Header and the Quai amount in "its", returns the Qi amount in "qits"
@@ -926,5 +926,5 @@ func (s *PublicBlockChainQuaiAPI) QuaiRateAtBlock(ctx context.Context, blockRef 
 		return nil
 	}
 
-	return misc.QuaiToQi(header, new(big.Int).SetUint64(quaiAmount))
+	return misc.QuaiToQi(header, new(big.Int).SetUint64(quaiAmount), s.b.Engine().DiffToBigBits(header))
 }

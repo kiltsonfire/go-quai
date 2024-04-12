@@ -153,6 +153,7 @@ type blockChain interface {
 	GetHeader(common.Hash, uint64) *types.WorkObject
 	NodeCtx() int
 	GetHeaderByHash(common.Hash) *types.WorkObject
+	ProcessQiTx(tx *types.Transaction, chain ChainContext, updateState bool, currentHeader *types.WorkObject, statedb *state.StateDB, gp *types.GasPool, usedGas *uint64, signer types.Signer, location common.Location, chainId big.Int, etxRLimit, etxPLimit *int) (*big.Int, []*types.ExternalTx, error)
 }
 
 // TxPoolConfig are the configuration parameters of the transaction pool.
@@ -1135,7 +1136,7 @@ func (pool *TxPool) addQiTx(tx *types.Transaction, grabLock bool) error {
 	if grabLock {
 		pool.mu.RLock() // need to readlock the whole pool because we are reading the current state
 	}
-	fee, _, err := ProcessQiTx(tx, pool.chain, false, pool.chain.CurrentBlock(), pool.currentState, &gp, new(uint64), pool.signer, location, *pool.chainconfig.ChainID, &etxRLimit, &etxPLimit)
+	fee, _, err := pool.chain.ProcessQiTx(tx, pool.chain, false, pool.chain.CurrentBlock(), pool.currentState, &gp, new(uint64), pool.signer, location, *pool.chainconfig.ChainID, &etxRLimit, &etxPLimit)
 	if err != nil {
 		if grabLock {
 			pool.mu.RUnlock()

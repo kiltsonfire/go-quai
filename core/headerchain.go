@@ -1119,6 +1119,11 @@ func (hc *HeaderChain) IsGenesisHash(hash common.Hash) bool {
 	return false
 }
 
+// ProcessQiTx(tx, pool.chain, false, pool.chain.CurrentBlock(), pool.currentState, &gp, new(uint64), pool.signer, location, *pool.chainconfig.ChainID, &etxRLimit, &etxPLimit)
+func (hc *HeaderChain) ProcessQiTx(tx *types.Transaction, chain ChainContext, updateState bool, currentHeader *types.WorkObject, statedb *state.StateDB, gp *types.GasPool, usedGas *uint64, signer types.Signer, location common.Location, chainId big.Int, etxRLimit, etxPLimit *int) (*big.Int, []*types.ExternalTx, error) {
+	return hc.bc.processor.ProcessQiTx(tx, chain, updateState, currentHeader, statedb, gp, usedGas, signer, location, chainId, etxRLimit, etxPLimit)
+}
+
 // AddGenesisHash appends the given hash to the genesis hash list
 func (hc *HeaderChain) AddGenesisHash(hash common.Hash) {
 	genesisHashes := rawdb.ReadGenesisHashes(hc.headerDb)

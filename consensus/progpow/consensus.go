@@ -586,7 +586,7 @@ func (progpow *Progpow) Finalize(chain consensus.ChainHeaderReader, header *type
 	nodeLocation := progpow.config.NodeLocation
 	nodeCtx := progpow.config.NodeLocation.Context()
 	// Accumulate any block and uncle rewards and commit the final state root
-	accumulateRewards(chain.Config(), state, header, progpow.logger)
+	progpow.accumulateRewards(chain.Config(), state, header, progpow.logger)
 
 	if nodeCtx == common.ZONE_CTX && chain.IsGenesisHash(header.ParentHash(nodeCtx)) {
 		alloc := core.ReadGenesisAlloc("genallocs/gen_alloc_"+nodeLocation.Name()+".json", progpow.logger)
@@ -643,9 +643,9 @@ func (progpow *Progpow) NodeLocation() common.Location {
 // AccumulateRewards credits the coinbase of the given block with the mining
 // reward. The total reward consists of the static block reward and rewards for
 // included uncles. The coinbase of each uncle block is also rewarded.
-func accumulateRewards(config *params.ChainConfig, state *state.StateDB, header *types.WorkObject, logger *log.Logger) {
+func (progpow *Progpow) accumulateRewards(config *params.ChainConfig, state *state.StateDB, header *types.WorkObject, logger *log.Logger) {
 	// Select the correct block reward based on chain progression
-	blockReward := misc.CalculateReward(header)
+	blockReward := misc.CalculateReward(header, progpow.DiffToBigBits(header))
 
 	coinbase, err := header.Coinbase().InternalAddress()
 	if err != nil {

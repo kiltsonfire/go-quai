@@ -273,7 +273,7 @@ func (p *StateProcessor) Process(block *types.WorkObject, etxSet *types.EtxSet) 
 				// coinbase tx currently exempt from gas and outputs are added after all txs are processed
 				continue
 			}
-			fees, etxs, err := ProcessQiTx(tx, p.hc, true, header, statedb, gp, usedGas, p.hc.pool.signer, p.hc.NodeLocation(), *p.config.ChainID, &etxRLimit, &etxPLimit)
+			fees, etxs, err := p.hc.bc.processor.ProcessQiTx(tx, p.hc, true, header, statedb, gp, usedGas, p.hc.pool.signer, p.hc.NodeLocation(), *p.config.ChainID, &etxRLimit, &etxPLimit)
 			if err != nil {
 				return nil, nil, nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 			}
@@ -307,7 +307,7 @@ func (p *StateProcessor) Process(block *types.WorkObject, etxSet *types.EtxSet) 
 			if tx.To().IsInQiLedgerScope() {
 				if tx.ETXSender().Location().Equal(*tx.To().Location()) { // Quai->Qi Conversion
 					lock := new(big.Int).Add(header.Number(nodeCtx), big.NewInt(params.ConversionLockPeriod))
-					value := misc.QuaiToQi(parent, tx.Value()) // change to prime terminus
+					value := misc.QuaiToQi(parent, tx.Value(), p.engine.DiffToBigBits(parent)) // change to prime terminus
 					denominations := misc.FindMinDenominations(value)
 					for i, denomination := range denominations { // TODO: Decide maximum number of iterations
 						if denomination > types.MaxDenomination { // sanity check
@@ -348,7 +348,7 @@ func (p *StateProcessor) Process(block *types.WorkObject, etxSet *types.EtxSet) 
 					if primeTerminus == nil {
 						return nil, nil, nil, nil, 0, fmt.Errorf("could not find prime terminus header %032x", header.PrimeTerminus())
 					}
-					msg.SetValue(misc.QiToQuai(primeTerminus, types.Denominations[uint8(tx.Value().Uint64())]))
+					msg.SetValue(misc.QiToQuai(primeTerminus, types.Denominations[uint8(tx.Value().Uint64())], p.engine.DiffToBigBits(primeTerminus)))
 					msg.SetData([]byte{}) // data is not used in conversion
 					log.Global.Infof("Converting Qi to Quai for ETX %032x with value %d lock %d", tx.Hash(), msg.Value().Int64(), msg.Lock().Int64())
 				}
@@ -386,7 +386,7 @@ func (p *StateProcessor) Process(block *types.WorkObject, etxSet *types.EtxSet) 
 		for _, txOut := range qiTransactions[0].TxOut() {
 			totalCoinbaseOut.Add(totalCoinbaseOut, types.Denominations[txOut.Denomination])
 		}
-		reward := misc.CalculateReward(header)
+		reward := misc.CalculateReward(header, p.engine.DiffToBigBits(header))
 		maxCoinbaseOut := new(big.Int).Add(reward, totalFees) // TODO: Miner tip will soon no longer exist
 
 		if totalCoinbaseOut.Cmp(maxCoinbaseOut) > 0 {
@@ -513,7 +513,7 @@ func applyTransaction(msg types.Message, parent *types.WorkObject, config *param
 	return receipt, err
 }
 
-func ProcessQiTx(tx *types.Transaction, chain ChainContext, updateState bool, currentHeader *types.WorkObject, statedb *state.StateDB, gp *types.GasPool, usedGas *uint64, signer types.Signer, location common.Location, chainId big.Int, etxRLimit, etxPLimit *int) (*big.Int, []*types.ExternalTx, error) {
+func (p *StateProcessor) ProcessQiTx(tx *types.Transaction, chain ChainContext, updateState bool, currentHeader *types.WorkObject, statedb *state.StateDB, gp *types.GasPool, usedGas *uint64, signer types.Signer, location common.Location, chainId big.Int, etxRLimit, etxPLimit *int) (*big.Int, []*types.ExternalTx, error) {
 	// Sanity checks
 	if tx == nil || tx.Type() != types.QiTxType {
 		return nil, nil, fmt.Errorf("tx %032x is not a QiTx", tx.Hash())
@@ -677,7 +677,7 @@ func ProcessQiTx(tx *types.Transaction, chain ChainContext, updateState bool, cu
 	txFeeInQit := new(big.Int).Sub(totalQitIn, totalQitOut)
 	// Check tx against required base fee and gas
 	minimumFeeInQuai := new(big.Int).Mul(big.NewInt(int64(txGas)), currentHeader.BaseFee())
-	minimumFee := misc.QuaiToQi(currentHeader, minimumFeeInQuai)
+	minimumFee := misc.QuaiToQi(currentHeader, minimumFeeInQuai, p.engine.DiffToBigBits(currentHeader))
 	log.Global.Infof("Minimum fee for tx %032x is %d", tx.Hash(), minimumFee.Uint64())
 	if txFeeInQit.Cmp(minimumFee) < 0 {
 		return nil, nil, fmt.Errorf("tx %032x has insufficient fee for base fee, have %d want %d", tx.Hash(), txFeeInQit.Uint64(), minimumFee.Uint64())
@@ -686,7 +686,7 @@ func ProcessQiTx(tx *types.Transaction, chain ChainContext, updateState bool, cu
 	txFeeInQit.Sub(txFeeInQit, minimumFee)
 	if conversion {
 		// If this transaction has at least one conversion, the tx gas is divided for all ETXs
-		txFeeInQuai := misc.QiToQuai(currentHeader, txFeeInQit)
+		txFeeInQuai := misc.QiToQuai(currentHeader, txFeeInQit, p.engine.DiffToBigBits(currentHeader))
 		gas := new(big.Int).Div(txFeeInQuai, currentHeader.BaseFee())
 		gas.Div(gas, big.NewInt(int64(len(etxs))))
 		if gas.Uint64() > (currentHeader.GasLimit() / params.MinimumEtxGasDivisor) {
@@ -803,7 +803,7 @@ func (p *StateProcessor) Apply(batch ethdb.Batch, block *types.WorkObject, newIn
 // and uses the input parameters for its environment. It returns the receipt
 // for the transaction, gas used and an error if the transaction failed,
 // indicating the block was invalid.
-func ApplyTransaction(config *params.ChainConfig, parent *types.WorkObject, bc ChainContext, author *common.Address, gp *types.GasPool, statedb *state.StateDB, header *types.WorkObject, tx *types.Transaction, usedGas *uint64, cfg vm.Config, etxRLimit, etxPLimit *int, logger *log.Logger) (*types.Receipt, error) {
+func (p *StateProcessor) ApplyTransaction(config *params.ChainConfig, parent *types.WorkObject, bc ChainContext, author *common.Address, gp *types.GasPool, statedb *state.StateDB, header *types.WorkObject, tx *types.Transaction, usedGas *uint64, cfg vm.Config, etxRLimit, etxPLimit *int, logger *log.Logger) (*types.Receipt, error) {
 	nodeCtx := config.Location.Context()
 	msg, err := tx.AsMessage(types.MakeSigner(config, header.Number(nodeCtx)), header.BaseFee())
 	if err != nil {
@@ -815,8 +815,8 @@ func ApplyTransaction(config *params.ChainConfig, parent *types.WorkObject, bc C
 		if tx.Value().Uint64() > types.MaxDenomination { // sanity check
 			return nil, fmt.Errorf("tx %v emits conversion UTXO with value %d greater than max denomination", tx.Hash().Hex(), tx.Value().Int64())
 		}
-		msg.SetValue(misc.QiToQuai(parent, types.Denominations[uint8(tx.Value().Uint64())])) // change to prime terminus
-		msg.SetData([]byte{})                                                                // data is not used in conversion
+		msg.SetValue(misc.QiToQuai(parent, types.Denominations[uint8(tx.Value().Uint64())], p.engine.DiffToBigBits(parent))) // change to prime terminus
+		msg.SetData([]byte{})                                                                                                // data is not used in conversion
 	}
 	// Create a new context to be used in the EVM environment
 	blockContext := NewEVMBlockContext(header, bc, author)

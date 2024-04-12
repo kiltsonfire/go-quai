@@ -550,7 +550,7 @@ func (blake3pow *Blake3pow) Finalize(chain consensus.ChainHeaderReader, header *
 	nodeLocation := blake3pow.config.NodeLocation
 	nodeCtx := blake3pow.config.NodeLocation.Context()
 	// Accumulate any block and uncle rewards and commit the final state root
-	accumulateRewards(chain.Config(), state, header, blake3pow.logger)
+	blake3pow.accumulateRewards(chain.Config(), state, header, blake3pow.logger)
 
 	if nodeCtx == common.ZONE_CTX && chain.IsGenesisHash(header.ParentHash(nodeCtx)) {
 		alloc := core.ReadGenesisAlloc("genallocs/gen_alloc_"+nodeLocation.Name()+".json", blake3pow.logger)
@@ -612,9 +612,9 @@ func (blake3pow *Blake3pow) ComputePowLight(header *types.WorkObjectHeader) (com
 // AccumulateRewards credits the coinbase of the given block with the mining
 // reward. The total reward consists of the static block reward and rewards for
 // included uncles. The coinbase of each uncle block is also rewarded.
-func accumulateRewards(config *params.ChainConfig, state *state.StateDB, header *types.WorkObject, logger *log.Logger) {
+func (blake3pow *Blake3pow) accumulateRewards(config *params.ChainConfig, state *state.StateDB, header *types.WorkObject, logger *log.Logger) {
 	// Select the correct block reward based on chain progression
-	blockReward := misc.CalculateReward(header)
+	blockReward := misc.CalculateReward(header, blake3pow.DiffToBigBits(header))
 
 	coinbase, err := header.Coinbase().InternalAddress()
 	if err != nil {

@@ -568,7 +568,7 @@ func (w *worker) GeneratePendingHeader(block *types.WorkObject, fill bool) (*typ
 			work.wo.Header().SetEtxSetHash(types.EmptyEtxSetHash)
 		}
 		if coinbase.IsInQiLedgerScope() {
-			coinbaseTx, err := createCoinbaseTxWithFees(work.wo, work.utxoFees, work.state)
+			coinbaseTx, err := w.CreateCoinbaseTxWithFees(work.wo, work.utxoFees, work.state)
 			if err != nil {
 				return nil, err
 			}
@@ -727,7 +727,7 @@ func (w *worker) commitTransaction(env *environment, parent *types.WorkObject, t
 			txGas := tx.Gas()
 			if tx.ETXSender().Location().Equal(*tx.To().Location()) { // Quai->Qi conversion
 				lock := new(big.Int).Add(env.wo.Number(w.hc.NodeCtx()), big.NewInt(params.ConversionLockPeriod))
-				value := misc.QuaiToQi(env.wo, tx.Value())
+				value := misc.QuaiToQi(env.wo, tx.Value(), w.engine.DiffToBigBits(parent))
 				denominations := misc.FindMinDenominations(value)
 				for i, denomination := range denominations { // TODO: Decide maximum number of iterations
 					if denomination > types.MaxDenomination { // sanity check
@@ -764,7 +764,7 @@ func (w *worker) commitTransaction(env *environment, parent *types.WorkObject, t
 		snap := env.state.Snapshot()
 		// retrieve the gas used int and pass in the reference to the ApplyTransaction
 		gasUsed := env.wo.GasUsed()
-		receipt, err := ApplyTransaction(w.chainConfig, parent, w.hc, &env.coinbase, env.gasPool, env.state, env.wo, tx, &gasUsed, *w.hc.bc.processor.GetVMConfig(), &env.etxRLimit, &env.etxPLimit, w.logger)
+		receipt, err := w.hc.bc.processor.ApplyTransaction(w.chainConfig, parent, w.hc, &env.coinbase, env.gasPool, env.state, env.wo, tx, &gasUsed, *w.hc.bc.processor.GetVMConfig(), &env.etxRLimit, &env.etxPLimit, w.logger)
 		if err != nil {
 			w.logger.WithFields(log.Fields{
 				"err":     err,
@@ -1499,7 +1499,7 @@ func (w *worker) processQiTx(tx *types.Transaction, env *environment) error {
 	}
 	// Check tx against required base fee and gas
 	minimumFeeInQuai := new(big.Int).Mul(big.NewInt(int64(txGas)), env.wo.BaseFee())
-	minimumFee := misc.QuaiToQi(env.wo, minimumFeeInQuai)
+	minimumFee := misc.QuaiToQi(env.wo, minimumFeeInQuai, w.engine.DiffToBigBits(env.wo))
 	if txFeeInQit.Cmp(minimumFee) < 0 {
 		return fmt.Errorf("tx %032x has insufficient fee for base fee, have %d want %d", tx.Hash(), txFeeInQit.Int64(), minimumFee.Int64())
 	}
@@ -1510,7 +1510,7 @@ func (w *worker) processQiTx(tx *types.Transaction, env *environment) error {
 
 	if conversion {
 		// If this transaction has at least one conversion, the tx gas is divided for all ETXs
-		txFeeInQuai := misc.QiToQuai(env.wo, txFeeInQit)
+		txFeeInQuai := misc.QiToQuai(env.wo, txFeeInQit, w.engine.DiffToBigBits(env.wo))
 		gas := new(big.Int).Div(txFeeInQuai, env.wo.BaseFee())
 		gas.Div(gas, big.NewInt(int64(len(etxs))))
 		if gas.Uint64() > (env.wo.GasLimit() / params.MinimumEtxGasDivisor) {
@@ -1545,7 +1545,7 @@ func (w *worker) processQiTx(tx *types.Transaction, env *environment) error {
 // createCoinbaseTx returns a coinbase transaction paying an appropriate subsidy
 // based on the passed block height to the provided address.  When the address
 // is nil, the coinbase transaction will instead be redeemable by anyone.
-func createCoinbaseTxWithFees(header *types.WorkObject, fees *big.Int, state *state.StateDB) (*types.Transaction, error) {
+func (w *worker) CreateCoinbaseTxWithFees(header *types.WorkObject, fees *big.Int, state *state.StateDB) (*types.Transaction, error) {
 	parentHash := header.ParentHash(header.Location().Context()) // all blocks should have zone location and context
 
 	// The coinbase transaction input must be the parent hash encoded with the proper origin location
@@ -1557,7 +1557,7 @@ func createCoinbaseTxWithFees(header *types.WorkObject, fees *big.Int, state *st
 		PreviousOutPoint: *types.NewOutPoint(&parentHash, types.MaxOutputIndex),
 	}
 
-	reward := misc.CalculateReward(header)
+	reward := misc.CalculateReward(header, w.engine.DiffToBigBits(header))
 	reward.Add(reward, fees)
 	denominations := misc.FindMinDenominations(reward)
 	outs := make([]types.TxOut, 0, len(denominations))
