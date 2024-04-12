@@ -121,6 +121,8 @@ type Header struct {
 	exchangeRate          *big.Int       `json:"exchangeRate"          gencodec:"required"`
 	minedQuai             *big.Int       `json:"minedQuai"             gencodec:"required"`
 	minedQi               *big.Int       `json:"minedQi"               gencodec:"required"`
+	deltaQuai             *big.Int       `json:"deltaQuai"             gencodec:"required"`
+	deltaQi               *big.Int       `json:"deltaQi"               gencodec:"required"`
 
 	// caches
 	hash     atomic.Value
@@ -147,6 +149,8 @@ type headerMarshaling struct {
 	ExchangeRate          *hexutil.Big
 	MinedQuai             *hexutil.Big
 	MinedQi               *hexutil.Big
+	DeltaQuai             *hexutil.Big
+	DeltaQi               *hexutil.Big
 }
 
 // Construct an empty header
@@ -180,6 +184,8 @@ func EmptyHeader(nodeCtx int) *WorkObject {
 	h.exchangeRate = big.NewInt(0)
 	h.minedQuai = big.NewInt(0)
 	h.minedQi = big.NewInt(0)
+	h.deltaQuai = big.NewInt(0)
+	h.deltaQi = big.NewInt(0)
 
 	for i := 0; i < common.HierarchyDepth; i++ {
 		h.manifestHash[i] = EmptyRootHash
@@ -256,6 +262,8 @@ func (h *Header) ProtoEncode() (*ProtoHeader, error) {
 		ExchangeRate:      h.ExchangeRate().Bytes(),
 		MinedQuai:         h.MinedQuai().Bytes(),
 		MinedQi:           h.MinedQi().Bytes(),
+		DeltaQuai:         h.DeltaQuai().Bytes(),
+		DeltaQi:           h.DeltaQi().Bytes(),
 	}
 
 	for i := 0; i < common.HierarchyDepth; i++ {
@@ -369,6 +377,12 @@ func (h *Header) ProtoDecode(protoHeader *ProtoHeader, location common.Location)
 	if protoHeader.MinedQi == nil {
 		return errors.New("missing required field 'MinedQi' in Header")
 	}
+	if protoHeader.DeltaQuai == nil {
+		return errors.New("missing required field 'DeltaQuai' in Header")
+	}
+	if protoHeader.DeltaQi == nil {
+		return errors.New("missing required field 'DeltaQi' in Header")
+	}
 
 	// Initialize the array fields before setting
 	h.parentHash = make([]common.Hash, common.HierarchyDepth-1)
@@ -414,6 +428,8 @@ func (h *Header) ProtoDecode(protoHeader *ProtoHeader, location common.Location)
 	h.SetExchangeRate(new(big.Int).SetBytes(protoHeader.GetExchangeRate()))
 	h.SetMinedQuai(new(big.Int).SetBytes(protoHeader.GetMinedQuai()))
 	h.SetMinedQi(new(big.Int).SetBytes(protoHeader.GetMinedQi()))
+	h.SetDeltaQuai(new(big.Int).SetBytes(protoHeader.GetDeltaQuai()))
+	h.SetDeltaQi(new(big.Int).SetBytes(protoHeader.GetDeltaQi()))
 
 	return nil
 }
@@ -456,6 +472,8 @@ func (h *Header) RPCMarshalHeader() map[string]interface{} {
 		"exchangeRate":        (*hexutil.Big)(h.ExchangeRate()),
 		"minedQuai":           (*hexutil.Big)(h.MinedQuai()),
 		"minedQi":             (*hexutil.Big)(h.MinedQi()),
+		"deltaQuai":           (*hexutil.Big)(h.DeltaQuai()),
+		"deltaQi":             (*hexutil.Big)(h.DeltaQi()),
 	}
 
 	number := make([]*hexutil.Big, common.HierarchyDepth)
@@ -577,7 +595,12 @@ func (h *Header) MinedQuai() *big.Int {
 func (h *Header) MinedQi() *big.Int {
 	return h.minedQi
 }
-
+func (h *Header) DeltaQuai() *big.Int {
+	return h.deltaQuai
+}
+func (h *Header) DeltaQi() *big.Int {
+	return h.deltaQi
+}
 func (h *Header) SetParentHash(val common.Hash, nodeCtx int) {
 	h.hash = atomic.Value{}     // clear hash cache
 	h.sealHash = atomic.Value{} // clear sealHash cache
@@ -739,6 +762,16 @@ func (h *Header) SetMinedQi(val *big.Int) {
 	h.sealHash = atomic.Value{}
 	h.minedQi = new(big.Int).Set(val)
 }
+func (h *Header) SetDeltaQuai(val *big.Int) {
+	h.hash = atomic.Value{}
+	h.sealHash = atomic.Value{}
+	h.deltaQuai = new(big.Int).Set(val)
+}
+func (h *Header) SetDeltaQi(val *big.Int) {
+	h.hash = atomic.Value{}
+	h.sealHash = atomic.Value{}
+	h.deltaQi = new(big.Int).Set(val)
+}
 
 // Array accessors
 func (h *Header) ParentHashArray() []common.Hash   { return h.parentHash }
@@ -793,6 +826,8 @@ func (h *Header) SealEncode() *ProtoHeader {
 		ExchangeRate:      h.ExchangeRate().Bytes(),
 		MinedQuai:         h.MinedQuai().Bytes(),
 		MinedQi:           h.MinedQi().Bytes(),
+		DeltaQuai:         h.DeltaQuai().Bytes(),
+		DeltaQi:           h.DeltaQi().Bytes(),
 	}
 
 	for i := 0; i < common.HierarchyDepth; i++ {
@@ -972,6 +1007,8 @@ func CopyHeader(h *Header) *Header {
 	cpy.SetExchangeRate(h.ExchangeRate())
 	cpy.SetMinedQuai(h.MinedQuai())
 	cpy.SetMinedQi(h.MinedQi())
+	cpy.SetDeltaQuai(h.DeltaQuai())
+	cpy.SetDeltaQi(h.DeltaQi())
 	return &cpy
 }
 

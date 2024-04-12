@@ -41,7 +41,7 @@ func calculateQuaiReward(header *types.WorkObject) *big.Int {
 
 // CalculateQiReward caculates the qi that can be received for mining a block and returns value in qits
 func calculateQiReward(header *types.WorkObject) *big.Int {
-	return big.NewInt(1000)
+	return
 }
 
 // FindMinDenominations finds the minimum number of denominations to make up the reward
@@ -70,3 +70,51 @@ func FindMinDenominations(reward *big.Int) map[uint8]uint8 {
 
 	return denominationCount
 }
+
+// calculateExchangeRate calculates the exchange rate for the block
+func CalculateExchangeRate(parent *types.WorkObject) (*big.Int, *big.Int, *big.Int, error) {
+	qiToQuai := parent.Header().QiToQuai() //Units of Qi
+	quaiToQi := parent.Header().QuaiToQi() //Units of Quai
+
+	//Calculate the new amounts of qi and quai being exchanged
+	for _, etx := range parent.ExtTransactions() {
+		if etx.Conversion() {
+			if etx.To().IsInQuaiLedgerScope() {
+				qiToQuai = new(big.Int).Add(etx.Value(), qiToQuai)
+			} else if etx.To().IsInQiLedgerScope() {
+				quaiToQi = new(big.Int).Add(etx.Value(), quaiToQi)
+			}
+		}
+	}
+	//Add in the mined amounts
+	qiToQuai = new(big.Int).Add(qiToQuai, parent.Header().MinedQi())
+	quaiToQi = new(big.Int).Add(quaiToQi, parent.Header().MinedQuai())
+
+	//Calculate the new exchange rate
+	//calculate the new error rate this value should range from -1 to 1
+	errorRate := new(big.Int).Div(new(big.Int).Sub(qiToQuai, quaiToQi), new(big.Int).Add(qiToQuai, quaiToQi))
+
+	exchangeRate := new(big.Int).Add(parent.Header().ExchangeRate(), errorRate)
+
+	return qiToQuai, quaiToQi, exchangeRate, nil
+}
+
+// convert qiToHash
+func QiToHash(qiAmount *big.Int, kqi *big.Int) *big.Int {
+	if qiAmount.Cmp(big.NewInt(0)) <= 0 {
+		return big.NewInt(0)
+	}
+	return new(big.Int).Mul(qiAmount, kqi)
+}
+
+/*
+   def qiToHash(self, qiAmount):
+       if qiAmount <= 0:
+           return 0
+       return qiAmount*self.kqi
+
+   def quaiToHash(self, quaiAmount):
+       if quaiAmount <= 0:
+           return 0
+       return self.qiRewardVal/self.quaiConversionVal * quaiAmount * self.kqi
+*/
