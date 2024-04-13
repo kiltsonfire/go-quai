@@ -202,4 +202,5 @@ var (
 	DifficultyAdjustmentFactor int64  = 40                                                          // This is the factor that divides the log of the change in the difficulty
 	MinQuaiConversionAmount           = new(big.Int).Mul(big.NewInt(1), big.NewInt(GWei))           // 0.000000001 Quai
 	Kqi                               = big.NewInt(4000000000000)
+	InitExchangeRate                  = big.NewInt(1)
 )
