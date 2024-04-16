@@ -532,7 +532,6 @@ func AddGenesisUtxos(state *state.StateDB, nodeLocation common.Location, logger 
 			Address:      internal.Bytes(),
 			Denomination: uint8(utxo.Denomination),
 		}
-
 		state.CreateUTXO(hash, uint16(utxo.Index), newUtxo)
 	}
 }

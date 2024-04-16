@@ -549,7 +549,7 @@ func (blake3pow *Blake3pow) Finalize(chain consensus.ChainHeaderReader, header *
 	nodeCtx := blake3pow.config.NodeLocation.Context()
 
 	if nodeCtx == common.ZONE_CTX && chain.IsGenesisHash(header.ParentHash(nodeCtx)) {
-		alloc := core.ReadGenesisAlloc("genallocs/gen_alloc_"+nodeLocation.Name()+".json", blake3pow.logger)
+		alloc := core.ReadGenesisAlloc("genallocs/gen_quai_alloc_"+nodeLocation.Name()+".json", blake3pow.logger)
 		blake3pow.logger.WithField("alloc", len(alloc)).Info("Allocating genesis accounts")
 
 		for addressString, account := range alloc {
@@ -565,6 +565,7 @@ func (blake3pow *Blake3pow) Finalize(chain consensus.ChainHeaderReader, header *
 				for key, value := range account.Storage {
 					state.SetState(internal, key, value)
 				}
+				blake3pow.logger.WithField("address", addr.String()).Info("Allocated genesis account")
 			} else {
 				blake3pow.logger.WithField("address", addr.String()).Error("Provided address in genesis block alloc is not in the Quai ledger scope")
 				continue

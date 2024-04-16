@@ -693,7 +693,7 @@ func (hc *HeaderChain) GetHeader(hash common.Hash, number uint64) *types.WorkObj
 	if header, ok := hc.headerCache.Get(hash); ok {
 		return header.(*types.WorkObject)
 	}
-	header := rawdb.ReadHeader(hc.headerDb, hash, number)
+	header := rawdb.ReadHeader(hc.headerDb, hash, types.BlockObject)
 	if header == nil {
 		return nil
 	}
@@ -724,7 +724,7 @@ func (hc *HeaderChain) GetHeaderOrCandidate(hash common.Hash, number uint64) *ty
 	if header, ok := hc.headerCache.Get(hash); ok {
 		return header.(*types.WorkObject)
 	}
-	header := rawdb.ReadHeader(hc.headerDb, hash, number)
+	header := rawdb.ReadHeader(hc.headerDb, hash, types.BlockObject)
 	if header == nil {
 		return nil
 	}

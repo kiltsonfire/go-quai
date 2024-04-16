@@ -284,8 +284,8 @@ func HasHeader(db ethdb.Reader, hash common.Hash, number uint64) bool {
 }
 
 // ReadHeader retrieves the block header corresponding to the hash.
-func ReadHeader(db ethdb.Reader, hash common.Hash, number uint64) *types.WorkObject {
-	return ReadWorkObject(db, hash, types.BlockObject)
+func ReadHeader(db ethdb.Reader, hash common.Hash, woType int) *types.WorkObject {
+	return ReadWorkObject(db, hash, woType)
 }
 
 // WriteHeader stores a block header into the database and also stores the hash-
@@ -1060,23 +1060,23 @@ func ReadBadWorkObject(db ethdb.Reader, hash common.Hash) *types.WorkObject {
 // FindCommonAncestor returns the last common ancestor of two block headers
 func FindCommonAncestor(db ethdb.Reader, a, b *types.WorkObject, nodeCtx int) *types.WorkObject {
 	for bn := b.NumberU64(nodeCtx); a.NumberU64(nodeCtx) > bn; {
-		a = ReadHeader(db, a.ParentHash(nodeCtx), a.NumberU64(nodeCtx)-1)
+		a = ReadHeader(db, a.ParentHash(nodeCtx), types.WoHeaderObject)
 		if a == nil {
 			return nil
 		}
 	}
 	for an := a.NumberU64(nodeCtx); an < b.NumberU64(nodeCtx); {
-		b = ReadHeader(db, b.ParentHash(nodeCtx), b.NumberU64(nodeCtx)-1)
+		b = ReadHeader(db, b.ParentHash(nodeCtx), types.WoHeaderObject)
 		if b == nil {
 			return nil
 		}
 	}
 	for a.Hash() != b.Hash() {
-		a = ReadHeader(db, a.ParentHash(nodeCtx), a.NumberU64(nodeCtx)-1)
+		a = ReadHeader(db, a.ParentHash(nodeCtx), types.WoHeaderObject)
 		if a == nil {
 			return nil
 		}
-		b = ReadHeader(db, b.ParentHash(nodeCtx), b.NumberU64(nodeCtx)-1)
+		b = ReadHeader(db, b.ParentHash(nodeCtx), types.WoHeaderObject)
 		if b == nil {
 			return nil
 		}
@@ -1090,11 +1090,7 @@ func ReadHeadHeader(db ethdb.Reader) *types.WorkObject {
 	if headHeaderHash == (common.Hash{}) {
 		return nil
 	}
-	headHeaderNumber := ReadHeaderNumber(db, headHeaderHash)
-	if headHeaderNumber == nil {
-		return nil
-	}
-	return ReadHeader(db, headHeaderHash, *headHeaderNumber)
+	return ReadHeader(db, headHeaderHash, types.BlockObject)
 }
 
 // ReadHeadBlock returns the current canonical head block.

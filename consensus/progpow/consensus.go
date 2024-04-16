@@ -585,7 +585,7 @@ func (progpow *Progpow) Finalize(chain consensus.ChainHeaderReader, header *type
 	nodeCtx := progpow.NodeLocation().Context()
 
 	if nodeCtx == common.ZONE_CTX && chain.IsGenesisHash(header.ParentHash(nodeCtx)) {
-		alloc := core.ReadGenesisAlloc("genallocs/gen_alloc_"+nodeLocation.Name()+".json", progpow.logger)
+		alloc := core.ReadGenesisAlloc("genallocs/gen_quai_alloc_"+nodeLocation.Name()+".json", progpow.logger)
 		progpow.logger.WithField("alloc", len(alloc)).Info("Allocating genesis accounts")
 
 		for addressString, account := range alloc {

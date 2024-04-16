@@ -51,6 +51,7 @@ const (
 	TxObject
 	PEtxObject
 	PhObject
+	WoHeaderObject
 )
 
 func (wo *WorkObject) Hash() common.Hash {
