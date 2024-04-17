@@ -1151,11 +1151,13 @@ func (pool *TxPool) addQiTx(tx *types.Transaction, grabLock bool) error {
 	}
 	fee, _, err := ProcessQiTx(tx, pool.chain, false, pool.chain.CurrentBlock(), pool.currentState, &gp, new(uint64), pool.signer, location, *pool.chainconfig.ChainID, &etxRLimit, &etxPLimit)
 	if err != nil {
-		pool.mu.RUnlock()
+		if grabLock {
+			pool.mu.RUnlock()
+		}
 		pool.logger.WithFields(logrus.Fields{
 			"tx":  tx.Hash().String(),
 			"err": err,
-		}).Error("Invalid qi tx")
+		}).Error("Invalid Qi transaction")
 		return err
 	}
 	if grabLock {
