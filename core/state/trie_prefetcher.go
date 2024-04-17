@@ -236,7 +236,7 @@ func (sf *subfetcher) loop() {
 	defer close(sf.term)
 	defer func() {
 		if r := recover(); r != nil {
-			log.Global.WithFields(log.Fields{
+			sf.db.Logger().WithFields(log.Fields{
 				"error":      r,
 				"stacktrace": string(debug.Stack()),
 			}).Error("Go-Quai Panicked")
@@ -246,7 +246,7 @@ func (sf *subfetcher) loop() {
 	// Start by opening the trie and stop processing if it fails
 	trie, err := sf.db.OpenTrie(sf.root)
 	if err != nil {
-		log.Global.WithFields(log.Fields{
+		sf.db.Logger().WithFields(log.Fields{
 			"root": sf.root,
 			"err":  err,
 		}).Warn("Trie prefetcher failed opening trie")

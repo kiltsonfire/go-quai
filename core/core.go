@@ -524,7 +524,7 @@ func (c *Core) WriteBlock(block *types.WorkObject) {
 	nodeCtx := c.NodeCtx()
 
 	if block.Location() == nil {
-		log.Global.Errorf("Block %d has nil location in %d context", block.NumberU64(c.sl.NodeCtx()), c.NodeCtx())
+		c.logger.Errorf("Block %d has nil location in %d context", block.NumberU64(c.sl.NodeCtx()), c.NodeCtx())
 		return
 	}
 

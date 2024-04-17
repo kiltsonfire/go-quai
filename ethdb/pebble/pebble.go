@@ -289,6 +289,10 @@ func (db *Database) Location() common.Location {
 	return db.location
 }
 
+func (db *Database) Logger() *log.Logger {
+	return db.logger
+}
+
 // upperBound returns the upper bound for the given prefix
 func upperBound(prefix []byte) (limit []byte) {
 	for i := len(prefix) - 1; i >= 0; i-- {
@@ -341,7 +345,7 @@ func (d *Database) Path() string {
 func (d *Database) meter(refresh time.Duration) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Global.WithFields(log.Fields{
+			d.logger.WithFields(log.Fields{
 				"error":      r,
 				"stacktrace": string(debug.Stack()),
 			}).Error("Go-Quai Panicked")
@@ -465,6 +469,10 @@ func (b *batch) Replay(w ethdb.KeyValueWriter) error {
 		}
 	}
 	return nil
+}
+
+func (b *batch) Logger() *log.Logger {
+	return b.db.logger
 }
 
 // pebbleIterator is a wrapper of underlying iterator in storage engine.

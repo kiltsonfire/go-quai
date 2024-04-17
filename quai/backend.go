@@ -149,7 +149,7 @@ func New(stack *node.Node, p2p NetworkingAPI, config *quaiconfig.Config, nodeCtx
 
 	logger.WithField("location", &chainConfig).Warn("Memory location of chainConfig")
 
-	if err := pruner.RecoverPruning(stack.ResolvePath(""), chainDb, stack.ResolvePath(config.TrieCleanCacheJournal), config.NodeLocation); err != nil {
+	if err := pruner.RecoverPruning(stack.ResolvePath(""), chainDb, stack.ResolvePath(config.TrieCleanCacheJournal), config.NodeLocation, logger); err != nil {
 		logger.WithField("err", err).Error("Failed to recover state")
 	}
 	quai := &Quai{

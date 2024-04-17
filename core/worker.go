@@ -825,12 +825,12 @@ func (w *worker) commitTransactions(env *environment, parent *types.WorkObject, 
 			break
 		}
 		if env.wo.GasUsed() > minEtxGas*params.MaximumEtxGasMultiplier { // sanity check, this should never happen
-			log.Global.WithField("Gas Used", env.wo.GasUsed()).Error("Block uses more gas than maximum ETX gas")
+			w.logger.WithField("Gas Used", env.wo.GasUsed()).Error("Block uses more gas than maximum ETX gas")
 			return true
 		}
 		hash := etxSet.Pop()
 		if hash != tx.Hash() { // sanity check, this should never happen
-			log.Global.Errorf("ETX hash from set %032x does not match transaction hash %032x", hash, tx.Hash())
+			w.logger.Errorf("ETX hash from set %032x does not match transaction hash %032x", hash, tx.Hash())
 			return true
 		}
 		env.state.Prepare(tx.Hash(), env.tcount)
@@ -1162,7 +1162,10 @@ func (w *worker) prepareWork(genParams *generateParams, wo *types.WorkObject) (*
 			return nil, err
 		}
 		proposedWoHeader := types.NewWorkObjectHeader(newWo.Hash(), newWo.ParentHash(nodeCtx), newWo.Number(nodeCtx), newWo.Difficulty(), types.EmptyRootHash, newWo.Nonce(), newWo.Time(), newWo.Location())
-		proposedWoBody := types.NewWorkObjectBody(newWo.Header(), nil, nil, nil, nil, nil, nil, nodeCtx)
+		proposedWoBody, err := types.NewWorkObjectBody(newWo.Header(), nil, nil, nil, nil, nil, nil, nodeCtx)
+		if err != nil {
+			return nil, err
+		}
 		proposedWo := types.NewWorkObject(proposedWoHeader, proposedWoBody, nil, types.BlockObject)
 		env, err := w.makeEnv(parent, proposedWo, w.coinbase)
 		if err != nil {
@@ -1198,7 +1201,10 @@ func (w *worker) prepareWork(genParams *generateParams, wo *types.WorkObject) (*
 		return env, nil
 	} else {
 		proposedWoHeader := types.NewWorkObjectHeader(newWo.Hash(), newWo.ParentHash(nodeCtx), newWo.Number(nodeCtx), newWo.Difficulty(), types.EmptyRootHash, newWo.Nonce(), newWo.Time(), newWo.Location())
-		proposedWoBody := types.NewWorkObjectBody(newWo.Header(), nil, nil, nil, nil, nil, nil, nodeCtx)
+		proposedWoBody, err := types.NewWorkObjectBody(newWo.Header(), nil, nil, nil, nil, nil, nil, nodeCtx)
+		if err != nil {
+			return nil, err
+		}
 		proposedWo := types.NewWorkObject(proposedWoHeader, proposedWoBody, nil, types.BlockObject)
 		return &environment{wo: proposedWo}, nil
 	}
@@ -1225,7 +1231,7 @@ func (w *worker) fillTransactions(interrupt *int32, env *environment, block *typ
 			}
 			entry := rawdb.ReadETX(w.hc.bc.db, hash)
 			if entry == nil {
-				log.Global.Errorf("ETX %s not found in the database!", hash.String())
+				w.logger.Errorf("ETX %s not found in the database!", hash.String())
 				break
 			}
 			etxs = append(etxs, entry)
@@ -1492,7 +1498,7 @@ func (w *worker) processQiTx(tx *types.Transaction, env *environment) error {
 	if txFeeInQit.Cmp(minimumFee) < 0 {
 		return fmt.Errorf("tx %032x has insufficient fee for base fee of %d and gas of %d", tx.Hash(), baseFeeInQi.Uint64(), txGas)
 	}
-	log.Global.Infof("Minimum fee: %d", minimumFee.Int64())
+	w.logger.Infof("Minimum fee: %d", minimumFee.Int64())
 	// Miner gets remainder of fee after base fee
 	txFeeInQit.Sub(txFeeInQit, minimumFee)
 

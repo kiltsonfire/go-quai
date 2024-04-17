@@ -490,7 +490,7 @@ func (s *Service) initializeURLMap() map[string]string {
 func (s *Service) handleBlock(block *types.WorkObject) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Global.WithFields(log.Fields{
+			s.backend.Logger().WithFields(log.Fields{
 				"error":      r,
 				"stacktrace": string(debug.Stack()),
 			}).Fatal("Go-Quai Panicked")

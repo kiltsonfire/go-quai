@@ -89,7 +89,7 @@ func (progpow *Progpow) Seal(header *types.WorkObject, results chan<- *types.Wor
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Global.WithFields(log.Fields{
+				progpow.logger.WithFields(log.Fields{
 					"error":      r,
 					"stacktrace": string(debug.Stack()),
 				}).Error("Go-Quai Panicked")
@@ -154,7 +154,7 @@ search:
 				ethashCache := progpow.cache(blockNumber)
 				if ethashCache.cDag == nil {
 					cDag := make([]uint32, progpowCacheWords)
-					generateCDag(cDag, ethashCache.cache, blockNumber/epochLength)
+					generateCDag(cDag, ethashCache.cache, blockNumber/epochLength, progpow.logger)
 					ethashCache.cDag = cDag
 				}
 				return progpowLight(size, cache, hash, nonce, blockNumber, ethashCache.cDag)

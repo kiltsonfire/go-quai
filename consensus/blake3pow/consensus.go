@@ -606,7 +606,10 @@ func (blake3pow *Blake3pow) FinalizeAndAssemble(chain consensus.ChainHeaderReade
 		blake3pow.Finalize(chain, header, state)
 	}
 
-	woBody := types.NewWorkObjectBody(header.Header(), txs, etxs, uncles, subManifest, receipts, trie.NewStackTrie(nil), nodeCtx)
+	woBody, err := types.NewWorkObjectBody(header.Header(), txs, etxs, uncles, subManifest, receipts, trie.NewStackTrie(nil), nodeCtx)
+	if err != nil {
+		return nil, err
+	}
 	// Header seems complete, assemble into a block and return
 	return types.NewWorkObject(header.WorkObjectHeader(), woBody, nil, types.BlockObject), nil
 }

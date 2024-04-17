@@ -86,12 +86,14 @@ type Matcher struct {
 	deliveries chan *Retrieval      // Retriever processes waiting for task response deliveries
 
 	running uint32 // Atomic flag whether a session is live or not
+
+	logger *log.Logger
 }
 
 // NewMatcher creates a new pipeline for retrieving bloom bit streams and doing
 // address and topic filtering on them. Setting a filter component to `nil` is
 // allowed and will result in that filter rule being skipped (OR 0x11...1).
-func NewMatcher(sectionSize uint64, filters [][][]byte) *Matcher {
+func NewMatcher(sectionSize uint64, filters [][][]byte, logger *log.Logger) *Matcher {
 	// Create the matcher instance
 	m := &Matcher{
 		sectionSize: sectionSize,
@@ -100,6 +102,7 @@ func NewMatcher(sectionSize uint64, filters [][][]byte) *Matcher {
 		counters:    make(chan chan uint),
 		retrievals:  make(chan chan *Retrieval),
 		deliveries:  make(chan *Retrieval),
+		logger:      logger,
 	}
 	// Calculate the bloom bit indexes for the groups we're interested in
 	m.filters = nil
@@ -140,7 +143,7 @@ func (m *Matcher) addScheduler(idx uint) {
 	if _, ok := m.schedulers[idx]; ok {
 		return
 	}
-	m.schedulers[idx] = newScheduler(idx)
+	m.schedulers[idx] = newScheduler(idx, m.logger)
 }
 
 // Start starts the matching process and returns a stream of bloom matches in
@@ -169,7 +172,7 @@ func (m *Matcher) Start(ctx context.Context, begin, end uint64, results chan uin
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Global.WithFields(log.Fields{
+				m.logger.WithFields(log.Fields{
 					"error":      r,
 					"stacktrace": string(debug.Stack()),
 				}).Error("Go-Quai Panicked")
@@ -239,7 +242,7 @@ func (m *Matcher) run(begin, end uint64, buffer int, session *MatcherSession) ch
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Global.WithFields(log.Fields{
+				m.logger.WithFields(log.Fields{
 					"error":      r,
 					"stacktrace": string(debug.Stack()),
 				}).Error("Go-Quai Panicked")
@@ -294,7 +297,7 @@ func (m *Matcher) subMatch(source chan *partialMatches, dist chan *request, bloo
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Global.WithFields(log.Fields{
+				m.logger.WithFields(log.Fields{
 					"error":      r,
 					"stacktrace": string(debug.Stack()),
 				}).Error("Go-Quai Panicked")
@@ -345,7 +348,7 @@ func (m *Matcher) subMatch(source chan *partialMatches, dist chan *request, bloo
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Global.WithFields(log.Fields{
+				m.logger.WithFields(log.Fields{
 					"error":      r,
 					"stacktrace": string(debug.Stack()),
 				}).Error("Go-Quai Panicked")
@@ -416,7 +419,7 @@ func (m *Matcher) distributor(dist chan *request, session *MatcherSession) {
 	defer session.pend.Done()
 	defer func() {
 		if r := recover(); r != nil {
-			log.Global.WithFields(log.Fields{
+			m.logger.WithFields(log.Fields{
 				"error":      r,
 				"stacktrace": string(debug.Stack()),
 			}).Error("Go-Quai Panicked")
@@ -639,7 +642,7 @@ func (s *MatcherSession) deliverSections(bit uint, sections []uint64, bitsets []
 func (s *MatcherSession) Multiplex(batch int, wait time.Duration, mux chan chan *Retrieval) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Global.WithFields(log.Fields{
+			s.matcher.logger.WithFields(log.Fields{
 				"error":      r,
 				"stacktrace": string(debug.Stack()),
 			}).Error("Go-Quai Panicked")

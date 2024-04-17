@@ -528,7 +528,7 @@ func (progpow *Progpow) ComputePowLight(header *types.WorkObjectHeader) (mixHash
 		ethashCache := progpow.cache(blockNumber)
 		if ethashCache.cDag == nil {
 			cDag := make([]uint32, progpowCacheWords)
-			generateCDag(cDag, ethashCache.cache, blockNumber/epochLength)
+			generateCDag(cDag, ethashCache.cache, blockNumber/epochLength, progpow.logger)
 			ethashCache.cDag = cDag
 		}
 		return progpowLight(size, cache, hash, nonce, blockNumber, ethashCache.cDag)
@@ -640,7 +640,10 @@ func (progpow *Progpow) FinalizeAndAssemble(chain consensus.ChainHeaderReader, h
 		progpow.Finalize(chain, header, state)
 	}
 
-	woBody := types.NewWorkObjectBody(header.Header(), txs, etxs, uncles, subManifest, receipts, trie.NewStackTrie(nil), nodeCtx)
+	woBody, err := types.NewWorkObjectBody(header.Header(), txs, etxs, uncles, subManifest, receipts, trie.NewStackTrie(nil), nodeCtx)
+	if err != nil {
+		return nil, err
+	}
 	// Header seems complete, assemble into a block and return
 	return types.NewWorkObject(header.WorkObjectHeader(), woBody, nil, types.BlockObject), nil
 }

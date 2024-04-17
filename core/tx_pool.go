@@ -411,7 +411,7 @@ func (pool *TxPool) loop() {
 	defer pool.wg.Done()
 	defer func() {
 		if r := recover(); r != nil {
-			log.Global.WithFields(log.Fields{
+			pool.logger.WithFields(log.Fields{
 				"error":      r,
 				"stacktrace": string(debug.Stack()),
 			}).Error("Go-Quai Panicked")
@@ -1352,7 +1352,7 @@ func (pool *TxPool) scheduleReorgLoop() {
 	defer pool.wg.Done()
 	defer func() {
 		if r := recover(); r != nil {
-			log.Global.WithFields(log.Fields{
+			pool.logger.WithFields(log.Fields{
 				"error":      r,
 				"stacktrace": string(debug.Stack()),
 			}).Error("Go-Quai Panicked")

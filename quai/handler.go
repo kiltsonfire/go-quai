@@ -129,7 +129,7 @@ func (h *handler) txBroadcastLoop() {
 			for _, tx := range event.Txs {
 				err := h.p2pBackend.Broadcast(h.nodeLocation, tx)
 				if err != nil {
-					log.Global.Error("Error broadcasting transaction hash", tx.Hash(), err)
+					h.logger.Error("Error broadcasting transaction hash", tx.Hash(), err)
 				}
 			}
 		case <-h.txsSub.Err():

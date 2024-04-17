@@ -45,14 +45,16 @@ type scheduler struct {
 	bit       uint                 // Index of the bit in the bloom filter this scheduler is responsible for
 	responses map[uint64]*response // Currently pending retrieval requests or already cached responses
 	lock      sync.Mutex           // Lock protecting the responses from concurrent access
+	logger    *log.Logger
 }
 
 // newScheduler creates a new bloom-filter retrieval scheduler for a specific
 // bit index.
-func newScheduler(idx uint) *scheduler {
+func newScheduler(idx uint, logger *log.Logger) *scheduler {
 	return &scheduler{
 		bit:       idx,
 		responses: make(map[uint64]*response),
+		logger:    logger,
 	}
 }
 
@@ -93,7 +95,7 @@ func (s *scheduler) scheduleRequests(reqs chan uint64, dist chan *request, pend 
 	defer close(pend)
 	defer func() {
 		if r := recover(); r != nil {
-			log.Global.WithFields(log.Fields{
+			s.logger.WithFields(log.Fields{
 				"error":      r,
 				"stacktrace": string(debug.Stack()),
 			}).Error("Go-Quai Panicked")
@@ -148,7 +150,7 @@ func (s *scheduler) scheduleDeliveries(pend chan uint64, done chan []byte, quit 
 	defer close(done)
 	defer func() {
 		if r := recover(); r != nil {
-			log.Global.WithFields(log.Fields{
+			s.logger.WithFields(log.Fields{
 				"error":      r,
 				"stacktrace": string(debug.Stack()),
 			}).Error("Go-Quai Panicked")

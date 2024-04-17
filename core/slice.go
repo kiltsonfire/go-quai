@@ -1464,7 +1464,7 @@ func (sl *Slice) NewGenesisPendingHeader(domPendingHeader *types.WorkObject, dom
 	var localPendingHeader *types.WorkObject
 	var err error
 	var termini types.Termini
-	log.Global.Infof("NewGenesisPendingHeader location: %v, genesis hash %s", sl.NodeLocation(), genesisHash)
+	sl.logger.Infof("NewGenesisPendingHeader location: %v, genesis hash %s", sl.NodeLocation(), genesisHash)
 	if sl.hc.IsGenesisHash(genesisHash) {
 		localPendingHeader, err = sl.miner.worker.GeneratePendingHeader(genesisBlock, false)
 		if err != nil {
@@ -1477,7 +1477,7 @@ func (sl *Slice) NewGenesisPendingHeader(domPendingHeader *types.WorkObject, dom
 	} else {
 		localPendingHeaderWithTermini, exists := sl.readPhCache(domTerminus)
 		if !exists {
-			log.Global.Errorf("Genesis pending header not found in node location %v cache %v", sl.NodeLocation(), domTerminus)
+			sl.logger.Errorf("Genesis pending header not found in node location %v cache %v", sl.NodeLocation(), domTerminus)
 		}
 		localPendingHeader = localPendingHeaderWithTermini.WorkObject()
 		termini = localPendingHeaderWithTermini.Termini()
@@ -1765,7 +1765,7 @@ func (sl *Slice) cleanCacheAndDatabaseTillBlock(hash common.Hash) {
 
 	// Recover the snaps
 	if nodeCtx == common.ZONE_CTX && sl.ProcessingState() {
-		sl.hc.bc.processor.snaps, _ = snapshot.New(sl.sliceDb, sl.hc.bc.processor.stateCache.TrieDB(), sl.hc.bc.processor.cacheConfig.SnapshotLimit, currentHeader.EVMRoot(), true, true)
+		sl.hc.bc.processor.snaps, _ = snapshot.New(sl.sliceDb, sl.hc.bc.processor.stateCache.TrieDB(), sl.hc.bc.processor.cacheConfig.SnapshotLimit, currentHeader.EVMRoot(), true, true, sl.logger)
 	}
 }
 

@@ -135,11 +135,11 @@ func NewEventSystem(backend Backend) *EventSystem {
 	// Make sure none of the subscriptions are empty
 	if nodeCtx == common.ZONE_CTX && backend.ProcessingState() {
 		if m.txsSub == nil || m.logsSub == nil || m.rmLogsSub == nil || m.chainSub == nil || m.pendingLogsSub == nil {
-			log.Global.Fatal("Subscribe for event system failed")
+			backend.Logger().Fatal("Subscribe for event system failed")
 		}
 	} else {
 		if m.chainSub == nil {
-			log.Global.Fatal("Subscribe for event system failed")
+			backend.Logger().Fatal("Subscribe for event system failed")
 		}
 	}
 

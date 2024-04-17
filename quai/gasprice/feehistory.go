@@ -245,7 +245,7 @@ func (oracle *Oracle) FeeHistory(ctx context.Context, blocks int, unresolvedLast
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Global.WithFields(log.Fields{
+					oracle.logger.WithFields(log.Fields{
 						"error":      r,
 						"stacktrace": string(debug.Stack()),
 					}).Error("Go-Quai Panicked")

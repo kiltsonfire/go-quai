@@ -69,7 +69,7 @@ type Filter struct {
 
 // NewRangeFilter creates a new filter which uses a bloom filter on blocks to
 // figure out whether a particular block is interesting or not.
-func NewRangeFilter(backend Backend, begin, end int64, addresses []common.Address, topics [][]common.Hash) *Filter {
+func NewRangeFilter(backend Backend, begin, end int64, addresses []common.Address, topics [][]common.Hash, logger *log.Logger) *Filter {
 	// Flatten the address and topic filter clauses into a single bloombits filter
 	// system. Since the bloombits are not positional, nil topics are permitted,
 	// which get flattened into a nil byte slice.
@@ -93,7 +93,7 @@ func NewRangeFilter(backend Backend, begin, end int64, addresses []common.Addres
 	// Create a generic filter and convert it into a range filter
 	filter := newFilter(backend, addresses, topics)
 
-	filter.matcher = bloombits.NewMatcher(size, filters)
+	filter.matcher = bloombits.NewMatcher(size, filters, logger)
 	filter.begin = begin
 	filter.end = end
 

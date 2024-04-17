@@ -151,8 +151,9 @@ func (ec *Client) UpdateDom(ctx context.Context, oldTerminus common.Hash, pendin
 	defer func() {
 		if r := recover(); r != nil {
 			log.Global.WithFields(log.Fields{
-				"error":      r,
-				"stacktrace": string(debug.Stack()),
+				"error":       r,
+				"stacktrace":  string(debug.Stack()),
+				"to location": location.Name(),
 			}).Error("Go-Quai Panicked")
 		}
 	}()

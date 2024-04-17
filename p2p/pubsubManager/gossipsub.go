@@ -101,6 +101,7 @@ func (g *PubsubManager) Subscribe(location common.Location, datatype interface{}
 				log.Global.WithFields(log.Fields{
 					"error":      r,
 					"stacktrace": string(debug.Stack()),
+					"location":   location.Name(),
 				}).Fatal("Go-Quai Panicked")
 			}
 		}()
