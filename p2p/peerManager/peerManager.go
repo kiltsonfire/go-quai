@@ -9,7 +9,6 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/dominant-strategies/go-quai/cmd/utils"
 	"github.com/dominant-strategies/go-quai/common"
 	"github.com/dominant-strategies/go-quai/log"
 	"github.com/dominant-strategies/go-quai/p2p"
@@ -126,7 +125,18 @@ func NewManager(ctx context.Context, low int, high int, datastore datastore.Data
 
 	// Initialize the expected peerDBs
 	peerDBs := make(map[string][]*peerdb.PeerDB)
-	for _, loc := range utils.GetRunningZones() {
+
+	generateLocations := func() []common.Location {
+		locations := make([]common.Location, 9)
+		for x := byte(0); x <= 2; x++ {
+			for y := byte(0); y <= 2; y++ {
+				locations = append(locations, common.Location{x, y})
+			}
+		}
+		return locations
+	}
+
+	for _, loc := range generateLocations() {
 		domLocations := loc.GetDoms()
 		for _, domLoc := range domLocations {
 			domLocName := domLoc.Name()
