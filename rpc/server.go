@@ -19,6 +19,7 @@ package rpc
 import (
 	"context"
 	"io"
+	"runtime/debug"
 	"sync/atomic"
 
 	mapset "github.com/deckarep/golang-set"
@@ -73,6 +74,14 @@ func (s *Server) RegisterName(name string, receiver interface{}) error {
 //
 // Note that codec options are no longer supported.
 func (s *Server) ServeCodec(codec ServerCodec, options CodecOption) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Global.WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Error("Go-Quai Panicked")
+		}
+	}()
 	defer codec.close()
 
 	// Don't serve if server is stopped.

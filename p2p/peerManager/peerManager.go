@@ -3,6 +3,7 @@ package peerManager
 import (
 	"context"
 	"net"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -411,6 +412,14 @@ func (pm *BasicPeerManager) Stop() error {
 	for _, closeFunc := range closeFuncs {
 		go func(cf func() error) {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Global.WithFields(log.Fields{
+						"error":      r,
+						"stacktrace": string(debug.Stack()),
+					}).Fatal("Go-Quai Panicked")
+				}
+			}()
 			if err := cf(); err != nil {
 				mu.Lock()
 				closeErrors = append(closeErrors, err.Error())
@@ -424,6 +433,14 @@ func (pm *BasicPeerManager) Stop() error {
 			wg.Add(1)
 			go func(db *peerdb.PeerDB) {
 				defer wg.Done()
+				defer func() {
+					if r := recover(); r != nil {
+						log.Global.WithFields(log.Fields{
+							"error":      r,
+							"stacktrace": string(debug.Stack()),
+						}).Fatal("Go-Quai Panicked")
+					}
+				}()
 				if err := db.Close(); err != nil {
 					mu.Lock()
 					closeErrors = append(closeErrors, err.Error())

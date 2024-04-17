@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"runtime"
+	"runtime/debug"
 	"time"
 
 	mapset "github.com/deckarep/golang-set"
@@ -14,6 +15,7 @@ import (
 	"github.com/dominant-strategies/go-quai/core"
 	"github.com/dominant-strategies/go-quai/core/state"
 	"github.com/dominant-strategies/go-quai/core/types"
+	"github.com/dominant-strategies/go-quai/log"
 	"github.com/dominant-strategies/go-quai/params"
 	"github.com/dominant-strategies/go-quai/trie"
 	"modernc.org/mathutil"
@@ -117,6 +119,14 @@ func (blake3pow *Blake3pow) VerifyHeaders(chain consensus.ChainHeaderReader, hea
 	)
 	for i := 0; i < workers; i++ {
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					blake3pow.logger.WithFields(log.Fields{
+						"error":      r,
+						"stacktrace": string(debug.Stack()),
+					}).Error("Go-Quai Panicked")
+				}
+			}()
 			for index := range inputs {
 				errors[index] = blake3pow.verifyHeaderWorker(chain, headers, index, unixNow)
 				done <- index
@@ -126,6 +136,14 @@ func (blake3pow *Blake3pow) VerifyHeaders(chain consensus.ChainHeaderReader, hea
 
 	errorsOut := make(chan error, len(headers))
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				blake3pow.logger.WithFields(log.Fields{
+					"error":      r,
+					"stacktrace": string(debug.Stack()),
+				}).Fatal("Go-Quai Panicked")
+			}
+		}()
 		defer close(inputs)
 		var (
 			in, out = 0, 0

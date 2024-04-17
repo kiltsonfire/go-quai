@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -446,6 +447,14 @@ func (w *worker) StorePendingBlockBody() {
 
 // asyncStateLoop updates the state root for a block and returns the state udpate in a channel
 func (w *worker) asyncStateLoop() {
+	defer func() {
+		if r := recover(); r != nil {
+			w.logger.WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Error("Go-Quai Panicked")
+		}
+	}()
 	defer w.wg.Done() // decrement the wait group after the close of the loop
 
 	for {
@@ -455,6 +464,14 @@ func (w *worker) asyncStateLoop() {
 			w.interruptAsyncPhGen()
 
 			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						w.logger.WithFields(log.Fields{
+							"error":      r,
+							"stacktrace": string(debug.Stack()),
+						}).Error("Go-Quai Panicked")
+					}
+				}()
 				select {
 				case <-w.interrupt:
 					w.interrupt = make(chan struct{})
@@ -473,6 +490,14 @@ func (w *worker) asyncStateLoop() {
 			}()
 		case side := <-w.chainSideCh:
 			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						w.logger.WithFields(log.Fields{
+							"error":      r,
+							"stacktrace": string(debug.Stack()),
+						}).Fatal("Go-Quai Panicked")
+					}
+				}()
 				if side.ResetUncles {
 					w.uncleMu.Lock()
 					w.localUncles = make(map[common.Hash]*types.WorkObjectHeader)

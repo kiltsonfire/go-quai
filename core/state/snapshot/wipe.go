@@ -18,6 +18,7 @@ package snapshot
 
 import (
 	"bytes"
+	"runtime/debug"
 	"time"
 
 	"github.com/dominant-strategies/go-quai/common"
@@ -38,6 +39,14 @@ func wipeSnapshot(db ethdb.KeyValueStore, full bool) chan struct{} {
 	// Wipe everything else asynchronously
 	wiper := make(chan struct{}, 1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Global.WithFields(log.Fields{
+					"error":      r,
+					"stacktrace": string(debug.Stack()),
+				}).Error("Go-Quai Panicked")
+			}
+		}()
 		if err := wipeContent(db); err != nil {
 			log.Global.WithField("err", err).Error("Failed to wipe state snapshot") // Database close will trigger this
 			return

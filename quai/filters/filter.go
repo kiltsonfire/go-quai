@@ -27,6 +27,7 @@ import (
 	"github.com/dominant-strategies/go-quai/core/types"
 	"github.com/dominant-strategies/go-quai/ethdb"
 	"github.com/dominant-strategies/go-quai/event"
+	"github.com/dominant-strategies/go-quai/log"
 	"github.com/dominant-strategies/go-quai/rpc"
 )
 
@@ -49,6 +50,7 @@ type Backend interface {
 
 	BloomStatus() (uint64, uint64)
 	ServiceFilter(ctx context.Context, session *bloombits.MatcherSession)
+	Logger() *log.Logger
 }
 
 // Filter can be used to retrieve and filter logs.

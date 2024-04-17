@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -218,6 +219,14 @@ func (h *handler) startCallProc(fn func(*callProc)) {
 		ctx, cancel := context.WithCancel(h.rootCtx)
 		defer h.callWG.Done()
 		defer cancel()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Global.WithFields(log.Fields{
+					"error":      r,
+					"stacktrace": string(debug.Stack()),
+				}).Fatal("Go-Quai Panicked")
+			}
+		}()
 		fn(&callProc{ctx: ctx})
 	}()
 }
@@ -274,6 +283,14 @@ func (h *handler) handleResponse(msg *jsonrpcMessage) {
 	// indicates success. EthSubscribe gets unblocked in either case through
 	// the op.resp channel.
 	defer close(op.resp)
+	defer func() {
+		if r := recover(); r != nil {
+			log.Global.WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Fatal("Go-Quai Panicked")
+		}
+	}()
 	if msg.Error != nil {
 		op.err = msg.Error
 		return

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"sync"
 	"time"
@@ -335,6 +336,14 @@ func newCache(epoch uint64) interface{} {
 
 // generate ensures that the cache content is generated before use.
 func (c *cache) generate(dir string, limit int, lock bool, test bool, logger *log.Logger) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Error("Go-Quai Panicked")
+		}
+	}()
 	c.once.Do(func() {
 		size := cacheSize(c.epoch*epochLength + 1)
 		seed := seedHash(c.epoch*epochLength + 1)

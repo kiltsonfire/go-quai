@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"fmt"
 	"runtime"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -338,6 +339,14 @@ func (d *Database) Path() string {
 // meter periodically retrieves internal pebble counters and reports them to
 // the metrics subsystem.
 func (d *Database) meter(refresh time.Duration) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Global.WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Error("Go-Quai Panicked")
+		}
+	}()
 	var errc chan error
 	timer := time.NewTimer(refresh)
 	defer timer.Stop()

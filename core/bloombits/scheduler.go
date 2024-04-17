@@ -17,7 +17,10 @@
 package bloombits
 
 import (
+	"runtime/debug"
 	"sync"
+
+	"github.com/dominant-strategies/go-quai/log"
 )
 
 // request represents a bloom retrieval task to prioritize and pull from the local
@@ -88,6 +91,14 @@ func (s *scheduler) scheduleRequests(reqs chan uint64, dist chan *request, pend 
 	// Clean up the goroutine and pipeline when done
 	defer wg.Done()
 	defer close(pend)
+	defer func() {
+		if r := recover(); r != nil {
+			log.Global.WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Error("Go-Quai Panicked")
+		}
+	}()
 
 	// Keep reading and scheduling section requests
 	for {
@@ -135,6 +146,14 @@ func (s *scheduler) scheduleDeliveries(pend chan uint64, done chan []byte, quit 
 	// Clean up the goroutine and pipeline when done
 	defer wg.Done()
 	defer close(done)
+	defer func() {
+		if r := recover(); r != nil {
+			log.Global.WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Error("Go-Quai Panicked")
+		}
+	}()
 
 	// Keep reading notifications and scheduling deliveries
 	for {

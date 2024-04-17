@@ -262,7 +262,7 @@ func New(stack *node.Node, p2p NetworkingAPI, config *quaiconfig.Config, nodeCtx
 	// Set the p2p Networking API
 	quai.p2p = p2p
 
-	quai.handler = newHandler(quai.p2p, quai.core, config.NodeLocation)
+	quai.handler = newHandler(quai.p2p, quai.core, config.NodeLocation, logger)
 	// Start the handler
 	quai.handler.Start()
 

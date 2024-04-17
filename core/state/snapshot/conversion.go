@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -252,6 +253,14 @@ func generateTrieRoot(db ethdb.KeyValueWriter, it Iterator, account common.Hash,
 	// Spin up a go-routine for trie hash re-generation
 	wg.Add(1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Global.WithFields(log.Fields{
+					"error":      r,
+					"stacktrace": string(debug.Stack()),
+				}).Error("Go-Quai Panicked")
+			}
+		}()
 		defer wg.Done()
 		generatorFn(db, in, out)
 	}()
@@ -259,6 +268,14 @@ func generateTrieRoot(db ethdb.KeyValueWriter, it Iterator, account common.Hash,
 	if report && stats != nil {
 		wg.Add(1)
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Global.WithFields(log.Fields{
+						"error":      r,
+						"stacktrace": string(debug.Stack()),
+					}).Error("Go-Quai Panicked")
+				}
+			}()
 			defer wg.Done()
 			runReport(stats, stoplog)
 		}()
@@ -316,6 +333,14 @@ func generateTrieRoot(db ethdb.KeyValueWriter, it Iterator, account common.Hash,
 					return stop(err)
 				}
 				go func(hash common.Hash) {
+					defer func() {
+						if r := recover(); r != nil {
+							log.Global.WithFields(log.Fields{
+								"error":      r,
+								"stacktrace": string(debug.Stack()),
+							}).Error("Go-Quai Panicked")
+						}
+					}()
 					subroot, err := leafCallback(db, hash, common.BytesToHash(account.CodeHash), stats)
 					if err != nil {
 						results <- err

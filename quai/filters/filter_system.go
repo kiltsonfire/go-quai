@@ -20,6 +20,7 @@ package filters
 
 import (
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -376,6 +377,12 @@ func (es *EventSystem) eventLoop() {
 			es.pendingLogsSub.Unsubscribe()
 		}
 		es.chainSub.Unsubscribe()
+		if r := recover(); r != nil {
+			es.backend.Logger().WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Fatal("Go-Quai Panicked")
+		}
 	}()
 
 	index := make(filterIndex)
@@ -411,6 +418,14 @@ func (es *EventSystem) eventLoop() {
 }
 
 func (es *EventSystem) handleZoneEventLoop(index filterIndex) {
+	defer func() {
+		if r := recover(); r != nil {
+			es.backend.Logger().WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Error("Go-Quai Panicked")
+		}
+	}()
 	for {
 		select {
 		case ev := <-es.txsCh:

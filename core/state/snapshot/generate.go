@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"runtime/debug"
 	"time"
 
 	"github.com/VictoriaMetrics/fastcache"
@@ -486,6 +487,14 @@ func (dl *diskLayer) generateRange(root common.Hash, prefix []byte, kind string,
 // gathering and logging, since the method surfs the blocks as they arrive, often
 // being restarted.
 func (dl *diskLayer) generate(stats *generatorStats) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Global.WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Error("Go-Quai Panicked")
+		}
+	}()
 	var (
 		accMarker    []byte
 		accountRange = accountCheckRange

@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"net/url"
 	"reflect"
+	"runtime/debug"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -556,6 +557,14 @@ func (c *Client) dispatch(codec ServerCodec) {
 		}
 		close(c.didClose)
 	}()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Global.WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Fatal("Go-Quai Panicked")
+		}
+	}()
 
 	// Spawn the initial read loop.
 	go c.read(codec)
@@ -636,6 +645,14 @@ func (c *Client) drainRead() {
 
 // read decodes RPC messages from a codec, feeding them into dispatch.
 func (c *Client) read(codec ServerCodec) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Global.WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Fatal("Go-Quai Panicked")
+		}
+	}()
 	for {
 		msgs, batch, err := codec.readBatch()
 		if _, ok := err.(*json.SyntaxError); ok {

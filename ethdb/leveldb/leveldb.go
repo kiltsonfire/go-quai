@@ -22,6 +22,7 @@ package leveldb
 
 import (
 	"fmt"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -238,6 +239,14 @@ func (db *Database) Path() string {
 // This is how the iostats look like (currently):
 // Read(MB):3895.04860 Write(MB):3654.64712
 func (db *Database) meter(refresh time.Duration) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Global.WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Error("Go-Quai Panicked")
+		}
+	}()
 	// Create the counters to store current and previous compaction values
 	compactions := make([][]float64, 2)
 	for i := 0; i < 2; i++ {

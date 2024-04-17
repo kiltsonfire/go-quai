@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"runtime"
+	"runtime/debug"
 	"time"
 
 	mapset "github.com/deckarep/golang-set"
@@ -15,6 +16,7 @@ import (
 	"github.com/dominant-strategies/go-quai/core"
 	"github.com/dominant-strategies/go-quai/core/state"
 	"github.com/dominant-strategies/go-quai/core/types"
+	"github.com/dominant-strategies/go-quai/log"
 	"github.com/dominant-strategies/go-quai/params"
 	"github.com/dominant-strategies/go-quai/trie"
 	"modernc.org/mathutil"
@@ -119,6 +121,14 @@ func (progpow *Progpow) VerifyHeaders(chain consensus.ChainHeaderReader, headers
 	)
 	for i := 0; i < workers; i++ {
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					progpow.logger.WithFields(log.Fields{
+						"error":      r,
+						"stacktrace": string(debug.Stack()),
+					}).Fatal("Go-Quai Panicked")
+				}
+			}()
 			for index := range inputs {
 				errors[index] = progpow.verifyHeaderWorker(chain, headers, index, unixNow)
 				done <- index
@@ -128,6 +138,14 @@ func (progpow *Progpow) VerifyHeaders(chain consensus.ChainHeaderReader, headers
 
 	errorsOut := make(chan error, len(headers))
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				progpow.logger.WithFields(log.Fields{
+					"error":      r,
+					"stacktrace": string(debug.Stack()),
+				}).Fatal("Go-Quai Panicked")
+			}
+		}()
 		defer close(inputs)
 		var (
 			in, out = 0, 0

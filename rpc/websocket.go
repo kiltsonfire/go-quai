@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -279,6 +280,14 @@ func (wc *websocketCodec) pingLoop() {
 	var timer = time.NewTimer(wsPingInterval)
 	defer wc.wg.Done()
 	defer timer.Stop()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Global.WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Fatal("Go-Quai Panicked")
+		}
+	}()
 
 	for {
 		select {
