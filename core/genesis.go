@@ -512,7 +512,7 @@ func ReadGenesisQiAlloc(filename string, logger *log.Logger) map[string]GenesisU
 
 // WriteGenesisUtxoSet writes the genesis utxo set to the database
 func AddGenesisUtxos(state *state.StateDB, nodeLocation common.Location, logger *log.Logger) {
-	qiAlloc := ReadGenesisQiAlloc("genallocs/gen_alloc_qi"+nodeLocation.Name()+".json", logger)
+	qiAlloc := ReadGenesisQiAlloc("genallocs/gen_alloc_qi_"+nodeLocation.Name()+".json", logger)
 	// logger.WithField("alloc", len(qiAlloc)).Info("Allocating genesis accounts")
 	for addressString, utxo := range qiAlloc {
 		addr := common.HexToAddress(addressString, nodeLocation)
