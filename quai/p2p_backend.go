@@ -107,6 +107,15 @@ func (qbe *QuaiBackend) OnNewBroadcast(sourcePeer p2p.PeerID, data interface{}, 
 		// Nothing to do now, but we may want to add some logic here later
 		// If it was a good broadcast, mark the peer as lively
 		qbe.p2pBackend.MarkLivelyPeer(sourcePeer, nodeLocation)
+		// TODO: Handle the error here and mark the peers accordingly
+	case types.WorkObjectHeader:
+		woHeader := data.(types.WorkObjectHeader)
+		backend := *qbe.GetBackend(nodeLocation)
+		if backend == nil {
+			log.Global.Error("no backend found")
+			return false
+		}
+		backend.SendWorkShare(&woHeader)
 	}
 
 	return true

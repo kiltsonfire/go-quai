@@ -217,6 +217,13 @@ func ConvertAndMarshal(data interface{}) ([]byte, error) {
 	case *types.ProvideTopic:
 		protoProvideTopic := &types.ProtoProvideTopic{Topic: &data.Topic}
 		return proto.Marshal(protoProvideTopic)
+	case *types.WorkObjectHeader:
+		log.Global.Tracef("marshalling block header: %+v", data)
+		protoWoHeader, err := data.ProtoEncode()
+		if err != nil {
+			return nil, err
+		}
+		return proto.Marshal(protoWoHeader)
 	default:
 		return nil, errors.New("unsupported data type")
 	}
@@ -243,6 +250,19 @@ func UnmarshalAndConvert(data []byte, sourceLocation common.Location, dataPtr *i
 			return err
 		}
 		*dataPtr = *workObject
+		return nil
+	case *types.WorkObjectHeader:
+		protoWorkObjectHeader := &types.ProtoWorkObjectHeader{}
+		err := proto.Unmarshal(data, protoWorkObjectHeader)
+		if err != nil {
+			return err
+		}
+		workObjectHeader := &types.WorkObjectHeader{}
+		err = workObjectHeader.ProtoDecode(protoWorkObjectHeader)
+		if err != nil {
+			return err
+		}
+		*dataPtr = *workObjectHeader
 		return nil
 	case *types.Header:
 		protoHeader := &types.ProtoHeader{}

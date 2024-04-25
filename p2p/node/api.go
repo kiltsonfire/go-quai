@@ -299,6 +299,7 @@ func (p *P2PNode) handleBroadcast(sourcePeer peer.ID, data interface{}, nodeLoca
 	// TODO: send it to consensus
 	case types.Transactions:
 	case types.ProvideTopic:
+	case types.WorkObjectHeader:
 	default:
 		log.Global.Debugf("received unsupported block broadcast")
 		// TODO: ban the peer which sent it?
