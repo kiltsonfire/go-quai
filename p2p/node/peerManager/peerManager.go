@@ -2,7 +2,6 @@ package peerManager
 
 import (
 	"context"
-	"net"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -29,7 +28,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
-	basicConnGater "github.com/libp2p/go-libp2p/p2p/net/conngater"
 	basicConnMgr "github.com/libp2p/go-libp2p/p2p/net/connmgr"
 )
 
@@ -57,18 +55,7 @@ var (
 // PeerManager is an interface that extends libp2p Connection Manager and Gater
 type PeerManager interface {
 	connmgr.ConnManager
-	connmgr.ConnectionGater
 	streamManager.StreamManager
-
-	BlockAddr(ip net.IP) error
-	BlockPeer(p peer.ID) error
-	BlockSubnet(ipnet *net.IPNet) error
-	ListBlockedAddrs() []net.IP
-	ListBlockedPeers() []peer.ID
-	ListBlockedSubnets() []*net.IPNet
-	UnblockAddr(ip net.IP) error
-	UnblockPeer(p peer.ID) error
-	UnblockSubnet(ipnet *net.IPNet) error
 
 	// Sets the ID for the node running the peer manager
 	SetSelfID(p2p.PeerID)
@@ -113,7 +100,6 @@ type PeerManager interface {
 }
 
 type BasicPeerManager struct {
-	*basicConnGater.BasicConnectionGater
 	*basicConnMgr.BasicConnMgr
 
 	// Stream management interface instance
@@ -138,11 +124,6 @@ type BasicPeerManager struct {
 
 func NewManager(ctx context.Context, low int, high int, datastore datastore.Datastore) (PeerManager, error) {
 	mgr, err := basicConnMgr.NewConnManager(low, high)
-	if err != nil {
-		return nil, err
-	}
-
-	gater, err := basicConnGater.NewBasicConnectionGater(datastore)
 	if err != nil {
 		return nil, err
 	}
@@ -239,7 +220,6 @@ func NewManager(ctx context.Context, low int, high int, datastore datastore.Data
 		ctx:                  ctx,
 		cancel:               cancel,
 		BasicConnMgr:         mgr,
-		BasicConnectionGater: gater,
 		genesis:              utils.MakeGenesis().ToBlock(0).Hash(),
 		peerDBs:              peerDBs,
 		logger:               logger,
@@ -507,7 +487,7 @@ func (pm *BasicPeerManager) UnprotectPeer(peer p2p.PeerID) {
 }
 
 func (pm *BasicPeerManager) BanPeer(peer p2p.PeerID) {
-	pm.BlockPeer(peer)
+	panic("unimplemented")
 }
 
 func (pm *BasicPeerManager) Stop() error {

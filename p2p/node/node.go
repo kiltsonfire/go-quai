@@ -131,9 +131,6 @@ func NewNode(ctx context.Context, quitCh chan struct{}) (*P2PNode, error) {
 		// Connection manager will tag and prioritize peers
 		libp2p.ConnectionManager(peerMgr),
 
-		// Connection gater will prevent connections to blacklisted peers
-		libp2p.ConnectionGater(peerMgr),
-
 		// Let this host use the DHT to find other hosts
 		libp2p.Routing(func(h host.Host) (routing.PeerRouting, error) {
 			dht, err = dual.New(ctx, h,
