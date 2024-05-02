@@ -1540,7 +1540,21 @@ func (s *PublicTransactionPoolAPI) SendRawTransaction(ctx context.Context, input
 	if err != nil {
 		return common.Hash{}, err
 	}
-	return SubmitTransaction(ctx, s.b, tx)
+
+	hash, err := SubmitTransaction(ctx, s.b, tx)
+
+	// Broadcast the transaction
+	if err == nil {
+		err := s.b.BroadcastTx(tx, s.b.NodeLocation())
+		if err != nil {
+			s.b.Logger().WithField("err", err).Error("Error broadcasting transaction")
+		}
+	}
+	s.b.Logger().WithFields(log.Fields{
+		"txHash": tx.Hash().Hex(),
+	}).Info("Recieved transaction")
+
+	return hash, err
 }
 
 // PublicDebugAPI is the collection of Quai APIs exposed over the public

@@ -129,6 +129,7 @@ type Backend interface {
 
 	// P2P apis
 	BroadcastBlock(block *types.WorkObject, location common.Location) error
+	BroadcastTx(tx *types.Transaction, location common.Location) error
 }
 
 func GetAPIs(apiBackend Backend) []rpc.API {

@@ -62,13 +62,6 @@ func (h *handler) Start() {
 	go h.missingBlockLoop()
 
 	nodeCtx := h.nodeLocation.Context()
-	if nodeCtx == common.ZONE_CTX && h.core.ProcessingState() {
-		h.wg.Add(1)
-		h.txsCh = make(chan core.NewTxsEvent, c_newTxsChanSize)
-		h.txsSub = h.core.SubscribeNewTxsEvent(h.txsCh)
-		go h.txBroadcastLoop()
-	}
-
 	if nodeCtx == common.PRIME_CTX {
 		h.wg.Add(1)
 		go h.checkNextPrimeBlock()
@@ -125,32 +118,6 @@ func (h *handler) missingBlockLoop() {
 				}
 			}()
 		case <-h.missingBlockSub.Err():
-			return
-		}
-	}
-}
-
-// txBroadcastLoop announces new transactions to connected peers.
-func (h *handler) txBroadcastLoop() {
-	defer h.wg.Done()
-	defer func() {
-		if r := recover(); r != nil {
-			h.logger.WithFields(log.Fields{
-				"error":      r,
-				"stacktrace": string(debug.Stack()),
-			}).Fatal("Go-Quai Panicked")
-		}
-	}()
-	for {
-		select {
-		case event := <-h.txsCh:
-			for _, tx := range event.Txs {
-				err := h.p2pBackend.Broadcast(h.nodeLocation, tx)
-				if err != nil {
-					h.logger.Error("Error broadcasting transaction hash", tx.Hash(), err)
-				}
-			}
-		case <-h.txsSub.Err():
 			return
 		}
 	}

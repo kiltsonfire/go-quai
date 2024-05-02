@@ -580,3 +580,7 @@ func (b *QuaiAPIBackend) SubscribeExpansionEvent(ch chan<- core.ExpansionEvent) 
 func (b *QuaiAPIBackend) BroadcastBlock(block *types.WorkObject, location common.Location) error {
 	return b.quai.p2p.Broadcast(location, block)
 }
+
+func (b *QuaiAPIBackend) BroadcastTx(tx *types.Transaction, location common.Location) error {
+	return b.quai.p2p.Broadcast(location, tx)
+}
