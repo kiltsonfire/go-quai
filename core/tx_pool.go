@@ -1194,7 +1194,6 @@ func (pool *TxPool) addQiTx(tx *types.Transaction) error {
 func (pool *TxPool) addQiTxsLocked(txs types.Transactions) []error {
 	errs := make([]error, 0)
 	currentBlock := pool.chain.CurrentBlock()
-	gp := types.GasPool(currentBlock.GasLimit())
 	etxRLimit := len(currentBlock.Transactions()) / params.ETXRegionMaxFraction
 	if etxRLimit < params.ETXRLimitMin {
 		etxRLimit = params.ETXRLimitMin
@@ -1203,12 +1202,12 @@ func (pool *TxPool) addQiTxsLocked(txs types.Transactions) []error {
 	if etxPLimit < params.ETXPLimitMin {
 		etxPLimit = params.ETXPLimitMin
 	}
+	transactionsWithoutErrors := make(types.Transactions, 0, len(txs))
+	totalQitIns := make([]*big.Int, 0, len(txs))
+	pool.stateMu.RLock()
 	for _, tx := range txs {
-
-		pool.stateMu.RLock()
-		fee, _, _, err := ProcessQiTx(tx, pool.chain, false, true, pool.chain.CurrentBlock(), pool.currentState, &gp, new(uint64), pool.signer, pool.chainconfig.Location, *pool.chainconfig.ChainID, &etxRLimit, &etxPLimit)
+		totalQitIn, err := ValidateQiTxInputs(tx, pool.chain, pool.currentState, currentBlock, pool.signer, pool.chainconfig.Location, *pool.chainconfig.ChainID)
 		if err != nil {
-			pool.stateMu.RUnlock()
 			pool.logger.WithFields(logrus.Fields{
 				"tx":  tx.Hash().String(),
 				"err": err,
@@ -1216,7 +1215,20 @@ func (pool *TxPool) addQiTxsLocked(txs types.Transactions) []error {
 			errs = append(errs, err)
 			continue
 		}
-		pool.stateMu.RUnlock()
+		transactionsWithoutErrors = append(transactionsWithoutErrors, tx)
+		totalQitIns = append(totalQitIns, totalQitIn)
+	}
+	pool.stateMu.RUnlock()
+	for i, tx := range transactionsWithoutErrors {
+		fee, err := ValidateQiTxOutputsAndSignature(tx, pool.chain, totalQitIns[i], currentBlock, pool.signer, pool.chainconfig.Location, *pool.chainconfig.ChainID, etxRLimit, etxPLimit)
+		if err != nil {
+			pool.logger.WithFields(logrus.Fields{
+				"tx":  tx.Hash().String(),
+				"err": err,
+			}).Debug("Invalid Qi transaction")
+			errs = append(errs, err)
+			continue
+		}
 		txWithMinerFee, err := types.NewTxWithMinerFee(tx, nil, fee)
 		if err != nil {
 			errs = append(errs, err)
