@@ -90,6 +90,8 @@ func (qbe *QuaiBackend) OnNewBroadcast(sourcePeer p2p.PeerID, data interface{}, 
 		// TODO: Determine if the block information was lively or stale and rate
 		// the peer accordingly
 		backend.WriteBlock(&block)
+		// If it was a good broadcast, mark the peer as lively
+		qbe.p2pBackend.MarkLivelyPeer(sourcePeer, nodeLocation)
 	case types.Header:
 	case types.Transactions:
 		backend := *qbe.GetBackend(nodeLocation)
@@ -103,10 +105,10 @@ func (qbe *QuaiBackend) OnNewBroadcast(sourcePeer p2p.PeerID, data interface{}, 
 		}
 	case types.ProvideTopic:
 		// Nothing to do now, but we may want to add some logic here later
+		// If it was a good broadcast, mark the peer as lively
+		qbe.p2pBackend.MarkLivelyPeer(sourcePeer, nodeLocation)
 	}
 
-	// If it was a good broadcast, mark the peer as lively
-	qbe.p2pBackend.MarkLivelyPeer(sourcePeer, nodeLocation)
 	return true
 }
 
