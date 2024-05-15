@@ -16,8 +16,8 @@ import (
 	"github.com/dominant-strategies/go-quai/trie"
 )
 
-const numWorkers = 10    // Number of workers per stream
-const msgChanSize = 5000 // 5k requests per stream
+const numWorkers = 10  // Number of workers per stream
+const msgChanSize = 10 // 10 requests per stream
 
 // QuaiProtocolHandler handles all the incoming requests and responds with corresponding data
 func QuaiProtocolHandler(stream network.Stream, node QuaiP2PNode) {
