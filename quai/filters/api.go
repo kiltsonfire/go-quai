@@ -273,7 +273,10 @@ func (api *PublicFilterAPI) NewHeads(ctx context.Context) (*rpc.Subscription, er
 			select {
 			case h := <-headers:
 				// Marshal the header data
-				marshalHeader := h.RPCMarshalWorkObject()
+				// Only keep the Header in the body
+				pendingHeaderForMining := h.WithBody(h.Header(), nil, nil, nil, nil, nil)
+				// Marshal the response.
+				marshalHeader := pendingHeaderForMining.RPCMarshalWorkObject()
 				notifier.Notify(rpcSub.ID, marshalHeader)
 			case <-rpcSub.Err():
 				headersSub.Unsubscribe()
