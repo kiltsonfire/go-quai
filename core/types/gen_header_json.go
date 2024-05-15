@@ -3,6 +3,7 @@
 package types
 
 import (
+	"fmt"
 	"encoding/json"
 	"errors"
 	"math/big"
@@ -292,7 +293,7 @@ func (wh *WorkObjectHeader) MarshalJSON() ([]byte, error) {
 		Time       hexutil.Uint64 `json:"time" gencoden:"required"`
 		Nonce      BlockNonce     `json:"nonce" gencoden:"required"`
 	}
-
+	fmt.Println("MarshalJSON WorkObjectHeader:","headerHash:", wh.Hash())
 	enc.HeaderHash = wh.HeaderHash()
 	enc.Difficulty = (*hexutil.Big)(wh.Difficulty())
 	enc.Number = (*hexutil.Big)(wh.Number())
@@ -349,6 +350,8 @@ func (wb *WorkObjectBody) MarshalJSON() ([]byte, error) {
 		InterlinkHashes 	common.Hashes 		`json:"interlinkHashes" gencoden:"required"`
 	}
 
+	fmt.Println("MarshalJSON WorkObjectBody:","headerHash:", wb.Header().Hash(), "transactions:", len(wb.Transactions()), "extTransactions:", len(wb.ExtTransactions()), "uncles:", len(wb.Uncles()))
+
 	enc.Header = wb.Header()
 	enc.Transactions = wb.Transactions()
 	enc.ExtTransactions = wb.ExtTransactions()
@@ -390,6 +393,8 @@ func (wo *WorkObject) MarshalJSON() ([]byte, error) {
 		WoBody   *WorkObjectBody   `json:"woBody" gencoden:"required"`
 		Tx       *Transaction	   `json:"tx" gencoden:"required"`
 	}
+
+	fmt.Println("MarshalJSON WorkObject:","headerHash:", wo.Hash(), "transactions:", len(wo.Transactions()), "extTransactions:", len(wo.ExtTransactions()), "uncles:", len(wo.Uncles()))
 
 	enc.WoHeader = wo.WorkObjectHeader()
 	enc.WoBody = wo.Body()

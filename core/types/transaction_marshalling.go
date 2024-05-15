@@ -19,6 +19,7 @@ package types
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/big"
 
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
@@ -65,6 +66,8 @@ func (t *Transaction) MarshalJSON() ([]byte, error) {
 	// These are set for all tx types.
 	enc.Hash = t.Hash()
 	enc.Type = hexutil.Uint64(t.Type())
+
+	fmt.Println("MarshalJSON Transaction:", "Hash:", t.Hash(), "type:", t.Type())
 
 	// Other fields are set conditionally depending on tx type.
 	switch tx := t.inner.(type) {
