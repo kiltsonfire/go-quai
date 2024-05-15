@@ -247,6 +247,11 @@ func (sl *Slice) Append(header *types.WorkObject, domPendingHeader *types.WorkOb
 
 	var pendingHeaderWithTermini types.PendingHeader
 	if nodeCtx != common.ZONE_CTX {
+		if len(block.Transactions()) > 0 || len(block.ExtTransactions()) > 0 {
+			sl.logger.Warnf("Block %s has %d transactions, %d extTransactions", block.Hash(), len(block.Transactions()), len(block.ExtTransactions()))
+			block.Body().SetTransactions(types.Transactions{})
+			block.Body().SetExtTransactions(types.Transactions{})
+		}
 		// Upate the local pending header
 		pendingHeaderWithTermini, err = sl.generateSlicePendingHeader(block, newTermini, domPendingHeader, domOrigin, true, false)
 		if err != nil {
