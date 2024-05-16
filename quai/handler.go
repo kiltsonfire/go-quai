@@ -117,7 +117,7 @@ func (h *handler) missingBlockLoop() {
 					}).Info("Block returned from peer")
 				}
 				h.logger.WithFields(log.Fields{
-					"other": block.(*types.WorkObject),
+					"other": nil,
 				}).Info("other than block returned from peer")
 			}()
 		case <-h.missingBlockSub.Err():
