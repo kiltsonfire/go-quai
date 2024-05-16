@@ -190,6 +190,7 @@ func (c *Core) InsertChain(blocks types.WorkObjects) (int, error) {
 					if nodeCtx != common.ZONE_CTX && c.sl.subClients[block.Location().SubIndex(nodeLocation)] != nil {
 						c.sl.subClients[block.Location().SubIndex(nodeLocation)].DownloadBlocksInManifest(context.Background(), block.Hash(), block.Manifest(), block.ParentEntropy(nodeCtx))
 					}
+					c.sl.missingBlockFeed.Send(types.BlockRequest{Hash: block.ParentHash(nodeCtx), Entropy: block.ParentEntropy(nodeCtx)})
 				}
 				return idx, ErrPendingBlock
 			} else if err.Error() != ErrKnownBlock.Error() {
