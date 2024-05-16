@@ -211,13 +211,13 @@ func (p *P2PNode) Request(location common.Location, requestData interface{}, res
 	defer cancel()
 
 	// If it is a hash, first check to see if it is contained in the caches
-	if hash, ok := requestData.(common.Hash); ok {
-		result, ok := p.cacheGet(hash, responseDataType, location)
-		if ok {
-			resultChan <- result
-			return resultChan
-		}
-	}
+	// if hash, ok := requestData.(common.Hash); ok {
+	// 	result, ok := p.cacheGet(hash, responseDataType, location)
+	// 	if ok {
+	// 		resultChan <- result
+	// 		return resultChan
+	// 	}
+	// }
 
 	p.requestFromPeers(ctx, location, requestData, responseDataType, resultChan)
 	return resultChan
