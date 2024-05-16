@@ -136,7 +136,7 @@ func (p *P2PNode) requestFromPeers(ctx context.Context, location common.Location
 		log.Global.WithFields(log.Fields{
 			"peers":    peers,
 			"location": location,
-		}).Debug("Requesting data from peers")
+		}).Info("Requesting data from peers")
 
 		var requestWg sync.WaitGroup
 		for peerID := range peers {
@@ -176,7 +176,7 @@ func (p *P2PNode) requestAndWait(ctx context.Context, peerID peer.ID, location c
 			"data":     data,
 			"dataType": dataType,
 			"err":      err,
-		}).Error("Error requesting the data from peer")
+		}).Info("Error requesting the data from peer")
 		// Mark this peer as not responding
 		p.peerManager.MarkUnresponsivePeer(peerID, location)
 		return
@@ -187,7 +187,7 @@ func (p *P2PNode) requestAndWait(ctx context.Context, peerID peer.ID, location c
 		"dataType": dataType,
 		"peerId":   peerID,
 		"location": location.Name(),
-	}).Trace("Received data from peer")
+	}).Info("Received data from peer")
 
 	// Mark this peer as behaving well
 	p.peerManager.MarkResponsivePeer(peerID, location)
@@ -200,7 +200,7 @@ func (p *P2PNode) requestAndWait(ctx context.Context, peerID peer.ID, location c
 		log.Global.WithFields(log.Fields{
 			"peerId":  peerID,
 			"message": "Request timed out, data not sent",
-		}).Warning("Missed data send")
+		}).Info("Missed data send")
 	}
 }
 
