@@ -28,7 +28,9 @@ func QuaiProtocolHandler(stream network.Stream, node QuaiP2PNode) {
 	defer stream.Close()
 	defer recoverPanic("QuaiProtocolHandler")
 
-	log.Global.Debugf("Received a new stream from %s", stream.Conn().RemotePeer())
+	log.Global.WithFields(log.Fields{
+		"stream peer": stream.Conn().RemotePeer(),
+	}).Info("Received a new stream")
 
 	if stream.Protocol() != ProtocolVersion {
 		log.Global.Warnf("Invalid protocol: %s", stream.Protocol())
@@ -77,6 +79,10 @@ func readLoop(ctx context.Context, stream network.Stream, msgChan chan []byte, o
 
 	for {
 		data, err := common.ReadMessageFromStream(stream)
+		log.Global.WithFields(log.Fields{
+			"stream peer":  stream.Conn().RemotePeer(),
+			"encoded data": data,
+		}).Info("Read loop")
 		if err != nil {
 			if errors.Is(err, network.ErrReset) || errors.Is(err, io.EOF) {
 				once.Do(func() { close(msgChan) })
@@ -109,6 +115,12 @@ func handleMessage(data []byte, stream network.Stream, node QuaiP2PNode) {
 		log.Global.Errorf("error decoding quai message: %s", err)
 		return
 	}
+
+	log.Global.WithFields(log.Fields{
+		"stream peer":  stream.Conn().RemotePeer(),
+		"encoded data": data,
+		"decoded":      quaiMsg,
+	}).Info("Received request")
 
 	switch {
 	case quaiMsg.GetRequest() != nil:
@@ -162,23 +174,39 @@ func logRequestDetails(id uint32, decodedType interface{}, loc common.Location, 
 		"location":    loc,
 		"query":       query,
 		"peer":        peerID,
-	}).Debug("Received request")
+	}).Info("Received request")
 }
 
 func handleWorkObjectRequest(id uint32, loc common.Location, query interface{}, stream network.Stream, node QuaiP2PNode) {
 	requestedHash := &common.Hash{}
+	log.Global.WithFields(log.Fields{
+		"hash":      requestedHash,
+		"location":  loc,
+		"streamId":  id,
+		"queryType": query,
+	}).Info("workobject request")
 	switch query := query.(type) {
 	case *common.Hash:
 		requestedHash = query
 	case *big.Int:
 		number := query
-		log.Global.Tracef("Looking hash for block %s and location %s", number.String(), loc.Name())
+		log.Global.WithFields(log.Fields{
+			"number":   number.String(),
+			"location": loc.Name(),
+		}).Info("Looking for block hash by number")
 		requestedHash = node.GetBlockHashByNumber(number, loc)
 		if requestedHash == nil {
-			log.Global.Debugf("block hash not found for block %s and location %s", number.String(), loc.Name())
+			log.Global.WithFields(log.Fields{
+				"number":   number.String(),
+				"location": loc.Name(),
+			}).Info("Looking for block hash by number not found")
 			return
 		}
-		log.Global.Tracef("Found hash for block %s and location: %s hash: %s", number.String(), loc.Name(), requestedHash)
+		log.Global.WithFields(log.Fields{
+			"number":   number.String(),
+			"location": loc.Name(),
+			"hash":     requestedHash,
+		}).Info("Found block by number")
 	}
 
 	if err := handleBlockRequest(id, loc, *requestedHash, stream, node); err != nil {
@@ -211,43 +239,63 @@ func handleResponse(quaiResp *pb.QuaiResponseMessage, node QuaiP2PNode) {
 func handleBlockRequest(id uint32, loc common.Location, hash common.Hash, stream network.Stream, node QuaiP2PNode) error {
 	block := node.GetWorkObject(hash, loc)
 	if block == nil {
-		log.Global.Debugf("block not found")
+		log.Global.WithFields(log.Fields{
+			"hash":     hash,
+			"location": loc,
+			"streamId": id,
+		}).Info("block not found")
 		return nil
 	}
-	log.Global.Debugf("block found %s", block.Hash())
+	log.Global.WithField("hash", block.Hash()).Info("block found")
 
 	data, err := pb.EncodeQuaiResponse(id, loc, block)
 	if err != nil {
 		return err
 	}
-
+	log.Global.WithFields(log.Fields{
+		"data":     data,
+		"location": loc,
+		"streamId": id,
+	}).Info("encoded block response")
 	return sendResponse(stream, data, block.Hash())
 }
 
 func sendResponse(stream network.Stream, data []byte, hash common.Hash) error {
 	if err := common.WriteMessageToStream(stream, data); err != nil {
+		log.Global.WithFields(log.Fields{
+			"hash": hash,
+			"peer": stream.Conn().RemotePeer(),
+		}).Info("Unable to send response to peer")
 		return err
 	}
 	log.Global.WithFields(log.Fields{
 		"hash": hash,
 		"peer": stream.Conn().RemotePeer(),
-	}).Trace("Sent response to peer")
+	}).Info("Sent response to peer")
 	return nil
 }
 
 func handleHeaderRequest(id uint32, loc common.Location, hash common.Hash, stream network.Stream, node QuaiP2PNode) error {
 	header := node.GetHeader(hash, loc)
 	if header == nil {
-		log.Global.Debugf("header not found")
+		log.Global.WithFields(log.Fields{
+			"hash":     hash,
+			"location": loc,
+			"streamId": id,
+		}).Info("header not found")
 		return nil
 	}
-	log.Global.Debugf("header found %s", header.Hash())
+	log.Global.WithField("hash", header.Hash()).Info("header found")
 
 	data, err := pb.EncodeQuaiResponse(id, loc, header)
 	if err != nil {
 		return err
 	}
-
+	log.Global.WithFields(log.Fields{
+		"data":     data,
+		"location": loc,
+		"streamId": id,
+	}).Info("encoded header response")
 	return sendResponse(stream, data, header.Hash())
 }
 

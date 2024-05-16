@@ -176,6 +176,11 @@ func (sm *basicStreamManager) WriteMessageToStream(peerID p2p.PeerID, stream net
 	// Prefix the message with the encoded length
 	msg = append(lenBytes, msg...)
 
+	log.Global.WithFields(log.Fields{
+		"stream peer":  stream.Conn().RemotePeer(),
+		"encoded data": msg,
+	}).Info("WriteToStream message")
+
 	// Then write the message
 	_, err := stream.Write(msg)
 	if err != nil {

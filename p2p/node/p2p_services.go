@@ -34,7 +34,7 @@ func (p *P2PNode) requestFromPeer(peerID peer.ID, location common.Location, data
 		"location": location.Name(),
 		"data":     data,
 		"datatype": datatype,
-	}).Trace("Requesting the data from peer")
+	}).Info("Requesting the data from peer")
 
 	stream, err := p.NewStream(peerID)
 	if err != nil {
