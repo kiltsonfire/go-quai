@@ -3,6 +3,8 @@ package node
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"runtime"
 	"time"
 
 	"github.com/libp2p/go-libp2p"
@@ -72,6 +74,8 @@ type P2PNode struct {
 func NewNode(ctx context.Context, quitCh chan struct{}) (*P2PNode, error) {
 	ipAddr := viper.GetString(utils.IPAddrFlag.Name)
 	port := viper.GetString(utils.P2PPortFlag.Name)
+
+	EnablePprof()
 
 	// Load bootpeers
 	bootpeers, err := loadBootPeers()
@@ -209,6 +213,15 @@ func NewNode(ctx context.Context, quitCh chan struct{}) (*P2PNode, error) {
 	p2p.peerManager.SetStreamManager(sm)
 
 	return p2p, nil
+}
+
+func EnablePprof() {
+	runtime.SetBlockProfileRate(1)
+	runtime.SetMutexProfileFraction(1)
+	port := "8086"
+	go func() {
+		log.Global.Print(http.ListenAndServe("localhost:"+port, nil))
+	}()
 }
 
 // Close performs cleanup of resources used by P2PNode
