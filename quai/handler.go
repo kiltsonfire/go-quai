@@ -103,11 +103,22 @@ func (h *handler) missingBlockLoop() {
 
 			go func() {
 				defer recoverPanic("requestBlock", h.logger)
+				h.logger.WithFields(log.Fields{
+					"hash":    blockRequest.Hash,
+					"entropy": blockRequest.Entropy,
+				}).Info("Requesting block from peers")
 				resultCh := h.p2pBackend.Request(h.nodeLocation, blockRequest.Hash, &types.WorkObject{})
 				block := <-resultCh
 				if block != nil {
 					h.core.WriteBlock(block.(*types.WorkObject))
+					h.logger.WithFields(log.Fields{
+						"block hash": block.(*types.WorkObject).Hash,
+						"number":     block.(*types.WorkObject).Number,
+					}).Info("Block returned from peer")
 				}
+				h.logger.WithFields(log.Fields{
+					"other": block.(*types.WorkObject),
+				}).Info("other than block returned from peer")
 			}()
 		case <-h.missingBlockSub.Err():
 			return
