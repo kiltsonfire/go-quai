@@ -608,14 +608,14 @@ func (c *Core) Append(header *types.WorkObject, manifest types.BlockManifest, do
 			// Fetch the blocks for each hash in the manifest
 			block := c.GetBlockOrCandidateByHash(header.Hash())
 			if block == nil {
-				c.sl.missingBlockFeed.Send(types.BlockRequest{Hash: header.Hash(), Entropy: header.ParentEntropy(nodeCtx)})
+				c.sl.missingBlockFeed.Send(types.BlockRequest{Hash: header.Hash(), Entropy: c.engine.IntrinsicLogS(header.Hash())})
 			} else {
 				c.addToQueueIfNotAppended(block)
 			}
 			for _, m := range manifest {
 				block := c.GetBlockOrCandidateByHash(m)
 				if block == nil {
-					c.sl.missingBlockFeed.Send(types.BlockRequest{Hash: m, Entropy: header.ParentEntropy(nodeCtx)})
+					c.sl.missingBlockFeed.Send(types.BlockRequest{Hash: m, Entropy: c.engine.IntrinsicLogS(m)})
 				} else {
 					c.addToQueueIfNotAppended(block)
 				}
