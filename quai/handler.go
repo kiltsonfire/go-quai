@@ -119,6 +119,7 @@ func (h *handler) missingBlockLoop() {
 				h.logger.WithFields(log.Fields{
 					"other": nil,
 				}).Info("other than block returned from peer")
+				h.missingBlockCh <- types.BlockRequest{Hash: blockRequest.Hash, Entropy: blockRequest.Entropy}
 			}()
 		case <-h.missingBlockSub.Err():
 			return
