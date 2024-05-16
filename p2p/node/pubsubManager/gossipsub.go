@@ -123,6 +123,7 @@ func (g *PubsubManager) Subscribe(location common.Location, datatype interface{}
 		}()
 		// Create a channel for messages
 		msgChan := make(chan *pubsub.Message, msgChanSize)
+		defer close(msgChan)
 		full := 0
 		// Start worker goroutines
 		for i := 0; i < numWorkers; i++ {

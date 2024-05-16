@@ -57,7 +57,7 @@ func NewManager() RequestManager {
 	}
 }
 
-// Generates a new random uint32 as request ID
+// CreateRequest generates a new random uint32 as request ID
 func (m *requestIDManager) CreateRequest() uint32 {
 	var id uint32
 	for {
@@ -73,7 +73,11 @@ func (m *requestIDManager) CreateRequest() uint32 {
 		}
 	}
 
-	m.addRequestID(id, make(chan interface{}))
+	dataChan := make(chan interface{})
+	m.addRequestID(id, dataChan)
+
+	// Set up a timeout to automatically close the request
+	go m.timeoutRequest(id, dataChan)
 	return id
 }
 
@@ -84,20 +88,32 @@ func (m *requestIDManager) addRequestID(id uint32, dataChan chan interface{}) {
 	m.activeRequests.store(id, dataChan)
 }
 
-// Removes a request ID from the active requests map
+// CloseRequest removes a request ID from the active requests map
 func (m *requestIDManager) CloseRequest(id uint32) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	dataChan, ok := m.activeRequests.load(id)
+	if ok {
+		close(dataChan)
+	}
 	m.activeRequests.delete(id)
 }
 
 // Checks if a request ID exists in the active requests map
 func (m *requestIDManager) GetRequestChan(id uint32) (chan interface{}, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	dataChan, ok := m.activeRequests.load(id)
 	if !ok {
 		return nil, errRequestNotFound
 	}
 	return dataChan, nil
+}
+
+// timeoutRequest automatically closes a request after the timeout period
+func (m *requestIDManager) timeoutRequest(id uint32, dataChan chan interface{}) {
+	select {
+	case <-time.After(C_requestTimeout):
+		m.CloseRequest(id)
+	case <-dataChan:
+		// Request was closed before timeout
+	}
 }

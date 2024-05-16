@@ -18,7 +18,7 @@ import (
 	"github.com/dominant-strategies/go-quai/trie"
 )
 
-// Opens a stream to the given peer and request some data for the given hash at the given location
+// requestFromPeer opens a stream to the given peer and requests data for the given hash at the given location.
 func (p *P2PNode) requestFromPeer(peerID peer.ID, location common.Location, data interface{}, datatype interface{}) (interface{}, error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -28,12 +28,14 @@ func (p *P2PNode) requestFromPeer(peerID peer.ID, location common.Location, data
 			}).Error("Go-Quai Panicked")
 		}
 	}()
+
 	log.Global.WithFields(log.Fields{
 		"peerId":   peerID,
 		"location": location.Name(),
 		"data":     data,
 		"datatype": datatype,
 	}).Trace("Requesting the data from peer")
+
 	stream, err := p.NewStream(peerID)
 	if err != nil {
 		log.Global.WithFields(log.Fields{
@@ -42,90 +44,92 @@ func (p *P2PNode) requestFromPeer(peerID peer.ID, location common.Location, data
 		}).Error("Failed to open stream to peer")
 		return nil, err
 	}
+	defer stream.Close()
 
-	// Get a new request ID
 	id := p.requestManager.CreateRequest()
-
-	// Remove request ID from the map of pending requests when cleaning up
 	defer p.requestManager.CloseRequest(id)
 
-	// Create the corresponding data request
 	requestBytes, err := pb.EncodeQuaiRequest(id, location, data, datatype)
 	if err != nil {
 		return nil, err
 	}
 
-	// Send the request to the peer
 	err = p.GetPeerManager().WriteMessageToStream(peerID, stream, requestBytes)
 	if err != nil {
 		return nil, err
 	}
 
-	// Get appropriate channel and wait for response
 	dataChan, err := p.requestManager.GetRequestChan(id)
 	if err != nil {
 		return nil, err
 	}
+
 	var recvdType interface{}
 	select {
 	case recvdType = <-dataChan:
-		p.GetPeerManager().ClosePendingRequest(peerID)
-		break
 	case <-time.After(requestManager.C_requestTimeout):
 		log.Global.WithFields(log.Fields{
 			"peerId": peerID,
 		}).Warn("Peer did not respond in time")
 		p.peerManager.MarkUnresponsivePeer(peerID, location)
-		p.GetPeerManager().ClosePendingRequest(peerID)
 		return nil, errors.New("peer did not respond in time")
 	}
+
+	p.GetPeerManager().ClosePendingRequest(peerID)
 
 	if recvdType == nil {
 		return nil, nil
 	}
 
-	// Check the received data type & hash matches the request
+	valid, result := p.validateResponse(recvdType, data, datatype, location)
+	if !valid {
+		// Optionally ban the peer for misbehaving
+		// p.BanPeer(peerID)
+		return nil, errors.New("invalid response")
+	}
+
+	return result, nil
+}
+
+// validateResponse checks if the received response matches the requested data type and hash.
+func (p *P2PNode) validateResponse(recvdType interface{}, data interface{}, datatype interface{}, location common.Location) (bool, interface{}) {
 	switch datatype.(type) {
 	case *types.WorkObject:
 		if block, ok := recvdType.(*types.WorkObject); ok {
 			switch data := data.(type) {
 			case common.Hash:
 				if block.Hash() == data {
-					return block, nil
+					return true, block
 				}
-				return nil, errors.Errorf("invalid response: expected block with hash %s, got %s", data, block.Hash())
+				log.Global.Errorf("invalid response: expected block with hash %s, got %s", data, block.Hash())
 			case *big.Int:
 				nodeCtx := location.Context()
 				if block.Number(nodeCtx).Cmp(data) == 0 {
-					return block, nil
+					return true, block
 				}
-				return nil, errors.Errorf("invalid response: expected block with number %s, got %s", data, block.Number(nodeCtx))
+				log.Global.Errorf("invalid response: expected block with number %s, got %s", data, block.Number(nodeCtx))
 			}
 		}
-		return nil, errors.New("block request invalid response")
 	case *types.Header:
 		if header, ok := recvdType.(*types.Header); ok && header.Hash() == data.(common.Hash) {
-			return header, nil
+			return true, header
 		}
 	case *types.Transaction:
 		if tx, ok := recvdType.(*types.Transaction); ok && tx.Hash() == data.(common.Hash) {
-			return tx, nil
+			return true, tx
 		}
 	case common.Hash:
 		if hash, ok := recvdType.(common.Hash); ok {
-			return hash, nil
+			return true, hash
 		}
 	case *trie.TrieNodeRequest:
 		if trieNode, ok := recvdType.(*trie.TrieNodeResponse); ok {
-			return trieNode, nil
+			return true, trieNode
 		}
 	default:
 		log.Global.Warn("peer returned unexpected type")
 	}
-
-	// If this peer responded with an invalid response, ban them for misbehaving.
-	p.BanPeer(peerID)
-	return nil, errors.New("invalid response")
+	return false, nil
 }
 
 func (p *P2PNode) GetRequestManager() requestManager.RequestManager {

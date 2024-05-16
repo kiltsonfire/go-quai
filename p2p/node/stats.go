@@ -7,15 +7,19 @@ import (
 	"github.com/dominant-strategies/go-quai/log"
 )
 
-// Returns the number of peers in the routing table, as well as how many active
-// connections we currently have.
+// connectionStats returns the number of peers in the routing table, as well as the number of active connections.
 func (p *P2PNode) connectionStats() int {
 	peers := p.peerManager.GetHost().Network().Peers()
-	numConnected := len(peers)
-
-	return numConnected
+	return len(peers)
 }
 
+// logConnectionStats logs the current number of connected peers.
+func (p *P2PNode) logConnectionStats() {
+	peersConnected := p.connectionStats()
+	log.Global.Debugf("Number of peers connected: %d", peersConnected)
+}
+
+// statsLoop periodically logs the connection stats.
 func (p *P2PNode) statsLoop() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -26,12 +30,14 @@ func (p *P2PNode) statsLoop() {
 			}).Error("Go-Quai Panicked")
 		}
 	}()
+
 	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ticker.C:
-			peersConnected := p.connectionStats()
-			log.Global.Debugf("Number of peers connected: %d", peersConnected)
+			p.logConnectionStats()
 		case <-p.ctx.Done():
 			log.Global.Warnf("Context cancelled. Stopping stats loop...")
 			return

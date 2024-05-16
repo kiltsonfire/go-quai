@@ -61,6 +61,10 @@ type P2PNode struct {
 
 	// runtime context
 	ctx context.Context
+
+	cancel context.CancelFunc
+	host   host.Host
+	dht    *dual.DHT
 }
 
 // Returns a new libp2p node.
@@ -183,23 +187,56 @@ func NewNode(ctx context.Context, quitCh chan struct{}) (*P2PNode, error) {
 		return nil, err
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
 	p2p := &P2PNode{
 		ctx:            ctx,
+		cancel:         cancel,
 		bootpeers:      bootpeers,
 		pubsub:         ps,
 		peerManager:    peerMgr,
 		requestManager: requestManager.NewManager(),
 		cache:          initializeCaches(common.GenerateLocations(common.MaxRegions, common.MaxZones)),
 		quitCh:         quitCh,
+		host:           host,
+		dht:            dht,
 	}
 
 	sm, err := streamManager.NewStreamManager(peerManager.C_peerCount, p2p, host)
 	if err != nil {
 		return nil, err
 	}
+
 	p2p.peerManager.SetStreamManager(sm)
 
 	return p2p, nil
+}
+
+// Close performs cleanup of resources used by P2PNode
+func (p *P2PNode) Close() error {
+	p.cancel()
+
+	// Close PubSub manager
+	if err := p.pubsub.Stop(); err != nil {
+		log.Global.Errorf("error closing pubsub manager: %s", err)
+	}
+
+	// Close the stream manager
+	if err := p.peerManager.Stop(); err != nil {
+		log.Global.Errorf("error closing peer manager: %s", err)
+	}
+
+	// Close DHT
+	if err := p.dht.Close(); err != nil {
+		log.Global.Errorf("error closing DHT: %s", err)
+	}
+
+	// Close the libp2p host
+	if err := p.host.Close(); err != nil {
+		log.Global.Errorf("error closing libp2p host: %s", err)
+	}
+
+	close(p.quitCh)
+	return nil
 }
 
 func initializeCaches(locations []common.Location) map[string]map[string]*lru.Cache[common.Hash, interface{}] {
