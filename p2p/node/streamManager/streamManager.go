@@ -143,26 +143,6 @@ func (sm *basicStreamManager) GetHost() host.Host {
 
 // Writes the message to the stream.
 func (sm *basicStreamManager) WriteMessageToStream(peerID p2p.PeerID, stream network.Stream, msg []byte) error {
-	wrappedStream, found := sm.streamCache.Get(peerID)
-	if !found {
-		return errors.New("stream not found")
-	}
-	if stream != wrappedStream.(*streamWrapper).stream {
-		// Indicate an unexpected case where the stream we stored and the stream we are requested to write to are not the same.
-		return errors.New("stream mismatch")
-	}
-
-	// Attempt to acquire semaphore before proceeding
-	select {
-	case wrappedStream.(*streamWrapper).semaphore <- struct{}{}:
-		// Acquired semaphore successfully
-	default:
-		return errors.New("too many pending requests")
-	}
-	defer func() {
-		<-wrappedStream.(*streamWrapper).semaphore
-	}()
-
 	// Set the write deadline
 	if err := stream.SetWriteDeadline(time.Now().Add(c_stream_timeout)); err != nil {
 		return errors.Wrap(err, "failed to set write deadline")
