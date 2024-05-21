@@ -448,11 +448,20 @@ func (sl *Slice) Append(header *types.WorkObject, domPendingHeader *types.WorkOb
 		"t6_3": time6_3,
 	}).Info("Times during sub append")
 
+	var wsLogS *big.Int
+	wsLogS, err = sl.engine.WorkShareLogS(block)
+	if err != nil {
+		wsLogS = big.NewInt(0)
+	}
+
 	sl.logger.WithFields(log.Fields{
 		"number":             block.NumberArray(),
 		"hash":               block.Hash(),
 		"difficulty":         block.Difficulty(),
 		"uncles":             len(block.Uncles()),
+		"TotalLogS":          common.BigBitsToBits(sl.engine.TotalLogS(sl.hc, block)),
+		"IntrinsicS":         common.BigBitsToBits(sl.engine.IntrinsicLogS(block.Hash())),
+		"WorkShareS":         common.BigBitsToBits(wsLogS),
 		"totalTxs":           len(block.Transactions()),
 		"etxs emitted":       len(block.ExtTransactions()),
 		"qiTxs":              len(block.QiTransactions()),
