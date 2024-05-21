@@ -193,13 +193,13 @@ var (
 	OrchardDurationLimit              = big.NewInt(12)    // The decision boundary on the blocktime duration used to determine whether difficulty should go up or not.
 	LighthouseDurationLimit           = big.NewInt(7)     // The decision boundary on the blocktime duration used to determine whether difficulty should go up or not.
 	LocalDurationLimit                = big.NewInt(2)     // The decision boundary on the blocktime duration used to determine whether difficulty should go up or not.
-	TimeFactor                        = big.NewInt(7)
+	TimeFactor                        = big.NewInt(3)
 	TimeToStartTx              uint64 = 0 * BlocksPerDay
 	BlocksPerDay               uint64 = new(big.Int).Div(big.NewInt(86400), DurationLimit).Uint64() // BlocksPerDay is the number of blocks per day assuming 12 second block time
 	DifficultyAdjustmentPeriod        = big.NewInt(360)                                             // This is the number of blocks over which the average has to be taken
 	DifficultyAdjustmentFactor int64  = 40                                                          // This is the factor that divides the log of the change in the difficulty
 	MinQuaiConversionAmount           = new(big.Int).Mul(big.NewInt(1), big.NewInt(GWei))           // 0.000000001 Quai
-	MaxWorkShareCount                 = 16
+	MaxWorkShareCount                 = 0
 	WorkSharesThresholdDiff           = 3 // Number of bits lower than the target that the default consensus engine uses
 	WorkSharesInclusionDepth          = 7 // Number of blocks upto which the work shares can be referenced and this is protocol enforced
 )
