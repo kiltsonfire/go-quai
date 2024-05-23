@@ -34,7 +34,6 @@ import (
 	"github.com/dominant-strategies/go-quai/log"
 	"github.com/dominant-strategies/go-quai/params"
 	"github.com/dominant-strategies/go-quai/quai/gasprice"
-	"github.com/dominant-strategies/go-quai/quaiclient"
 	"github.com/dominant-strategies/go-quai/rpc"
 )
 
@@ -519,8 +518,8 @@ func (b *QuaiAPIBackend) ProcessingState() bool {
 	return b.quai.core.ProcessingState()
 }
 
-func (b *QuaiAPIBackend) NewGenesisPendingHeader(pendingHeader *types.WorkObject, domTerminus common.Hash, genesisHash common.Hash) {
-	b.quai.core.NewGenesisPendigHeader(pendingHeader, domTerminus, genesisHash)
+func (b *QuaiAPIBackend) NewGenesisPendingHeader(pendingHeader *types.WorkObject, domTerminus common.Hash, genesisHash common.Hash) error {
+	return b.quai.core.NewGenesisPendigHeader(pendingHeader, domTerminus, genesisHash)
 }
 
 func (b *QuaiAPIBackend) SetCurrentExpansionNumber(expansionNumber uint8) {
@@ -575,8 +574,8 @@ func (b *QuaiAPIBackend) GetSlicesRunning() []common.Location {
 	return b.quai.core.GetSlicesRunning()
 }
 
-func (b *QuaiAPIBackend) SetSubClient(client *quaiclient.Client, location common.Location) {
-	b.quai.core.SetSubClient(client, location)
+func (b *QuaiAPIBackend) SetSubInterface(subInterface core.CoreBackend, location common.Location) {
+	b.quai.core.SetSubInterface(subInterface, location)
 }
 
 func (b *QuaiAPIBackend) AddGenesisPendingEtxs(block *types.WorkObject) {
@@ -593,6 +592,10 @@ func (b *QuaiAPIBackend) SendWorkShare(workShare *types.WorkObjectHeader) error 
 
 func (b *QuaiAPIBackend) CheckIfValidWorkShare(workShare *types.WorkObjectHeader) bool {
 	return b.quai.core.CheckIfValidWorkShare(workShare)
+}
+
+func (b *QuaiAPIBackend) SetDomInterface(domInterface core.CoreBackend) {
+	b.quai.core.SetDomInterface(domInterface)
 }
 
 // ///////////////////////////

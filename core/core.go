@@ -1,7 +1,6 @@
 package core
 
 import (
-	"context"
 	"errors"
 	"io"
 	"math/big"
@@ -27,7 +26,6 @@ import (
 	"github.com/dominant-strategies/go-quai/event"
 	"github.com/dominant-strategies/go-quai/log"
 	"github.com/dominant-strategies/go-quai/params"
-	"github.com/dominant-strategies/go-quai/quaiclient"
 	"github.com/dominant-strategies/go-quai/rlp"
 	"github.com/dominant-strategies/go-quai/trie"
 )
@@ -82,8 +80,8 @@ type IndexerConfig struct {
 	IndexAddressUtxos bool
 }
 
-func NewCore(db ethdb.Database, config *Config, isLocalBlock func(block *types.WorkObject) bool, txConfig *TxPoolConfig, txLookupLimit *uint64, chainConfig *params.ChainConfig, slicesRunning []common.Location, currentExpansionNumber uint8, genesisBlock *types.WorkObject, domClientUrl string, subClientUrls []string, engine consensus.Engine, cacheConfig *CacheConfig, vmConfig vm.Config, indexerConfig *IndexerConfig, genesis *Genesis, logger *log.Logger) (*Core, error) {
-	slice, err := NewSlice(db, config, txConfig, txLookupLimit, isLocalBlock, chainConfig, slicesRunning, currentExpansionNumber, genesisBlock, domClientUrl, subClientUrls, engine, cacheConfig, indexerConfig, vmConfig, genesis, logger)
+func NewCore(db ethdb.Database, config *Config, isLocalBlock func(block *types.WorkObject) bool, txConfig *TxPoolConfig, txLookupLimit *uint64, chainConfig *params.ChainConfig, slicesRunning []common.Location, currentExpansionNumber uint8, genesisBlock *types.WorkObject, engine consensus.Engine, cacheConfig *CacheConfig, vmConfig vm.Config, indexerConfig *IndexerConfig, genesis *Genesis, logger *log.Logger) (*Core, error) {
+	slice, err := NewSlice(db, config, txConfig, txLookupLimit, isLocalBlock, chainConfig, slicesRunning, currentExpansionNumber, genesisBlock, engine, cacheConfig, indexerConfig, vmConfig, genesis, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -186,8 +184,8 @@ func (c *Core) InsertChain(blocks types.WorkObjects) (int, error) {
 				}
 				if err.Error() == ErrSubNotSyncedToDom.Error() ||
 					err.Error() == ErrPendingEtxNotFound.Error() {
-					if nodeCtx != common.ZONE_CTX && c.sl.subClients[block.Location().SubIndex(nodeLocation)] != nil {
-						c.sl.subClients[block.Location().SubIndex(nodeLocation)].DownloadBlocksInManifest(context.Background(), block.Hash(), block.Manifest(), block.ParentEntropy(nodeCtx))
+					if nodeCtx != common.ZONE_CTX && c.sl.subInterface[block.Location().SubIndex(nodeLocation)] != nil {
+						c.sl.subInterface[block.Location().SubIndex(nodeLocation)].DownloadBlocksInManifest(block.Hash(), block.Manifest(), block.ParentEntropy(nodeCtx))
 					}
 				}
 				return idx, ErrPendingBlock
@@ -305,10 +303,8 @@ func (c *Core) serviceBlocks(hashNumberList []types.HashAndNumber) {
 						"Hash":  parentBlock.Hash(),
 						"Order": parentHeaderOrder,
 					}).Info("Requesting the dom to get the block if it doesnt have and try to append")
-					if c.sl.domClient != nil {
-						// send a signal to the required dom to fetch the block if it doesnt have it, or its not in its appendqueue
-						go c.sl.domClient.RequestDomToAppendOrFetch(context.Background(), parentBlock.Hash(), parentBlock.ParentEntropy(c.NodeCtx()), parentHeaderOrder)
-					}
+					// send a signal to the required dom to fetch the block if it doesnt have it, or its not in its appendqueue
+					go c.sl.domInterface.RequestDomToAppendOrFetch(parentBlock.Hash(), parentBlock.ParentEntropy(c.NodeCtx()), parentHeaderOrder)
 				}
 				c.addToQueueIfNotAppended(parentBlock)
 				_, err = c.InsertChain([]*types.WorkObject{block})
@@ -351,9 +347,7 @@ func (c *Core) RequestDomToAppendOrFetch(hash common.Hash, entropy *big.Int, ord
 		}
 	} else if nodeCtx == common.REGION_CTX {
 		if order < nodeCtx { // Prime block
-			if c.sl.domClient != nil {
-				go c.sl.domClient.RequestDomToAppendOrFetch(context.Background(), hash, entropy, order)
-			}
+			go c.sl.domInterface.RequestDomToAppendOrFetch(hash, entropy, order)
 		}
 		_, exists := c.appendQueue.Get(hash)
 		if !exists {
@@ -588,9 +582,7 @@ func (c *Core) WriteBlock(block *types.WorkObject) {
 			c.addToAppendQueue(block)
 			// If a dom block comes in and we havent appended it yet
 		} else if order < nodeCtx && c.GetHeaderByHash(block.Hash()) == nil {
-			if c.sl.domClient != nil {
-				go c.sl.domClient.RequestDomToAppendOrFetch(context.Background(), block.Hash(), block.ParentEntropy(nodeCtx), order)
-			}
+			go c.sl.domInterface.RequestDomToAppendOrFetch(block.Hash(), block.ParentEntropy(nodeCtx), order)
 		}
 	}
 
@@ -601,6 +593,8 @@ func (c *Core) WriteBlock(block *types.WorkObject) {
 
 func (c *Core) Append(header *types.WorkObject, manifest types.BlockManifest, domPendingHeader *types.WorkObject, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.Transactions) (types.Transactions, bool, bool, error) {
 	nodeCtx := c.NodeCtx()
+	// Set the coinbase into the right interface before calling append in the sub
+	header.Header().SetCoinbase(common.BytesToAddress(header.Coinbase().Bytes(), c.NodeLocation()))
 	newPendingEtxs, subReorg, setHead, err := c.sl.Append(header, domPendingHeader, domTerminus, domOrigin, newInboundEtxs)
 	if err != nil {
 		if err.Error() == ErrBodyNotFound.Error() || err.Error() == consensus.ErrUnknownAncestor.Error() || err.Error() == ErrSubNotSyncedToDom.Error() {
@@ -644,8 +638,8 @@ func (c *Core) DownloadBlocksInManifest(blockHash common.Hash, manifest types.Bl
 		block := c.GetBlockOrCandidateByHash(blockHash)
 		if block != nil {
 			// If a prime block comes in
-			if c.sl.subClients[block.Location().SubIndex(c.NodeLocation())] != nil {
-				c.sl.subClients[block.Location().SubIndex(c.NodeLocation())].DownloadBlocksInManifest(context.Background(), block.Hash(), block.Manifest(), block.ParentEntropy(c.NodeCtx()))
+			if c.sl.subInterface[block.Location().SubIndex(c.NodeLocation())] != nil {
+				c.sl.subInterface[block.Location().SubIndex(c.NodeLocation())].DownloadBlocksInManifest(block.Hash(), block.Manifest(), block.ParentEntropy(c.NodeCtx()))
 			}
 		}
 	}
@@ -664,8 +658,8 @@ func (c *Core) UpdateDom(oldTerminus common.Hash, pendingHeader types.PendingHea
 	c.sl.UpdateDom(oldTerminus, pendingHeader, location)
 }
 
-func (c *Core) NewGenesisPendigHeader(pendingHeader *types.WorkObject, domTerminus common.Hash, genesisHash common.Hash) {
-	c.sl.NewGenesisPendingHeader(pendingHeader, domTerminus, genesisHash)
+func (c *Core) NewGenesisPendigHeader(pendingHeader *types.WorkObject, domTerminus common.Hash, genesisHash common.Hash) error {
+	return c.sl.NewGenesisPendingHeader(pendingHeader, domTerminus, genesisHash)
 }
 
 func (c *Core) SetCurrentExpansionNumber(expansionNumber uint8) {
@@ -744,8 +738,8 @@ func (c *Core) GetSlicesRunning() []common.Location {
 	return c.sl.GetSlicesRunning()
 }
 
-func (c *Core) SetSubClient(client *quaiclient.Client, location common.Location) {
-	c.sl.SetSubClient(client, location)
+func (c *Core) SetSubInterface(subInterface CoreBackend, location common.Location) {
+	c.sl.SetSubInterface(subInterface, location)
 }
 
 func (c *Core) AddGenesisPendingEtxs(block *types.WorkObject) {
@@ -754,6 +748,10 @@ func (c *Core) AddGenesisPendingEtxs(block *types.WorkObject) {
 
 func (c *Core) SubscribeExpansionEvent(ch chan<- ExpansionEvent) event.Subscription {
 	return c.sl.SubscribeExpansionEvent(ch)
+}
+
+func (c *Core) SetDomInterface(domInterface CoreBackend) {
+	c.sl.SetDomInterface(domInterface)
 }
 
 //---------------------//
