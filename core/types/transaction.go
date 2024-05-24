@@ -22,6 +22,8 @@ import (
 	"errors"
 	"io"
 	"math/big"
+	"reflect"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -42,6 +44,15 @@ var (
 	ErrTxTypeNotSupported = errors.New("transaction type not supported")
 	ErrGasFeeCapTooLow    = errors.New("fee cap less than base fee")
 	errEmptyTypedTx       = errors.New("empty typed transaction bytes")
+)
+
+// Utility functions and pools
+var (
+	quaiTxPool = sync.Pool{
+		New: func() interface{} {
+			return new(QuaiTx)
+		},
+	}
 )
 
 // Transaction types.
@@ -74,7 +85,7 @@ func NewTx(inner TxData) *Transaction {
 }
 
 func (tx *Transaction) SetInner(inner TxData) {
-	tx.setDecoded(inner, 0)
+	tx.setDecoded(inner.copy(), 0)
 }
 
 // TxData is the underlying data of a transaction.
@@ -230,7 +241,12 @@ func (tx *Transaction) ProtoDecode(protoTx *ProtoTransaction, location common.Lo
 		if protoTx.ChainId == nil {
 			return errors.New("missing required field 'ChainId' in ProtoTransaction")
 		}
-		var quaiTx QuaiTx
+
+		// Get a QuaiTx from the pool
+		quaiTx := quaiTxPool.Get().(*QuaiTx)
+		defer quaiTxPool.Put(quaiTx)
+		resetQuaiTx(quaiTx)
+
 		quaiTx.AccessList = AccessList{}
 		quaiTx.AccessList.ProtoDecode(protoTx.GetAccessList(), location)
 		if protoTx.To == nil {
@@ -286,7 +302,7 @@ func (tx *Transaction) ProtoDecode(protoTx *ProtoTransaction, location common.Lo
 			nonce := BlockNonce(uint64ToByteArr(*protoTx.WorkNonce))
 			quaiTx.WorkNonce = &nonce
 		}
-		tx.SetInner(&quaiTx)
+		tx.SetInner(quaiTx)
 
 	case 1:
 		if protoTx.Gas == nil {
@@ -383,7 +399,26 @@ func (tx *Transaction) ProtoDecode(protoTx *ProtoTransaction, location common.Lo
 		return errors.New("invalid transaction type")
 	}
 	tx.time = time.Now()
+
 	return nil
+}
+
+func resetQuaiTx(tx *QuaiTx) {
+	tx.AccessList = AccessList{}
+	tx.To = nil
+	tx.ChainID = nil
+	tx.Nonce = 0
+	tx.GasTipCap = nil
+	tx.GasFeeCap = nil
+	tx.Gas = 0
+	tx.Value = nil
+	tx.Data = nil
+	tx.V = nil
+	tx.R = nil
+	tx.S = nil
+	tx.ParentHash = nil
+	tx.MixHash = nil
+	tx.WorkNonce = nil
 }
 
 func (tx *Transaction) ProtoEncodeTxSigningData() *ProtoTransaction {
@@ -1247,4 +1282,14 @@ func (al *AccessList) ProtoDecode(protoAccessList *ProtoAccessList, location com
 // This function must only be used by tests
 func GetInnerForTesting(tx *Transaction) TxData {
 	return tx.inner
+}
+
+func SetPointerFieldsToNil(v interface{}) {
+	val := reflect.ValueOf(v).Elem()
+	for i := 0; i < val.NumField(); i++ {
+		field := val.Field(i)
+		if field.Kind() == reflect.Ptr && !field.IsNil() {
+			field.Set(reflect.Zero(field.Type()))
+		}
+	}
 }
