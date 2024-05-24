@@ -641,7 +641,20 @@ func ReadWorkObject(db ethdb.Reader, hash common.Hash, woType types.WorkObjectVi
 	if workObjectHeader == nil {
 		return nil
 	}
-	workObjectBody := ReadWorkObjectBody(db, hash)
+	workObjectBody := ReadWorkObjectBody(db, hash, types.BlockObject)
+	if workObjectBody == nil {
+		return nil
+	}
+	return types.NewWorkObject(workObjectHeader, workObjectBody, nil) //TODO: mmtx transaction
+}
+
+// ReadWorkObjectWithWorkShares retreive's the work object stored in hash.
+func ReadWorkObjectWithWorkShares(db ethdb.Reader, hash common.Hash) *types.WorkObject {
+	workObjectHeader := ReadWorkObjectHeader(db, hash, types.BlockObject)
+	if workObjectHeader == nil {
+		return nil
+	}
+	workObjectBody := ReadWorkObjectBody(db, hash, types.WorkShareObject)
 	if workObjectBody == nil {
 		return nil
 	}
@@ -684,7 +697,7 @@ func DeleteBlockWithoutNumber(db ethdb.KeyValueWriter, hash common.Hash, number 
 }
 
 // ReadWorkObjectBody retreive's the work object body stored in hash.
-func ReadWorkObjectBody(db ethdb.Reader, hash common.Hash) *types.WorkObjectBody {
+func ReadWorkObjectBody(db ethdb.Reader, hash common.Hash, woType types.WorkObjectView) *types.WorkObjectBody {
 	key := workObjectBodyKey(hash)
 	data, _ := db.Get(key)
 	if len(data) == 0 {
@@ -697,7 +710,7 @@ func ReadWorkObjectBody(db ethdb.Reader, hash common.Hash) *types.WorkObjectBody
 		return nil
 	}
 	workObjectBody := new(types.WorkObjectBody)
-	err = workObjectBody.ProtoDecode(protoWorkObjectBody, db.Location())
+	err = workObjectBody.ProtoDecode(protoWorkObjectBody, db.Location(), woType)
 	if err != nil {
 		db.Logger().WithFields(log.Fields{
 			"hash": hash,
@@ -1050,7 +1063,7 @@ func (b *badWorkObject) ProtoDecode(pb *ProtoBadWorkObject) error {
 	}
 	b.woHeader = woHeader
 	woBody := new(types.WorkObjectBody)
-	if err := woBody.ProtoDecode(pb.WoBody, b.woHeader.Location()); err != nil {
+	if err := woBody.ProtoDecode(pb.WoBody, b.woHeader.Location(), types.BlockObject); err != nil {
 		return err
 	}
 	b.woBody = woBody
