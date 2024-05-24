@@ -53,6 +53,11 @@ var (
 			return new(QuaiTx)
 		},
 	}
+	txPool = sync.Pool{
+		New: func() interface{} {
+			return new(Transaction)
+		},
+	}
 )
 
 // Transaction types.
@@ -419,6 +424,11 @@ func resetQuaiTx(tx *QuaiTx) {
 	tx.ParentHash = nil
 	tx.MixHash = nil
 	tx.WorkNonce = nil
+}
+
+func resetTx(tx *Transaction) {
+	tx.inner = nil
+	tx.time = time.Time{}
 }
 
 func (tx *Transaction) ProtoEncodeTxSigningData() *ProtoTransaction {
@@ -868,7 +878,9 @@ func (s Transactions) ProtoEncode() (*ProtoTransactions, error) {
 // ProtoDecode decodes the ProtoTransactions into the Transactions format
 func (s *Transactions) ProtoDecode(transactions *ProtoTransactions, location common.Location) error {
 	for _, protoTx := range transactions.Transactions {
-		tx := &Transaction{}
+		tx := txPool.Get().(*Transaction)
+		defer txPool.Put(tx)
+		resetTx(tx)
 		err := tx.ProtoDecode(protoTx, location)
 		if err != nil {
 			return err
