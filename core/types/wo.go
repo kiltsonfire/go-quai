@@ -1172,27 +1172,25 @@ func (wb *WorkObjectBody) ProtoDecode(data *ProtoWorkObjectBody, location common
 			}
 			newWb.uncles[i] = uncle
 		}
-		manifest := blockManifestPool.Get().(*BlockManifest)
-		defer blockManifestPool.Put(manifest)
-		err = manifest.ProtoDecode(data.GetManifest())
-		if err != nil {
-			return err
-		}
-		newWb.manifest = *manifest
 
-		// Corrected common.Hashes assignment
-		interlinkHashes := interlinkHashesPool.Get().(*common.Hashes)
-		defer interlinkHashesPool.Put(interlinkHashes)
-		interlinkHashes.ProtoDecode(data.GetInterlinkHashes()) // Call the method without assignment
-		newWb.interlinkHashes = *interlinkHashes               // Assign the dereferenced value
+		wb.manifest = make([]common.Hash, len(data.GetManifest().Manifest))
+		for i, protoHash := range data.GetManifest().Manifest {
+			wb.manifest[i] = common.BytesToHash(protoHash.Value)
+		}
+
+		wb.interlinkHashes = make([]common.Hash, len(data.GetInterlinkHashes().GetHashes()))
+		for i, protoHash := range data.GetInterlinkHashes().GetHashes() {
+			wb.interlinkHashes[i] = common.BytesToHash(protoHash.Value)
+		}
+		// Assign the dereferenced value
 	}
 
 	wb.SetHeader(CopyHeader(newWb.Header()))
 	wb.SetTransactions(CopyTransactions(newWb.Transactions()))
 	wb.SetExtTransactions(CopyTransactions(newWb.ExtTransactions()))
 	wb.SetUncles(CopyWorkObjectHeaders(newWb.Uncles()))
-	wb.SetManifest(newWb.Manifest())
-	wb.SetInterlinkHashes(newWb.InterlinkHashes())
+	copy(wb.manifest, newWb.Manifest())
+	copy(wb.interlinkHashes, newWb.InterlinkHashes())
 
 	return nil
 }
