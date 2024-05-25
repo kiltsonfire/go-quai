@@ -904,7 +904,7 @@ func (wo *WorkObject) ProtoDecode(data *ProtoWorkObject, location common.Locatio
 
 	// Copy the temporary WorkObject to the target WorkObject
 	wo.SetWorkObjectHeader(CopyWorkObjectHeader(newWo.WorkObjectHeader()))
-	wo.SetBody(CopyWorkObjectBody(newWo.Body()))
+	wo.SetBody(newWo.Body())
 	wo.SetTx(nil)
 
 	// Put objects back into the pool after copying
