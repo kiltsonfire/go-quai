@@ -904,7 +904,7 @@ func (wo *WorkObject) ProtoDecode(data *ProtoWorkObject, location common.Locatio
 
 	// Copy the temporary WorkObject to the target WorkObject
 	wo.SetWorkObjectHeader(CopyWorkObjectHeader(newWo.WorkObjectHeader()))
-	wo.SetBody(newWo.Body())
+	wo.SetBody(CopyWorkObjectBody(newWo.Body()))
 	wo.SetTx(nil)
 
 	// Put objects back into the pool after copying
@@ -1056,15 +1056,27 @@ func (wh *WorkObjectHeader) ProtoDecode(data *ProtoWorkObjectHeader) error {
 
 func CopyWorkObjectBody(wb *WorkObjectBody) *WorkObjectBody {
 	cpy := &WorkObjectBody{header: CopyHeader(wb.header)}
-	cpy.SetTransactions(CopyTransactions(wb.Transactions()))
-	cpy.SetExtTransactions(CopyTransactions(wb.ExtTransactions()))
-	cpy.SetUncles(CopyWorkObjectHeaders(wb.Uncles()))
-	manifest := make(BlockManifest, len(wb.Manifest()))
-	copy(manifest, wb.Manifest())
-	cpy.SetManifest(manifest)
-	interlinkHashes := make(common.Hashes, len(wb.InterlinkHashes()))
-	copy(interlinkHashes, wb.InterlinkHashes())
-	cpy.SetInterlinkHashes(interlinkHashes)
+
+	cpy.transactions = make(Transactions, len(wb.transactions))
+	for i, tx := range wb.transactions {
+		cpy.transactions[i] = CopyTransaction(tx)
+	}
+
+	cpy.extTransactions = make(Transactions, len(wb.extTransactions))
+	for i, tx := range wb.extTransactions {
+		cpy.extTransactions[i] = CopyTransaction(tx)
+	}
+
+	cpy.uncles = make([]*WorkObjectHeader, len(wb.uncles))
+	for i, uncle := range wb.uncles {
+		cpy.uncles[i] = CopyWorkObjectHeader(uncle)
+	}
+
+	cpy.manifest = make(BlockManifest, len(wb.manifest))
+	copy(cpy.manifest, wb.manifest)
+
+	cpy.interlinkHashes = make(common.Hashes, len(wb.interlinkHashes))
+	copy(cpy.interlinkHashes, wb.interlinkHashes)
 
 	return cpy
 }
