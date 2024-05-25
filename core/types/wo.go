@@ -1055,17 +1055,7 @@ func (wh *WorkObjectHeader) ProtoDecode(data *ProtoWorkObjectHeader) error {
 }
 
 func CopyWorkObjectBody(wb *WorkObjectBody) *WorkObjectBody {
-	cpy := &WorkObjectBody{header: CopyHeader(wb.header)}
-
-	cpy.transactions = make(Transactions, len(wb.transactions))
-	for i, tx := range wb.transactions {
-		cpy.transactions[i] = CopyTransaction(tx)
-	}
-
-	cpy.extTransactions = make(Transactions, len(wb.extTransactions))
-	for i, tx := range wb.extTransactions {
-		cpy.extTransactions[i] = CopyTransaction(tx)
-	}
+	cpy := &WorkObjectBody{header: CopyHeader(wb.header), transactions: wb.transactions, extTransactions: wb.extTransactions}
 
 	cpy.uncles = make([]*WorkObjectHeader, len(wb.uncles))
 	for i, uncle := range wb.uncles {
