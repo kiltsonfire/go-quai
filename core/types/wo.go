@@ -1112,81 +1112,87 @@ func (wb *WorkObjectBody) ProtoEncode() (*ProtoWorkObjectBody, error) {
 }
 
 func (wb *WorkObjectBody) ProtoDecode(data *ProtoWorkObjectBody, location common.Location, woType WorkObjectView) error {
+	newWb := workObjectBodyPool.Get().(*WorkObjectBody)
 	switch woType {
 	case WorkShareObject:
-		wb.header = headerPool.Get().(*Header)
-		err := wb.header.ProtoDecode(data.GetHeader(), location)
+		newWb.header = headerPool.Get().(*Header)
+		defer headerPool.Put(newWb.header)
+		err := newWb.header.ProtoDecode(data.GetHeader(), location)
 		if err != nil {
-			headerPool.Put(wb.header)
 			return err
 		}
-		wb.uncles = make([]*WorkObjectHeader, len(data.GetUncles().GetWoHeaders()))
+		newWb.uncles = make([]*WorkObjectHeader, len(data.GetUncles().GetWoHeaders()))
 		for i, protoUncle := range data.GetUncles().GetWoHeaders() {
 			uncle := workObjectHeaderPool.Get().(*WorkObjectHeader)
+			defer workObjectHeaderPool.Put(uncle)
 			err = uncle.ProtoDecode(protoUncle)
 			if err != nil {
-				workObjectHeaderPool.Put(uncle)
 				return err
 			}
 			wb.uncles[i] = uncle
 		}
 	default:
-		wb.header = headerPool.Get().(*Header)
-		err := wb.header.ProtoDecode(data.GetHeader(), location)
+		newWb.header = headerPool.Get().(*Header)
+		defer headerPool.Put(newWb.header)
+		err := newWb.header.ProtoDecode(data.GetHeader(), location)
 		if err != nil {
-			headerPool.Put(wb.header)
 			return err
 		}
 		transactionsProto := data.GetTransactions()
 		transactions := transactionsProto.GetTransactions()
-		wb.transactions = make([]*Transaction, len(transactions))
+		newWb.transactions = make([]*Transaction, len(transactions))
 		for i, protoTx := range transactions {
 			tx := transactionPool.Get().(*Transaction)
+			defer transactionPool.Put(tx)
 			err = tx.ProtoDecode(protoTx, location)
 			if err != nil {
-				transactionPool.Put(tx)
 				return err
 			}
-			wb.transactions[i] = tx
+			newWb.transactions[i] = tx
 		}
 		extTransactionsProto := data.GetExtTransactions()
 		extTransactions := extTransactionsProto.GetTransactions()
-		wb.extTransactions = make([]*Transaction, len(extTransactions))
+		newWb.extTransactions = make([]*Transaction, len(extTransactions))
 		for i, protoTx := range extTransactions {
 			tx := transactionPool.Get().(*Transaction)
+			defer transactionPool.Put(tx)
 			err = tx.ProtoDecode(protoTx, location)
 			if err != nil {
-				transactionPool.Put(tx)
 				return err
 			}
-			wb.extTransactions[i] = tx
+			newWb.extTransactions[i] = tx
 		}
-		wb.uncles = make([]*WorkObjectHeader, len(data.GetUncles().GetWoHeaders()))
+		newWb.uncles = make([]*WorkObjectHeader, len(data.GetUncles().GetWoHeaders()))
 		for i, protoUncle := range data.GetUncles().GetWoHeaders() {
 			uncle := workObjectHeaderPool.Get().(*WorkObjectHeader)
+			defer workObjectHeaderPool.Put(uncle)
 			err = uncle.ProtoDecode(protoUncle)
 			if err != nil {
-				workObjectHeaderPool.Put(uncle)
 				return err
 			}
-			wb.uncles[i] = uncle
+			newWb.uncles[i] = uncle
 		}
-		// Corrected BlockManifest assignment
 		manifest := blockManifestPool.Get().(*BlockManifest)
+		defer blockManifestPool.Put(manifest)
 		err = manifest.ProtoDecode(data.GetManifest())
 		if err != nil {
-			blockManifestPool.Put(manifest)
 			return err
 		}
-		wb.manifest = *manifest // Assign the dereferenced value
-		blockManifestPool.Put(manifest)
+		newWb.manifest = *manifest
 
 		// Corrected common.Hashes assignment
 		interlinkHashes := interlinkHashesPool.Get().(*common.Hashes)
+		defer interlinkHashesPool.Put(interlinkHashes)
 		interlinkHashes.ProtoDecode(data.GetInterlinkHashes()) // Call the method without assignment
-		wb.interlinkHashes = *interlinkHashes                  // Assign the dereferenced value
-		interlinkHashesPool.Put(interlinkHashes)
+		newWb.interlinkHashes = *interlinkHashes               // Assign the dereferenced value
 	}
+
+	wb.SetHeader(CopyHeader(newWb.Header()))
+	wb.SetTransactions(CopyTransactions(newWb.Transactions()))
+	wb.SetExtTransactions(CopyTransactions(newWb.ExtTransactions()))
+	wb.SetUncles(CopyWorkObjectHeaders(newWb.Uncles()))
+	wb.SetManifest(newWb.Manifest())
+	wb.SetInterlinkHashes(newWb.InterlinkHashes())
 
 	return nil
 }
