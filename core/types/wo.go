@@ -878,6 +878,14 @@ func CopyWorkObjectHeader(wh *WorkObjectHeader) *WorkObjectHeader {
 	return &cpy
 }
 
+func CopyWorkObjectHeaders(woHeaders []*WorkObjectHeader) []*WorkObjectHeader {
+	cpy := make([]*WorkObjectHeader, len(woHeaders))
+	for i, wo := range woHeaders {
+		cpy[i] = CopyWorkObjectHeader(wo)
+	}
+	return cpy
+}
+
 func (wh *WorkObjectHeader) RPCMarshalWorkObjectHeader() map[string]interface{} {
 	result := map[string]interface{}{
 		"headerHash": wh.HeaderHash(),
@@ -983,11 +991,15 @@ func (wh *WorkObjectHeader) ProtoDecode(data *ProtoWorkObjectHeader) error {
 
 func CopyWorkObjectBody(wb *WorkObjectBody) *WorkObjectBody {
 	cpy := &WorkObjectBody{header: CopyHeader(wb.header)}
-	cpy.SetTransactions(wb.Transactions())
-	cpy.SetExtTransactions(wb.ExtTransactions())
-	cpy.SetUncles(wb.Uncles())
-	cpy.SetManifest(wb.Manifest())
-	cpy.SetInterlinkHashes(wb.InterlinkHashes())
+	cpy.SetTransactions(CopyTransactions(wb.Transactions()))
+	cpy.SetExtTransactions(CopyTransactions(wb.ExtTransactions()))
+	cpy.SetUncles(CopyWorkObjectHeaders(wb.Uncles()))
+	var manifest BlockManifest
+	copy(manifest, wb.Manifest())
+	cpy.SetManifest(manifest)
+	var interlinkHashes common.Hashes
+	copy(interlinkHashes, wb.InterlinkHashes())
+	cpy.SetInterlinkHashes(interlinkHashes)
 
 	return cpy
 }
@@ -1109,6 +1121,17 @@ func (wb *WorkObjectBody) RPCMarshalWorkObjectBody() map[string]interface{} {
 	result["uncles"] = workedUncles
 
 	return result
+}
+
+// CopyWorkObject copies the entire work object and returns the new work object
+func CopyWorkObject(wo *WorkObject) *WorkObject {
+	cpy := *wo
+
+	cpy.SetWorkObjectHeader(CopyWorkObjectHeader(wo.WorkObjectHeader()))
+	cpy.SetBody(CopyWorkObjectBody(wo.Body()))
+	cpy.SetTx(nil)
+
+	return &cpy
 }
 
 ////////////////////////////////////////////////////////////

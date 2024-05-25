@@ -92,6 +92,25 @@ func (tx *Transaction) SetInner(inner TxData) {
 	tx.setDecoded(inner.copy(), 0)
 }
 
+func (tx *Transaction) SetInnerWithoutCopy(inner TxData) {
+	tx.setDecoded(inner, 0)
+}
+
+func CopyTransaction(tx *Transaction) *Transaction {
+	cpy := *tx
+	cpy.SetInner(tx.inner)
+	cpy.time = tx.time
+	return &cpy
+}
+
+func CopyTransactions(txs Transactions) Transactions {
+	cpy := make(Transactions, len(txs))
+	for i, tx := range txs {
+		cpy[i] = CopyTransaction(tx)
+	}
+	return cpy
+}
+
 // TxData is the underlying data of a transaction.
 //
 // This is implemented by QuaiTx, ExternalTx, InternalToExternal, and QiTx.
