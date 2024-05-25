@@ -76,7 +76,6 @@ type Transaction struct {
 	hash       atomic.Value
 	size       atomic.Value
 	from       atomic.Value
-	toChain    atomic.Value
 	fromChain  atomic.Value
 	confirmCtx atomic.Value // Context at which the ETX may be confirmed
 	local      atomic.Value // Whether the transaction is local
@@ -424,11 +423,6 @@ func resetQuaiTx(tx *QuaiTx) {
 	tx.ParentHash = nil
 	tx.MixHash = nil
 	tx.WorkNonce = nil
-}
-
-func resetTx(tx *Transaction) {
-	tx.inner = nil
-	tx.time = time.Time{}
 }
 
 func (tx *Transaction) ProtoEncodeTxSigningData() *ProtoTransaction {
@@ -885,9 +879,17 @@ func (s *Transactions) ProtoDecode(transactions *ProtoTransactions, location com
 		if err != nil {
 			return err
 		}
-		*s = append(*s, tx)
+		*s = append(*s, &Transaction{
+			inner: tx.inner.copy(),
+			time:  tx.time,
+		})
 	}
 	return nil
+}
+
+func resetTx(tx *Transaction) {
+	tx.inner = nil
+	tx.time = time.Time{}
 }
 
 // FilterByLocation returns the subset of transactions with a 'to' address which
