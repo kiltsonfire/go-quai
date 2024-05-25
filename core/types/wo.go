@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -12,6 +13,50 @@ import (
 	"github.com/dominant-strategies/go-quai/log"
 	"google.golang.org/protobuf/proto"
 	"lukechampine.com/blake3"
+)
+
+var (
+	workObjectPool = sync.Pool{
+		New: func() interface{} {
+			return new(WorkObject)
+		},
+	}
+
+	workObjectHeaderPool = sync.Pool{
+		New: func() interface{} {
+			return new(WorkObjectHeader)
+		},
+	}
+
+	workObjectBodyPool = sync.Pool{
+		New: func() interface{} {
+			return new(WorkObjectBody)
+		},
+	}
+
+	transactionPool = sync.Pool{
+		New: func() interface{} {
+			return new(Transaction)
+		},
+	}
+
+	headerPool = sync.Pool{
+		New: func() interface{} {
+			return new(Header)
+		},
+	}
+
+	blockManifestPool = sync.Pool{
+		New: func() interface{} {
+			return new(BlockManifest)
+		},
+	}
+
+	interlinkHashesPool = sync.Pool{
+		New: func() interface{} {
+			return new(common.Hashes)
+		},
+	}
 )
 
 type WorkObject struct {
@@ -695,14 +740,6 @@ func NewWorkObjectWithHeader(header *WorkObject, tx *Transaction, nodeCtx int, w
 	return NewWorkObject(woHeader, woBody, tx)
 }
 
-func CopyWorkObject(wo *WorkObject) *WorkObject {
-	newWo := &WorkObject{
-		woHeader: CopyWorkObjectHeader(wo.woHeader),
-		woBody:   CopyWorkObjectBody(wo.woBody),
-		tx:       wo.tx,
-	}
-	return newWo
-}
 func (wo *WorkObject) RPCMarshalWorkObject() map[string]interface{} {
 	result := map[string]interface{}{
 		"woHeader": wo.woHeader.RPCMarshalWorkObjectHeader(),
@@ -818,36 +855,65 @@ func (wob *WorkObjectBlockView) ProtoDecode(data *ProtoWorkObjectBlockView, loca
 }
 
 func (wo *WorkObject) ProtoDecode(data *ProtoWorkObject, location common.Location, woType WorkObjectView) error {
+	// Get a new WorkObject from the pool
+	newWo := workObjectPool.Get().(*WorkObject)
+	defer workObjectPool.Put(newWo) // Ensure newWo is returned to the pool
+
+	// Reset the new WorkObject fields
+	newWo.woHeader = nil
+	newWo.woBody = nil
+	newWo.tx = nil
+
+	newWo.woHeader = workObjectHeaderPool.Get().(*WorkObjectHeader)
+	err := newWo.woHeader.ProtoDecode(data.GetWoHeader())
+	if err != nil {
+		workObjectHeaderPool.Put(newWo.woHeader)
+		return err
+	}
+
+	newWo.woBody = workObjectBodyPool.Get().(*WorkObjectBody)
 	switch woType {
 	case PEtxObject:
-		wo.woHeader = new(WorkObjectHeader)
-		err := wo.woHeader.ProtoDecode(data.GetWoHeader())
+		bodyHeader := headerPool.Get().(*Header)
+		err = bodyHeader.ProtoDecode(data.GetWoBody().Header, location)
 		if err != nil {
+			workObjectBodyPool.Put(newWo.woBody)
+			workObjectHeaderPool.Put(newWo.woHeader)
+			headerPool.Put(bodyHeader)
 			return err
 		}
-		wo.woBody = new(WorkObjectBody)
-		bodyHeader := new(Header)
-		bodyHeader.ProtoDecode(data.GetWoBody().Header, location)
-		wo.woBody.SetHeader(bodyHeader)
+		newWo.woBody.SetHeader(bodyHeader)
 	default:
-		wo.woHeader = new(WorkObjectHeader)
-		err := wo.woHeader.ProtoDecode(data.GetWoHeader())
+		err = newWo.woBody.ProtoDecode(data.GetWoBody(), location, BlockObject)
 		if err != nil {
-			return err
-		}
-		wo.woBody = new(WorkObjectBody)
-		err = wo.woBody.ProtoDecode(data.GetWoBody(), location, BlockObject)
-		if err != nil {
+			workObjectBodyPool.Put(newWo.woBody)
+			workObjectHeaderPool.Put(newWo.woHeader)
 			return err
 		}
 		if data.Tx != nil {
-			wo.tx = new(Transaction)
-			err = wo.tx.ProtoDecode(data.GetTx(), location)
+			newWo.tx = transactionPool.Get().(*Transaction)
+			err = newWo.tx.ProtoDecode(data.GetTx(), location)
 			if err != nil {
+				transactionPool.Put(newWo.tx)
+				workObjectBodyPool.Put(newWo.woBody)
+				workObjectHeaderPool.Put(newWo.woHeader)
 				return err
 			}
 		}
 	}
+
+	// Copy the temporary WorkObject to the target WorkObject
+	wo.SetWorkObjectHeader(CopyWorkObjectHeader(newWo.WorkObjectHeader()))
+	wo.SetBody(CopyWorkObjectBody(newWo.Body()))
+	wo.SetTx(nil)
+
+	// Put objects back into the pool after copying
+	workObjectHeaderPool.Put(newWo.woHeader)
+	workObjectBodyPool.Put(newWo.woBody)
+	if newWo.tx != nil {
+		transactionPool.Put(newWo.tx)
+	}
+
 	return nil
 }
 
@@ -973,8 +1039,7 @@ func (wh *WorkObjectHeader) ProtoEncode() (*ProtoWorkObjectHeader, error) {
 
 func (wh *WorkObjectHeader) ProtoDecode(data *ProtoWorkObjectHeader) error {
 	if data.HeaderHash == nil || data.ParentHash == nil || data.Number == nil || data.Difficulty == nil || data.TxHash == nil || data.Nonce == nil || data.Location == nil {
-		err := errors.New("failed to decode work object header")
-		return err
+		return errors.New("failed to decode work object header")
 	}
 	wh.SetHeaderHash(common.BytesToHash(data.GetHeaderHash().Value))
 	wh.SetParentHash(common.BytesToHash(data.GetParentHash().Value))
@@ -994,10 +1059,10 @@ func CopyWorkObjectBody(wb *WorkObjectBody) *WorkObjectBody {
 	cpy.SetTransactions(CopyTransactions(wb.Transactions()))
 	cpy.SetExtTransactions(CopyTransactions(wb.ExtTransactions()))
 	cpy.SetUncles(CopyWorkObjectHeaders(wb.Uncles()))
-	var manifest BlockManifest
+	manifest := make(BlockManifest, len(wb.Manifest()))
 	copy(manifest, wb.Manifest())
 	cpy.SetManifest(manifest)
-	var interlinkHashes common.Hashes
+	interlinkHashes := make(common.Hashes, len(wb.InterlinkHashes()))
 	copy(interlinkHashes, wb.InterlinkHashes())
 	cpy.SetInterlinkHashes(interlinkHashes)
 
@@ -1049,52 +1114,78 @@ func (wb *WorkObjectBody) ProtoEncode() (*ProtoWorkObjectBody, error) {
 func (wb *WorkObjectBody) ProtoDecode(data *ProtoWorkObjectBody, location common.Location, woType WorkObjectView) error {
 	switch woType {
 	case WorkShareObject:
-		wb.header = &Header{}
+		wb.header = headerPool.Get().(*Header)
 		err := wb.header.ProtoDecode(data.GetHeader(), location)
 		if err != nil {
+			headerPool.Put(wb.header)
 			return err
 		}
 		wb.uncles = make([]*WorkObjectHeader, len(data.GetUncles().GetWoHeaders()))
 		for i, protoUncle := range data.GetUncles().GetWoHeaders() {
-			uncle := &WorkObjectHeader{}
+			uncle := workObjectHeaderPool.Get().(*WorkObjectHeader)
 			err = uncle.ProtoDecode(protoUncle)
 			if err != nil {
+				workObjectHeaderPool.Put(uncle)
 				return err
 			}
 			wb.uncles[i] = uncle
 		}
 	default:
-		wb.header = &Header{}
+		wb.header = headerPool.Get().(*Header)
 		err := wb.header.ProtoDecode(data.GetHeader(), location)
 		if err != nil {
+			headerPool.Put(wb.header)
 			return err
 		}
-		wb.transactions = Transactions{}
-		err = wb.transactions.ProtoDecode(data.GetTransactions(), location)
-		if err != nil {
-			return err
+		transactionsProto := data.GetTransactions()
+		transactions := transactionsProto.GetTransactions()
+		wb.transactions = make([]*Transaction, len(transactions))
+		for i, protoTx := range transactions {
+			tx := transactionPool.Get().(*Transaction)
+			err = tx.ProtoDecode(protoTx, location)
+			if err != nil {
+				transactionPool.Put(tx)
+				return err
+			}
+			wb.transactions[i] = tx
 		}
-		wb.extTransactions = Transactions{}
-		err = wb.extTransactions.ProtoDecode(data.GetExtTransactions(), location)
-		if err != nil {
-			return err
+		extTransactionsProto := data.GetExtTransactions()
+		extTransactions := extTransactionsProto.GetTransactions()
+		wb.extTransactions = make([]*Transaction, len(extTransactions))
+		for i, protoTx := range extTransactions {
+			tx := transactionPool.Get().(*Transaction)
+			err = tx.ProtoDecode(protoTx, location)
+			if err != nil {
+				transactionPool.Put(tx)
+				return err
+			}
+			wb.extTransactions[i] = tx
 		}
 		wb.uncles = make([]*WorkObjectHeader, len(data.GetUncles().GetWoHeaders()))
 		for i, protoUncle := range data.GetUncles().GetWoHeaders() {
-			uncle := &WorkObjectHeader{}
+			uncle := workObjectHeaderPool.Get().(*WorkObjectHeader)
 			err = uncle.ProtoDecode(protoUncle)
 			if err != nil {
+				workObjectHeaderPool.Put(uncle)
 				return err
 			}
 			wb.uncles[i] = uncle
 		}
-		wb.manifest = BlockManifest{}
-		err = wb.manifest.ProtoDecode(data.GetManifest())
+		// Corrected BlockManifest assignment
+		manifest := blockManifestPool.Get().(*BlockManifest)
+		err = manifest.ProtoDecode(data.GetManifest())
 		if err != nil {
+			blockManifestPool.Put(manifest)
 			return err
 		}
-		wb.interlinkHashes = common.Hashes{}
-		wb.interlinkHashes.ProtoDecode(data.GetInterlinkHashes())
+		wb.manifest = *manifest // Assign the dereferenced value
+		blockManifestPool.Put(manifest)
+
+		// Corrected common.Hashes assignment
+		interlinkHashes := interlinkHashesPool.Get().(*common.Hashes)
+		interlinkHashes.ProtoDecode(data.GetInterlinkHashes()) // Call the method without assignment
+		wb.interlinkHashes = *interlinkHashes                  // Assign the dereferenced value
+		interlinkHashesPool.Put(interlinkHashes)
 	}
 
 	return nil
@@ -1123,15 +1214,13 @@ func (wb *WorkObjectBody) RPCMarshalWorkObjectBody() map[string]interface{} {
 	return result
 }
 
-// CopyWorkObject copies the entire work object and returns the new work object
 func CopyWorkObject(wo *WorkObject) *WorkObject {
-	cpy := *wo
-
-	cpy.SetWorkObjectHeader(CopyWorkObjectHeader(wo.WorkObjectHeader()))
-	cpy.SetBody(CopyWorkObjectBody(wo.Body()))
-	cpy.SetTx(nil)
-
-	return &cpy
+	newWo := &WorkObject{
+		woHeader: CopyWorkObjectHeader(wo.woHeader),
+		woBody:   CopyWorkObjectBody(wo.woBody),
+		tx:       wo.tx,
+	}
+	return newWo
 }
 
 ////////////////////////////////////////////////////////////
