@@ -1115,6 +1115,8 @@ func (wb *WorkObjectBody) ProtoEncode() (*ProtoWorkObjectBody, error) {
 
 func (wb *WorkObjectBody) ProtoDecode(data *ProtoWorkObjectBody, location common.Location, woType WorkObjectView) error {
 	newWb := workObjectBodyPool.Get().(*WorkObjectBody)
+	var transactions []*Transaction
+	var extTransactions []*Transaction
 	switch woType {
 	case WorkShareObject:
 		newWb.header = headerPool.Get().(*Header)
@@ -1140,29 +1142,23 @@ func (wb *WorkObjectBody) ProtoDecode(data *ProtoWorkObjectBody, location common
 		if err != nil {
 			return err
 		}
-		transactionsProto := data.GetTransactions()
-		transactions := transactionsProto.GetTransactions()
-		newWb.transactions = make([]*Transaction, len(transactions))
-		for i, protoTx := range transactions {
-			tx := transactionPool.Get().(*Transaction)
-			defer transactionPool.Put(tx)
-			err = tx.ProtoDecode(protoTx, location)
+		transactionsProto := data.GetTransactions().GetTransactions()
+		transactions = make([]*Transaction, len(transactionsProto))
+		for i, protoTx := range transactionsProto {
+			transactions[i] = &Transaction{}
+			err = transactions[i].ProtoDecode(protoTx, location)
 			if err != nil {
 				return err
 			}
-			newWb.transactions[i] = tx
 		}
-		extTransactionsProto := data.GetExtTransactions()
-		extTransactions := extTransactionsProto.GetTransactions()
-		newWb.extTransactions = make([]*Transaction, len(extTransactions))
-		for i, protoTx := range extTransactions {
-			tx := transactionPool.Get().(*Transaction)
-			defer transactionPool.Put(tx)
-			err = tx.ProtoDecode(protoTx, location)
+		extTransactionsProto := data.GetExtTransactions().GetTransactions()
+		extTransactions = make([]*Transaction, len(extTransactionsProto))
+		for i, protoTx := range extTransactionsProto {
+			extTransactions[i] = &Transaction{}
+			err = extTransactions[i].ProtoDecode(protoTx, location)
 			if err != nil {
 				return err
 			}
-			newWb.extTransactions[i] = tx
 		}
 		newWb.uncles = make([]*WorkObjectHeader, len(data.GetUncles().GetWoHeaders()))
 		for i, protoUncle := range data.GetUncles().GetWoHeaders() {
@@ -1188,8 +1184,8 @@ func (wb *WorkObjectBody) ProtoDecode(data *ProtoWorkObjectBody, location common
 	}
 
 	wb.SetHeader(CopyHeader(newWb.Header()))
-	wb.SetTransactions(CopyTransactions(newWb.Transactions()))
-	wb.SetExtTransactions(CopyTransactions(newWb.ExtTransactions()))
+	wb.SetTransactions(transactions)
+	wb.SetExtTransactions(extTransactions)
 	wb.SetUncles(CopyWorkObjectHeaders(newWb.Uncles()))
 	copy(wb.manifest, newWb.Manifest())
 	copy(wb.interlinkHashes, newWb.InterlinkHashes())
