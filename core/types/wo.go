@@ -1047,12 +1047,12 @@ func (wb *WorkObjectBody) ProtoDecode(data *ProtoWorkObjectBody, location common
 			newWb.uncles[i] = uncle
 		}
 
-		wb.manifest = make([]common.Hash, len(data.GetManifest().Manifest))
+		newWb.manifest = make([]common.Hash, len(data.GetManifest().Manifest))
 		for i, protoHash := range data.GetManifest().Manifest {
 			newWb.manifest[i] = common.BytesToHash(protoHash.Value)
 		}
 
-		wb.interlinkHashes = make([]common.Hash, len(data.GetInterlinkHashes().GetHashes()))
+		newWb.interlinkHashes = make([]common.Hash, len(data.GetInterlinkHashes().GetHashes()))
 		for i, protoHash := range data.GetInterlinkHashes().GetHashes() {
 			newWb.interlinkHashes[i] = common.BytesToHash(protoHash.Value)
 		}
