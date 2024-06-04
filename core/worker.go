@@ -58,9 +58,7 @@ const (
 	// c_chainSideChanSize is the size of the channel listening to uncle events
 	chainSideChanSize = 10
 
-	c_uncleCacheSize = 32
-
-	c_workShareFilterDist = 10 // the dist from the current block for the work share inclusion in the worker
+	c_uncleCacheSize = 100
 )
 
 // environment is the worker's current environment and holds all
@@ -1432,7 +1430,7 @@ func (w *worker) AddWorkShare(workShare *types.WorkObjectHeader) error {
 	}
 
 	// Don't add the workshare into the list if its farther than the worksharefilterdist
-	if workShare.NumberU64()+c_workShareFilterDist < w.hc.CurrentHeader().NumberU64(common.ZONE_CTX) {
+	if workShare.NumberU64()+uint64(params.WorkSharesInclusionDepth) < w.hc.CurrentHeader().NumberU64(common.ZONE_CTX) {
 		return nil
 	}
 
