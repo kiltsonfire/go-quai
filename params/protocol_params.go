@@ -199,7 +199,7 @@ var (
 	DifficultyAdjustmentFactor int64  = 40                                                          // This is the factor that divides the log of the change in the difficulty
 	MinQuaiConversionAmount           = new(big.Int).Mul(big.NewInt(1), big.NewInt(GWei))           // 0.000000001 Quai
 	MaxWorkShareCount                 = 16
-	WorkSharesThresholdDiff           = 3 // Number of bits lower than the target that the default consensus engine uses
+	WorkSharesThresholdDiff           = 5 // Number of bits lower than the target that the default consensus engine uses
 	WorkSharesInclusionDepth          = 3 // Number of blocks upto which the work shares can be referenced and this is protocol enforced
 )
 
