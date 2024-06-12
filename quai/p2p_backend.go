@@ -20,12 +20,26 @@ import (
 const c_maxTxInWorkShare = 200
 
 var (
-	//
 	// TxPool propagation metrics
-	//
 	txPropagationMetrics = metrics_config.NewCounterVec("TxPropagation", "Transaction propagation counter")
 	txIngressCounter     = txPropagationMetrics.WithLabelValues("ingress")
 	txEgressCounter      = txPropagationMetrics.WithLabelValues("egress")
+	workObjectMetrics = metrics_config.NewCounterVec("Work Object Counters", "Tracks block statistics")
+
+	// Block propagation metrics
+	blockIngressCounter   = workObjectMetrics.WithLabelValues("blocks/ingress")
+	blockKnownCounter     = workObjectMetrics.WithLabelValues("blocks/known")
+	blockMaliciousCounter = workObjectMetrics.WithLabelValues("blocks/malicious")
+
+	// Header propagation metrics
+	headerIngressCounter   = workObjectMetrics.WithLabelValues("headers/ingress")
+	headerKnownCounter     = workObjectMetrics.WithLabelValues("headers/known")
+	headerMaliciousCounter = workObjectMetrics.WithLabelValues("headers/malicious")
+
+	// WorkShare propagation metrics
+	workShareIngressCounter   = workObjectMetrics.WithLabelValues("workShares/ingress")
+	workShareKnownCounter     = workObjectMetrics.WithLabelValues("workShares/known")
+	workShareMaliciousCounter = workObjectMetrics.WithLabelValues("workShares/malicious")
 )
 
 // QuaiBackend implements the quai consensus protocol
@@ -102,6 +116,8 @@ func (qbe *QuaiBackend) OnNewBroadcast(sourcePeer p2p.PeerID, Id string, topic s
 		// TODO: Determine if the block information was lively or stale and rate
 		// the peer accordingly
 		backend.WriteBlock(data.WorkObject)
+
+		blockIngressCounter.Inc()
 		// If it was a good broadcast, mark the peer as lively
 		qbe.p2pBackend.MarkLivelyPeer(sourcePeer, topic)
 	case types.WorkObjectHeaderView:
@@ -114,6 +130,8 @@ func (qbe *QuaiBackend) OnNewBroadcast(sourcePeer p2p.PeerID, Id string, topic s
 		if !backend.ProcessingState() && backend.NodeCtx() == common.ZONE_CTX {
 			backend.WriteBlock(data.WorkObject)
 		}
+
+		headerIngressCounter.Inc()
 		// If it was a good broadcast, mark the peer as lively
 		qbe.p2pBackend.MarkLivelyPeer(sourcePeer, topic)
 	case types.WorkObjectShareView:
@@ -160,6 +178,8 @@ func (qbe *QuaiBackend) OnNewBroadcast(sourcePeer p2p.PeerID, Id string, topic s
 			backend.SendWorkShare(data.WorkObject.WorkObjectHeader())
 			backend.SendRemoteTxs(data.WorkObject.Transactions())
 		}
+
+		workShareIngressCounter.Inc()
 		// If it was a good broadcast, mark the peer as lively
 		qbe.p2pBackend.MarkLivelyPeer(sourcePeer, topic)
 	default:
