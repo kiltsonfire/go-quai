@@ -33,7 +33,7 @@ func (p *P2PNode) requestFromPeer(peerID peer.ID, topic *pubsubManager.Topic, re
 		"peerId": peerID,
 		"topic":  topic,
 	}).Trace("Requesting the data from peer")
-	stream, err := p.NewStream(peerID)
+	stream, err := p.GetStream(peerID)
 	if err != nil {
 		log.Global.WithFields(log.Fields{
 			"peerId": peerID,
@@ -65,11 +65,14 @@ func (p *P2PNode) requestFromPeer(peerID peer.ID, topic *pubsubManager.Topic, re
 	if err != nil {
 		return nil, err
 	}
+
+	requestTimer := time.NewTimer(requestManager.C_requestTimeout)
+	defer requestTimer.Stop()
 	var recvdType interface{}
 	select {
 	case recvdType = <-dataChan:
 		break
-	case <-time.After(requestManager.C_requestTimeout):
+	case <-requestTimer.C:
 		log.Global.WithFields(log.Fields{
 			"requestID": id,
 			"peerId":    peerID,
