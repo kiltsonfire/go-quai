@@ -1898,8 +1898,10 @@ func (sl *Slice) asyncWorkShareUpdateLoop() {
 			// update the phcache
 			// Get the latest transactions to be broadcasted from the pool
 			if len(sl.txPool.broadcastSet) > 0 {
+				sl.txPool.broadcastSetMu.Lock()
 				txs := make(types.Transactions, len(sl.txPool.broadcastSet))
 				copy(txs, sl.txPool.broadcastSet)
+				sl.txPool.broadcastSetMu.Unlock()
 
 				hash := types.DeriveSha(txs, trie.NewStackTrie(nil))
 				bestPh, exists := sl.readPhCache(sl.bestPhKey)
