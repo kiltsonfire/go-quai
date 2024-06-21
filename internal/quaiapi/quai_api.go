@@ -713,6 +713,7 @@ func (s *PublicBlockChainQuaiAPI) ReceiveMinedHeader(ctx context.Context, raw js
 			return err
 		}
 	} else if err != nil {
+		log.Global.Error("Error composing a locally mined block", "err", err)
 		return err
 	}
 
