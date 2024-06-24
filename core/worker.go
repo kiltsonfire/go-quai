@@ -828,13 +828,6 @@ func (w *worker) commitTransactions(env *environment, parent *types.WorkObject, 
 		return fmt.Errorf("failed to get oldest index: %w", err)
 	}
 	for {
-		if env.gasPool.Gas() < params.TxGas {
-			w.logger.WithFields(log.Fields{
-				"have": env.gasPool,
-				"want": params.TxGas,
-			}).Trace("Not enough gas for further transactions")
-			break
-		}
 		// Add ETXs until minimum gas is used
 		if env.wo.GasUsed() >= minEtxGas {
 			break
@@ -856,6 +849,8 @@ func (w *worker) commitTransactions(env *environment, parent *types.WorkObject, 
 		if err == nil {
 			coalescedLogs = append(coalescedLogs, logs...)
 			env.tcount++
+		} else {
+			w.logger.WithField("err", err).Error("Failed to commit an etx")
 		}
 		oldestIndex.Add(oldestIndex, big.NewInt(1))
 	}

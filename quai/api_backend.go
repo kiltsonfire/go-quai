@@ -266,7 +266,7 @@ func (b *QuaiAPIBackend) GetEVM(ctx context.Context, msg core.Message, state *st
 		vmConfig = b.quai.core.GetVMConfig()
 	}
 	txContext := core.NewEVMTxContext(msg)
-	context, err := core.NewEVMBlockContext(header, b.quai.Core(), nil)
+	context, err := core.NewEVMBlockContext(header, nil, b.quai.Core(), nil)
 	if err != nil {
 		return nil, vmError, err
 	}

@@ -277,7 +277,7 @@ func (p *StateProcessor) Process(block *types.WorkObject) (types.Receipts, []*ty
 	}
 	p.hc.pool.SendersMu.RUnlock()
 	timeSenders = time.Since(startTimeSenders)
-	blockContext, err := NewEVMBlockContext(header, p.hc, nil)
+	blockContext, err := NewEVMBlockContext(header, parent, p.hc, nil)
 	if err != nil {
 		return nil, nil, nil, nil, 0, err
 	}
@@ -1201,7 +1201,7 @@ func ApplyTransaction(config *params.ChainConfig, parent *types.WorkObject, bc C
 		msg.SetData([]byte{}) // data is not used in conversion
 	}
 	// Create a new context to be used in the EVM environment
-	blockContext, err := NewEVMBlockContext(header, bc, author)
+	blockContext, err := NewEVMBlockContext(header, parent, bc, author)
 	if err != nil {
 		return nil, err
 	}
@@ -1486,7 +1486,7 @@ func (p *StateProcessor) StateAtTransaction(block *types.WorkObject, txIndex int
 		// Assemble the transaction call message and return if the requested offset
 		msg, _ := tx.AsMessage(signer, block.BaseFee())
 		txContext := NewEVMTxContext(msg)
-		context, err := NewEVMBlockContext(block, p.hc, nil)
+		context, err := NewEVMBlockContext(block, parent, p.hc, nil)
 		if err != nil {
 			return nil, vm.BlockContext{}, nil, err
 		}
