@@ -156,7 +156,7 @@ func (g *PubsubManager) Subscribe(location common.Location, datatype interface{}
 
 				// handle the received data
 				if g.onReceived != nil {
-					g.onReceived(msg.ReceivedFrom, msg.ID, *msg.Topic, data, location)
+					go g.onReceived(msg.ReceivedFrom, msg.ID, *msg.Topic, data, location)
 				}
 			}
 		}
