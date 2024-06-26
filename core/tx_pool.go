@@ -1133,7 +1133,7 @@ func (pool *TxPool) addTxs(txs []*types.Transaction, local, sync bool) []error {
 		// Accumulate all unknown transactions for deeper processing
 		news = append(news, tx)
 	}
-	if len(qiNews) > 0 {
+	if len(qiNews) > 0 && uint64(len(pool.qiPool))+1 < pool.config.QiPoolSize {
 		pool.qiMu.Lock()
 		qiErrs := pool.addQiTxsLocked(qiNews)
 		pool.qiMu.Unlock()
@@ -1769,9 +1769,11 @@ func (pool *TxPool) reset(oldHead, newHead *types.WorkObject) {
 	}()
 	wg.Add(1)
 	go func() {
-		pool.qiMu.Lock()
-		pool.addQiTxsLocked(qiTxs)
-		pool.qiMu.Unlock()
+		if uint64(len(pool.qiPool))+1 < pool.config.QiPoolSize {
+			pool.qiMu.Lock()
+			pool.addQiTxsLocked(qiTxs)
+			pool.qiMu.Unlock()
+		}
 		wg.Done()
 	}()
 	wg.Wait()
