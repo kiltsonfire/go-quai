@@ -313,13 +313,13 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, db ethdb.Databas
 	headerPrints := expireLru.NewLRU[common.Hash, interface{}](1, nil, c_headerPrintsExpiryTime)
 	worker.headerPrints = headerPrints
 
-	nodeCtx := headerchain.NodeCtx()
-	if headerchain.ProcessingState() && nodeCtx == common.ZONE_CTX {
-		worker.chainHeadSub = worker.hc.SubscribeChainHeadEvent(worker.chainHeadCh)
-		worker.chainSideSub = worker.hc.SubscribeChainSideEvent(worker.chainSideCh)
-		worker.wg.Add(1)
-		go worker.asyncStateLoop()
-	}
+	// nodeCtx := headerchain.NodeCtx()
+	// if headerchain.ProcessingState() && nodeCtx == common.ZONE_CTX {
+	// 	worker.chainHeadSub = worker.hc.SubscribeChainHeadEvent(worker.chainHeadCh)
+	// 	worker.chainSideSub = worker.hc.SubscribeChainSideEvent(worker.chainSideCh)
+	// 	worker.wg.Add(1)
+	// 	go worker.asyncStateLoop()
+	// }
 
 	worker.ephemeralKey, _ = secp256k1.GeneratePrivateKey()
 
