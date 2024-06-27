@@ -741,9 +741,18 @@ func (w *worker) commitTransaction(env *environment, parent *types.WorkObject, t
 			txGas := tx.Gas()
 			if tx.ETXSender().Location().Equal(*tx.To().Location()) { // Quai->Qi conversion
 				lock := new(big.Int).Add(env.wo.Number(w.hc.NodeCtx()), big.NewInt(params.ConversionLockPeriod))
-				primeTerminus := w.hc.GetPrimeTerminus(env.wo)
-				if primeTerminus == nil {
-					return nil, errors.New("prime terminus not found")
+				_, parentOrder, err := w.engine.CalcOrder(parent)
+				if err != nil {
+					return nil, err
+				}
+				var primeTerminus *types.WorkObject
+				if parentOrder == common.PRIME_CTX {
+					primeTerminus = parent
+				} else {
+					primeTerminus = w.hc.GetPrimeTerminus(env.wo)
+					if primeTerminus == nil {
+						return nil, errors.New("prime terminus not found")
+					}
 				}
 				value := misc.QuaiToQi(primeTerminus, tx.Value())
 				denominations := misc.FindMinDenominations(value)
@@ -884,7 +893,7 @@ func (w *worker) commitTransactions(env *environment, parent *types.WorkObject, 
 				}).Trace("Not enough gas for further transactions")
 				break
 			}
-			if err := w.processQiTx(tx, env); err != nil {
+			if err := w.processQiTx(tx, env, parent); err != nil {
 				hash := tx.Hash()
 				w.logger.WithFields(log.Fields{
 					"err": err,
@@ -1440,7 +1449,7 @@ func (w *worker) CurrentInfo(header *types.WorkObject) bool {
 	return header.NumberU64(w.hc.NodeCtx())+c_startingPrintLimit > w.hc.CurrentHeader().NumberU64(w.hc.NodeCtx())
 }
 
-func (w *worker) processQiTx(tx *types.Transaction, env *environment) error {
+func (w *worker) processQiTx(tx *types.Transaction, env *environment, parent *types.WorkObject) error {
 	location := w.hc.NodeLocation()
 	if tx.Type() != types.QiTxType {
 		return fmt.Errorf("tx %032x is not a QiTx", tx.Hash())
@@ -1564,7 +1573,20 @@ func (w *worker) processQiTx(tx *types.Transaction, env *environment) error {
 			if err := env.gasPool.SubGas(params.ETXGas); err != nil {
 				return err
 			}
-			primeTerminus := w.hc.GetPrimeTerminus(env.wo)
+
+			_, parentOrder, err := w.engine.CalcOrder(parent)
+			if err != nil {
+				return err
+			}
+			var primeTerminus *types.WorkObject
+			if parentOrder == common.PRIME_CTX {
+				primeTerminus = parent
+			} else {
+				primeTerminus = w.hc.GetPrimeTerminus(env.wo)
+				if primeTerminus == nil {
+					return errors.New("prime terminus not found")
+				}
+			}
 			if !w.hc.CheckIfEtxIsEligible(primeTerminus.EtxEligibleSlices(), *toAddr.Location()) {
 				return fmt.Errorf("etx emitted by tx [%v] going to a slice that is not eligible to receive etx %v", tx.Hash().Hex(), *toAddr.Location())
 			}
