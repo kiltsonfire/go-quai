@@ -361,15 +361,13 @@ func (sl *Slice) Append(header *types.WorkObject, domPendingHeader *types.WorkOb
 
 		setHead = sl.poem(sl.engine.TotalLogS(sl.hc, block), sl.engine.TotalLogS(sl.hc, sl.hc.CurrentHeader()))
 
-		if subReorg {
-			err := sl.hc.SetCurrentState(block)
-			if err != nil {
-				sl.logger.WithFields(log.Fields{
-					"err":  err,
-					"Hash": block.Hash(),
-				}).Error("Error setting current state")
-				return nil, false, false, err
-			}
+		err = sl.hc.SetCurrentState(block)
+		if err != nil {
+			sl.logger.WithFields(log.Fields{
+				"err":  err,
+				"Hash": block.Hash(),
+			}).Error("Error setting current state")
+			return nil, false, false, err
 		}
 
 		// Upate the local pending header
@@ -1126,43 +1124,13 @@ func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, termini
 		}
 		// Pick the head
 		if subReorg {
-			if (nodeCtx == common.ZONE_CTX && rawdb.ReadProcessedState(sl.sliceDb, localPendingHeader.WorkObject().ParentHash(common.ZONE_CTX))) || nodeCtx == common.REGION_CTX {
-				sl.logger.WithFields(log.Fields{
-					"NumberArray": combinedPendingHeader.NumberArray(),
-					"Number":      combinedPendingHeader.Number(nodeCtx),
-					"ParentHash":  combinedPendingHeader.ParentHash(nodeCtx),
-					"Terminus":    localPendingHeader.Termini().DomTerminus(nodeLocation),
-				}).Info("Choosing phHeader pickPhHead")
-				sl.WriteBestPhKey(localPendingHeader.Termini().DomTerminus(nodeLocation))
-			} else {
-				block := sl.hc.GetBlockByHash(localPendingHeader.WorkObject().ParentHash(nodeCtx))
-				if block != nil {
-					// setting the current state will help speed the process of append
-					// after mining this block since the state will already be computed
-					err := sl.hc.SetCurrentState(block)
-					if err != nil {
-						sl.logger.WithFields(log.Fields{
-							"Hash": block.Hash(),
-							"err":  err,
-						}).Error("Error setting current state")
-						return nil
-					}
-					newPendingHeader, err := sl.generateSlicePendingHeader(block, localPendingHeader.Termini(), combinedPendingHeader, true, true, false)
-					if err != nil {
-						sl.logger.WithField("err", err).Error("Error generating slice pending header")
-						return err
-					}
-					combinedPendingHeader = types.CopyWorkObject(newPendingHeader.WorkObject())
-					sl.logger.WithFields(log.Fields{
-						"NumberArray": combinedPendingHeader.Header().NumberArray(),
-						"ParentHash":  combinedPendingHeader.ParentHash(nodeCtx),
-						"Terminus":    localPendingHeader.Termini().DomTerminus(nodeLocation),
-					}).Info("Choosing phHeader pickPhHead")
-					sl.WriteBestPhKey(localPendingHeader.Termini().DomTerminus(nodeLocation))
-				} else {
-					sl.logger.WithField("hash", localPendingHeader.WorkObject().ParentHash(nodeCtx)).Error("Unable to set the current header after the cord update")
-				}
-			}
+			sl.logger.WithFields(log.Fields{
+				"NumberArray": combinedPendingHeader.NumberArray(),
+				"Number":      combinedPendingHeader.Number(nodeCtx),
+				"ParentHash":  combinedPendingHeader.ParentHash(nodeCtx),
+				"Terminus":    localPendingHeader.Termini().DomTerminus(nodeLocation),
+			}).Info("Choosing phHeader pickPhHead")
+			sl.WriteBestPhKey(localPendingHeader.Termini().DomTerminus(nodeLocation))
 		}
 
 		sl.updatePhCache(types.NewPendingHeader(combinedPendingHeader, localTermini), false, nil, subReorg, location)
