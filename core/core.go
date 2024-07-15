@@ -658,8 +658,8 @@ func (c *Core) GetPendingBlockBody(woHeader *types.WorkObjectHeader) *types.Work
 	return c.sl.GetPendingBlockBody(woHeader)
 }
 
-func (c *Core) SubRelayPendingHeader(slPendingHeader types.PendingHeader, newEntropy *big.Int, location common.Location, subReorg bool, order int) {
-	c.sl.SubRelayPendingHeader(slPendingHeader, newEntropy, location, subReorg, order)
+func (c *Core) SubRelayPendingHeader(slPendingHeader types.PendingHeader, newEntropy *big.Int, location common.Location, subReorg bool, order int, updateDomLocation common.Location) {
+	c.sl.SubRelayPendingHeader(slPendingHeader, newEntropy, location, subReorg, order, updateDomLocation)
 }
 
 func (c *Core) UpdateDom(oldTerminus common.Hash, pendingHeader types.PendingHeader, location common.Location) {

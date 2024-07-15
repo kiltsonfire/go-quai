@@ -506,8 +506,8 @@ func (b *QuaiAPIBackend) PendingBlock() *types.WorkObject {
 	return b.quai.core.PendingBlock()
 }
 
-func (b *QuaiAPIBackend) SubRelayPendingHeader(pendingHeader types.PendingHeader, newEntropy *big.Int, location common.Location, subReorg bool, order int) {
-	b.quai.core.SubRelayPendingHeader(pendingHeader, newEntropy, location, subReorg, order)
+func (b *QuaiAPIBackend) SubRelayPendingHeader(pendingHeader types.PendingHeader, newEntropy *big.Int, location common.Location, subReorg bool, order int, updateDomLocation common.Location) {
+	b.quai.core.SubRelayPendingHeader(pendingHeader, newEntropy, location, subReorg, order, updateDomLocation)
 }
 
 func (b *QuaiAPIBackend) UpdateDom(oldTerminus common.Hash, pendingHeader types.PendingHeader, location common.Location) {

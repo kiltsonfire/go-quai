@@ -80,7 +80,7 @@ type Backend interface {
 	ConstructLocalMinedBlock(header *types.WorkObject) (*types.WorkObject, error)
 	InsertBlock(ctx context.Context, block *types.WorkObject) (int, error)
 	PendingBlock() *types.WorkObject
-	SubRelayPendingHeader(pendingHeader types.PendingHeader, newEntropy *big.Int, location common.Location, subReorg bool, order int)
+	SubRelayPendingHeader(pendingHeader types.PendingHeader, newEntropy *big.Int, location common.Location, subReorg bool, order int, updateDomLocation common.Location)
 	UpdateDom(oldTerminus common.Hash, pendingHeader types.PendingHeader, location common.Location)
 	RequestDomToAppendOrFetch(hash common.Hash, entropy *big.Int, order int)
 	NewGenesisPendingHeader(pendingHeader *types.WorkObject, domTerminus common.Hash, hash common.Hash) error

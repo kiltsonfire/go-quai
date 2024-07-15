@@ -50,7 +50,7 @@ type CoreBackend interface {
 	AddPendingEtxsRollup(pEtxRollup types.PendingEtxsRollup) error
 	UpdateDom(oldTerminus common.Hash, pendingHeader types.PendingHeader, location common.Location)
 	RequestDomToAppendOrFetch(hash common.Hash, entropy *big.Int, order int)
-	SubRelayPendingHeader(pendingHeader types.PendingHeader, newEntropy *big.Int, location common.Location, subReorg bool, order int)
+	SubRelayPendingHeader(pendingHeader types.PendingHeader, newEntropy *big.Int, location common.Location, subReorg bool, order int, updateDomLocation common.Location)
 	Append(header *types.WorkObject, manifest types.BlockManifest, domPendingHeader *types.WorkObject, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.Transactions) (types.Transactions, bool, bool, error)
 	DownloadBlocksInManifest(hash common.Hash, manifest types.BlockManifest, entropy *big.Int)
 	GenerateRecoveryPendingHeader(pendingHeader *types.WorkObject, checkpointHashes types.Termini) error
@@ -542,7 +542,7 @@ func (sl *Slice) relayPh(block *types.WorkObject, pendingHeaderWithTermini types
 	} else if !domOrigin && subReorg {
 		for _, i := range sl.randomRelayArray() {
 			if sl.subInterface[i] != nil {
-				go sl.subInterface[i].SubRelayPendingHeader(pendingHeaderWithTermini, pendingHeaderWithTermini.WorkObject().ParentEntropy(nodeCtx), location, subReorg, nodeCtx)
+				go sl.subInterface[i].SubRelayPendingHeader(pendingHeaderWithTermini, pendingHeaderWithTermini.WorkObject().ParentEntropy(nodeCtx), location, subReorg, nodeCtx, location)
 			}
 		}
 	}
@@ -591,7 +591,7 @@ func (sl *Slice) UpdateDom(oldTerminus common.Hash, pendingHeader types.PendingH
 						"number":     newPh.WorkObject().NumberArray(),
 						"newTermini": newPh.Termini().SubTerminiAtIndex(i),
 					}).Info("SubRelay in UpdateDom")
-					sl.subInterface[i].SubRelayPendingHeader(newPh, pendingHeader.WorkObject().ParentEntropy(common.ZONE_CTX), common.Location{}, true, nodeCtx)
+					sl.subInterface[i].SubRelayPendingHeader(newPh, pendingHeader.WorkObject().ParentEntropy(common.ZONE_CTX), common.Location{}, true, nodeCtx, location)
 				}
 			}
 		} else {
@@ -619,7 +619,7 @@ func (sl *Slice) UpdateDom(oldTerminus common.Hash, pendingHeader types.PendingH
 							"number":     newPh.WorkObject().NumberArray(),
 							"newTermini": newPh.Termini().SubTerminiAtIndex(i),
 						}).Info("SubRelay in UpdateDom")
-						sl.subInterface[i].SubRelayPendingHeader(newPh, pendingHeader.WorkObject().ParentEntropy(common.ZONE_CTX), common.Location{}, true, nodeCtx)
+						sl.subInterface[i].SubRelayPendingHeader(newPh, pendingHeader.WorkObject().ParentEntropy(common.ZONE_CTX), common.Location{}, true, nodeCtx, location)
 					}
 				}
 			} else {
@@ -1004,7 +1004,7 @@ func (sl *Slice) GetPendingEtxsFromSub(hash common.Hash, location common.Locatio
 }
 
 // SubRelayPendingHeader takes a pending header from the sender (ie dominant), updates the phCache with a composited header and relays result to subordinates
-func (sl *Slice) SubRelayPendingHeader(pendingHeader types.PendingHeader, newEntropy *big.Int, location common.Location, subReorg bool, order int) {
+func (sl *Slice) SubRelayPendingHeader(pendingHeader types.PendingHeader, newEntropy *big.Int, location common.Location, subReorg bool, order int, updateDomLocation common.Location) {
 	nodeCtx := sl.NodeLocation().Context()
 	var err error
 
@@ -1020,7 +1020,7 @@ func (sl *Slice) SubRelayPendingHeader(pendingHeader types.PendingHeader, newEnt
 		for _, i := range sl.randomRelayArray() {
 			if sl.subInterface[i] != nil {
 				if ph, exists := sl.readPhCache(pendingHeader.Termini().SubTerminiAtIndex(sl.NodeLocation().Region())); exists {
-					sl.subInterface[i].SubRelayPendingHeader(ph, newEntropy, location, subReorg, order)
+					sl.subInterface[i].SubRelayPendingHeader(ph, newEntropy, location, subReorg, order, updateDomLocation)
 				}
 			}
 		}
@@ -1028,7 +1028,7 @@ func (sl *Slice) SubRelayPendingHeader(pendingHeader types.PendingHeader, newEnt
 		// This check prevents a double send to the miner.
 		// If the previous block on which the given pendingHeader was built is the same as the NodeLocation
 		// the pendingHeader update has already been sent to the miner for the given location in relayPh.
-		if !bytes.Equal(location, sl.NodeLocation()) {
+		if !bytes.Equal(location, sl.NodeLocation()) && !bytes.Equal(updateDomLocation, sl.NodeLocation()) {
 			updateCtx := []int{common.REGION_CTX}
 			if order == common.PRIME_CTX {
 				updateCtx = append(updateCtx, common.PRIME_CTX)
