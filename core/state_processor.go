@@ -314,6 +314,8 @@ func (p *StateProcessor) Process(block *types.WorkObject) (types.Receipts, []*ty
 		emittedEtxs = append(emittedEtxs, types.NewTx(&types.ExternalTx{To: &uncleCoinbase, Value: reward, IsCoinbase: true, OriginatingTxHash: origin, ETXIndex: uint16(i) + 1, Sender: uncleCoinbase}))
 	}
 	var totalQiTime time.Duration
+	var totalEtxAppendTime time.Duration
+	var totalEtxCoinbaseTime time.Duration
 	totalQiProcessTimes := make(map[string]time.Duration)
 	for i, tx := range block.Transactions() {
 		startProcess := time.Now()
@@ -328,9 +330,12 @@ func (p *StateProcessor) Process(block *types.WorkObject) (types.Receipts, []*ty
 			if err != nil {
 				return nil, nil, nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 			}
+			startEtxAppend := time.Now()
 			for _, etx := range etxs {
 				emittedEtxs = append(emittedEtxs, types.NewTx(etx))
 			}
+			totalEtxAppendTime += time.Since(startEtxAppend)
+			startEtxCoinbase := time.Now()
 			if block.Coinbase().IsInQiLedgerScope() {
 				totalFees.Add(totalFees, fees)
 			} else {
@@ -340,12 +345,13 @@ func (p *StateProcessor) Process(block *types.WorkObject) (types.Receipts, []*ty
 				}
 				totalFees.Add(totalFees, misc.QiToQuai(primeTerminus.WorkObjectHeader(), fees))
 			}
+			totalEtxCoinbaseTime += time.Since(startEtxCoinbase)
 			totalQiTime += time.Since(qiTimeBefore)
 			totalQiProcessTimes["Sanity Checks"] += timing["Sanity Checks"]
 			totalQiProcessTimes["Input Processing"] += timing["Input Processing"]
 			totalQiProcessTimes["Output Processing"] += timing["Output Processing"]
 			totalQiProcessTimes["Fee Verification"] += timing["Fee Verification"]
-			totalQiProcessTimes["Signature Verification"] += timing["Signature Verification"]
+			totalQiProcessTimes["Signature Check"] += timing["Signature Check"]
 
 			continue
 		}
@@ -415,7 +421,8 @@ func (p *StateProcessor) Process(block *types.WorkObject) (types.Receipts, []*ty
 					// This includes the value and the fees
 					statedb.AddBalance(iAddr, tx.Value())
 				}
-				timeCoinbase += time.Since(startTimeEtx)
+				timeDelta := time.Since(startTimeEtx)
+				timeCoinbase += timeDelta
 				continue
 			}
 			if etx.To().IsInQiLedgerScope() {
@@ -466,7 +473,8 @@ func (p *StateProcessor) Process(block *types.WorkObject) (types.Receipts, []*ty
 					*usedGas += params.CallValueTransferGas    // In the future we may want to determine what a fair gas cost is
 					totalEtxGas += params.CallValueTransferGas // In the future we may want to determine what a fair gas cost is
 				}
-				timeQuaiToQi += time.Since(startTimeEtx)
+				timeDelta := time.Since(startTimeEtx)
+				timeQuaiToQi += timeDelta
 				continue
 			} else {
 				if etx.ETXSender().Location().Equal(*etx.To().Location()) { // Qi->Quai Conversion
@@ -497,7 +505,8 @@ func (p *StateProcessor) Process(block *types.WorkObject) (types.Receipts, []*ty
 					totalFees.Add(totalFees, misc.QuaiToQi(primeTerminus.WorkObjectHeader(), quaiFees))
 				}
 				totalEtxGas += receipt.GasUsed
-				timeQiToQuai += time.Since(startTimeEtx)
+				timeDelta := time.Since(startTimeEtx)
+				timeQiToQuai += timeDelta
 			}
 		} else if tx.Type() == types.QuaiTxType {
 			startTimeTx := time.Now()
@@ -579,7 +588,7 @@ func (p *StateProcessor) Process(block *types.WorkObject) (types.Receipts, []*ty
 		"Input Processing":       common.PrettyDuration(totalQiProcessTimes["Input Processing"]),
 		"Output Processing":      common.PrettyDuration(totalQiProcessTimes["Output Processing"]),
 		"Fee Verification":       common.PrettyDuration(totalQiProcessTimes["Fee Verification"]),
-		"Signature Verification": common.PrettyDuration(totalQiProcessTimes["Signature Verification"]),
+		"Signature Verification": common.PrettyDuration(totalQiProcessTimes["Signature Check"]),
 		"Sanity Checks":          common.PrettyDuration(totalQiProcessTimes["Sanity Checks"]),
 	}).Info("Qi Tx Processing Breakdown")
 
