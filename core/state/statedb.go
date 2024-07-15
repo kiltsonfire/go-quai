@@ -931,9 +931,11 @@ func (s *StateDB) Copy() *StateDB {
 	// Copy all the basic fields, initialize the memory ones
 	state := &StateDB{
 		db:                  s.db,
+		utxoDb:              s.utxoDb,
+		etxDb:               s.etxDb,
 		trie:                s.db.CopyTrie(s.trie),
 		utxoTrie:            s.utxoDb.CopyTrie(s.utxoTrie),
-		utxoDb:              s.utxoDb,
+		etxTrie:             s.db.CopyTrie(s.etxTrie),
 		stateObjects:        make(map[common.InternalAddress]*stateObject, len(s.journal.dirties)),
 		stateObjectsPending: make(map[common.InternalAddress]struct{}, len(s.stateObjectsPending)),
 		stateObjectsDirty:   make(map[common.InternalAddress]struct{}, len(s.journal.dirties)),
@@ -943,6 +945,8 @@ func (s *StateDB) Copy() *StateDB {
 		preimages:           make(map[common.Hash][]byte, len(s.preimages)),
 		journal:             newJournal(),
 		hasher:              crypto.NewKeccakState(),
+		nodeLocation:        s.nodeLocation,
+		logger:              s.logger,
 	}
 	// Copy the dirty states, logs, and preimages
 	for addr := range s.journal.dirties {
