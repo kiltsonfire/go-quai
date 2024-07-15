@@ -248,7 +248,7 @@ func (p *StateProcessor) Process(block *types.WorkObject) (types.Receipts, []*ty
 	}
 	time2 := common.PrettyDuration(time.Since(start))
 
-	var timeSenders, timeSign, timePrepare, timeEtx, timeTx time.Duration
+	var timeSign, timePrepare, timeQiToQuai, timeQuaiToQi, timeCoinbase, timeEtx, timeTx time.Duration
 	startTimeSenders := time.Now()
 	senders := make(map[common.Hash]*common.InternalAddress) // temporary cache for senders of internal txs
 	numInternalTxs := 0
@@ -269,7 +269,8 @@ func (p *StateProcessor) Process(block *types.WorkObject) (types.Receipts, []*ty
 		}
 	}
 	p.hc.pool.SendersMu.RUnlock()
-	timeSenders = time.Since(startTimeSenders)
+	timeSenders := time.Since(startTimeSenders)
+
 	blockContext, err := NewEVMBlockContext(header, parent, p.hc, nil)
 	if err != nil {
 		return nil, nil, nil, nil, 0, err
@@ -313,7 +314,7 @@ func (p *StateProcessor) Process(block *types.WorkObject) (types.Receipts, []*ty
 		emittedEtxs = append(emittedEtxs, types.NewTx(&types.ExternalTx{To: &uncleCoinbase, Value: reward, IsCoinbase: true, OriginatingTxHash: origin, ETXIndex: uint16(i) + 1, Sender: uncleCoinbase}))
 	}
 	var totalQiTime time.Duration
-	var totalQiProcessTimes map[string]time.Duration
+	totalQiProcessTimes := make(map[string]time.Duration)
 	for i, tx := range block.Transactions() {
 		startProcess := time.Now()
 
@@ -414,6 +415,7 @@ func (p *StateProcessor) Process(block *types.WorkObject) (types.Receipts, []*ty
 					// This includes the value and the fees
 					statedb.AddBalance(iAddr, tx.Value())
 				}
+				timeCoinbase += time.Since(startTimeEtx)
 				continue
 			}
 			if etx.To().IsInQiLedgerScope() {
@@ -464,8 +466,7 @@ func (p *StateProcessor) Process(block *types.WorkObject) (types.Receipts, []*ty
 					*usedGas += params.CallValueTransferGas    // In the future we may want to determine what a fair gas cost is
 					totalEtxGas += params.CallValueTransferGas // In the future we may want to determine what a fair gas cost is
 				}
-				timeEtxDelta := time.Since(startTimeEtx)
-				timeEtx += timeEtxDelta
+				timeQuaiToQi += time.Since(startTimeEtx)
 				continue
 			} else {
 				if etx.ETXSender().Location().Equal(*etx.To().Location()) { // Qi->Quai Conversion
@@ -496,8 +497,7 @@ func (p *StateProcessor) Process(block *types.WorkObject) (types.Receipts, []*ty
 					totalFees.Add(totalFees, misc.QuaiToQi(primeTerminus.WorkObjectHeader(), quaiFees))
 				}
 				totalEtxGas += receipt.GasUsed
-				timeEtxDelta := time.Since(startTimeEtx)
-				timeEtx += timeEtxDelta
+				timeQiToQuai += time.Since(startTimeEtx)
 			}
 		} else if tx.Type() == types.QuaiTxType {
 			startTimeTx := time.Now()
@@ -567,6 +567,9 @@ func (p *StateProcessor) Process(block *types.WorkObject) (types.Receipts, []*ty
 	p.logger.WithFields(log.Fields{
 		"signing time":       common.PrettyDuration(timeSign),
 		"prepare state time": common.PrettyDuration(timePrepare),
+		"qiToQuai time":      common.PrettyDuration(timeQiToQuai),
+		"quaiToQi time":      common.PrettyDuration(timeQuaiToQi),
+		"coinbase time":      common.PrettyDuration(timeCoinbase),
 		"etxTime":            common.PrettyDuration(timeEtx),
 		"txTime":             common.PrettyDuration(timeTx),
 		"totalQiTime":        common.PrettyDuration(totalQiTime),
