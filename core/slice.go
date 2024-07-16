@@ -357,7 +357,7 @@ func (sl *Slice) Append(header *types.WorkObject, domPendingHeader *types.WorkOb
 			return nil, false, false, err
 		}
 
-		subReorg = sl.miningStrategy(bestPh, tempPendingHeader)
+		subReorg = sl.miningStrategy(bestPh.WorkObject(), tempPendingHeader.WorkObject())
 
 		setHead = sl.poem(sl.engine.TotalLogS(sl.hc, block), sl.engine.TotalLogS(sl.hc, sl.hc.CurrentHeader()))
 
@@ -513,11 +513,8 @@ func (sl *Slice) Append(header *types.WorkObject, domPendingHeader *types.WorkOb
 	}
 }
 
-func (sl *Slice) miningStrategy(bestPh types.PendingHeader, pendingHeader types.PendingHeader) bool {
-	if bestPh.WorkObject() == nil { // This is the case where we try to append the block before we have not initialized the bestPh
-		return true
-	}
-	subReorg := sl.poem(sl.engine.TotalLogPhS(pendingHeader.WorkObject()), sl.engine.TotalLogPhS(bestPh.WorkObject()))
+func (sl *Slice) miningStrategy(bestPh *types.WorkObject, pendingHeader *types.WorkObject) bool {
+	subReorg := sl.poem(sl.engine.TotalLogPhS(pendingHeader), sl.engine.TotalLogPhS(bestPh))
 	return subReorg
 }
 
@@ -591,7 +588,7 @@ func (sl *Slice) UpdateDom(oldTerminus common.Hash, pendingHeader types.PendingH
 						"number":     newPh.WorkObject().NumberArray(),
 						"newTermini": newPh.Termini().SubTerminiAtIndex(i),
 					}).Info("SubRelay in UpdateDom")
-					sl.subInterface[i].SubRelayPendingHeader(newPh, pendingHeader.WorkObject().ParentEntropy(common.ZONE_CTX), common.Location{}, true, nodeCtx, location)
+					sl.subInterface[i].SubRelayPendingHeader(newPh, sl.engine.TotalLogPhS(pendingHeader.WorkObject()), common.Location{}, true, nodeCtx, location)
 				}
 			}
 		} else {
@@ -619,7 +616,7 @@ func (sl *Slice) UpdateDom(oldTerminus common.Hash, pendingHeader types.PendingH
 							"number":     newPh.WorkObject().NumberArray(),
 							"newTermini": newPh.Termini().SubTerminiAtIndex(i),
 						}).Info("SubRelay in UpdateDom")
-						sl.subInterface[i].SubRelayPendingHeader(newPh, pendingHeader.WorkObject().ParentEntropy(common.ZONE_CTX), common.Location{}, true, nodeCtx, location)
+						sl.subInterface[i].SubRelayPendingHeader(newPh, sl.engine.TotalLogPhS(pendingHeader.WorkObject()), common.Location{}, true, nodeCtx, location)
 					}
 				}
 			} else {
@@ -1106,7 +1103,7 @@ func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, termini
 		}
 
 		bestPh, exists := sl.readPhCache(sl.bestPhKey)
-		if nodeCtx == common.ZONE_CTX && exists && sl.bestPhKey != localPendingHeader.Termini().DomTerminus(nodeLocation) && !sl.poem(newEntropy, bestPh.WorkObject().ParentEntropy(nodeCtx)) {
+		if nodeCtx == common.ZONE_CTX && exists && sl.bestPhKey != localPendingHeader.Termini().DomTerminus(nodeLocation) && !sl.poem(newEntropy, sl.engine.TotalLogPhS(bestPh.WorkObject())) {
 			if !sl.hc.IsGenesisHash(sl.bestPhKey) &&
 				!sl.hc.IsGenesisHash(localPendingHeader.Termini().DomTerminus(nodeLocation)) &&
 				!sl.hc.IsGenesisHash(localPendingHeader.WorkObject().PrimeTerminus()) {
@@ -1117,7 +1114,7 @@ func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, termini
 					"number":             bestPh.WorkObject().NumberArray(),
 					"newentropy":         newEntropy,
 				}).Warn("Subrelay Rejected")
-				sl.updatePhCache(types.NewPendingHeader(combinedPendingHeader, localTermini), false, nil, sl.poem(newEntropy, localPendingHeader.WorkObject().ParentEntropy(nodeCtx)), location)
+				sl.updatePhCache(types.NewPendingHeader(combinedPendingHeader, localTermini), false, nil, false, location)
 				go sl.domInterface.UpdateDom(localPendingHeader.Termini().DomTerminus(nodeLocation), bestPh, sl.NodeLocation())
 				return nil
 			}
@@ -1168,7 +1165,7 @@ func (sl *Slice) updatePhCache(pendingHeaderWithTermini types.PendingHeader, inS
 		if !exists {
 			return
 		}
-		if !sl.miningStrategy(bestPh, pendingHeaderWithTermini) {
+		if !sl.miningStrategy(bestPh.WorkObject(), pendingHeaderWithTermini.WorkObject()) {
 			return
 		}
 	}
