@@ -48,7 +48,7 @@ const (
 type CoreBackend interface {
 	AddPendingEtxs(pEtxs types.PendingEtxs) error
 	AddPendingEtxsRollup(pEtxRollup types.PendingEtxsRollup) error
-	UpdateDom(oldTerminus common.Hash, pendingHeader types.PendingHeader, location common.Location)
+	UpdateDom(oldDomReference common.Hash, pendingHeader *types.WorkObject, location common.Location)
 	RequestDomToAppendOrFetch(hash common.Hash, entropy *big.Int, order int)
 	SubRelayPendingHeader(pendingHeader types.PendingHeader, newEntropy *big.Int, location common.Location, subReorg bool, order int, updateDomLocation common.Location)
 	Append(header *types.WorkObject, manifest types.BlockManifest, domPendingHeader *types.WorkObject, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.Transactions) (types.Transactions, bool, bool, error)
@@ -504,7 +504,7 @@ func (sl *Slice) Append(header *types.WorkObject, domPendingHeader *types.WorkOb
 				"location":     sl.NodeLocation(),
 			}).Info("Append updateDom")
 			if sl.domInterface != nil {
-				go sl.domInterface.UpdateDom(bestPh.Termini().DomTerminus(sl.NodeLocation()), pendingHeaderWithTermini, sl.NodeLocation())
+				go sl.domInterface.UpdateDom(bestPh.WorkObject().ParentHash(common.REGION_CTX), pendingHeaderWithTermini.WorkObject(), sl.NodeLocation())
 			}
 		}
 		return block.ExtTransactions(), subReorg, setHead, nil
@@ -547,82 +547,65 @@ func (sl *Slice) relayPh(block *types.WorkObject, pendingHeaderWithTermini types
 
 // If a zone changes its best ph key on a dom block, it sends a signal to the
 // dom and we can relay that information to the coords, to build on the right dom header
-func (sl *Slice) UpdateDom(oldTerminus common.Hash, pendingHeader types.PendingHeader, location common.Location) {
+func (sl *Slice) UpdateDom(oldDomReference common.Hash, pendingHeader *types.WorkObject, location common.Location) {
 	nodeLocation := sl.NodeLocation()
 	nodeCtx := sl.NodeLocation().Context()
 	sl.phCacheMu.Lock()
 	defer sl.phCacheMu.Unlock()
-	newDomTermini := sl.hc.GetTerminiByHash(pendingHeader.Termini().DomTerminiAtIndex(location.SubIndex(nodeCtx)))
-	if newDomTermini == nil {
-		sl.logger.WithField("hash", pendingHeader.Termini().DomTerminiAtIndex(location.SubIndex(nodeCtx))).Warn("New Dom Termini doesn't exists in the database")
-		return
-	}
-	newDomTerminus := newDomTermini.DomTerminus(nodeLocation)
-	oldDomTermini := sl.hc.GetTerminiByHash(oldTerminus)
-	if oldDomTermini == nil {
-		sl.logger.WithField("hash", oldTerminus).Warn("Old Dom Termini doesn't exist in the database")
-		return
-	}
-	oldDomTerminus := oldDomTermini.DomTerminus(nodeLocation)
-	// Find the dom TerminusHash with the newTerminus
-	newPh, newDomTerminiExists := sl.readPhCache(newDomTerminus)
-	if !newDomTerminiExists {
-		sl.logger.WithField("newTerminus does not exist", newDomTerminus).Warn("Update Dom")
-		return
-	}
-	sl.logger.WithFields(log.Fields{
-		"NewDomTerminus": newDomTerminus,
-		"OldDomTerminus": oldDomTerminus,
-		"NewDomTermini":  newPh.Termini(),
-		"Location":       location,
-	}).Debug("UpdateDom")
-	if nodeCtx == common.REGION_CTX && oldDomTerminus == newPh.Termini().DomTerminus(nodeLocation) {
-		// Can update
-		sl.WriteBestPhKey(newDomTerminus)
-		newPh, exists := sl.readPhCache(newDomTerminus)
-		if exists {
+
+	// If we are in the region case, that means one of the zones in this region
+	// disagrees about the terminus it choses to mine to its previous terminus
+	if nodeCtx == common.REGION_CTX {
+		var oldDomTerminus, newDomTerminus common.Hash
+		oldTermini := sl.hc.GetTerminiByHash(oldDomReference)
+		if oldTermini == nil {
+			sl.logger.Warn("old prime terminus not found in the database in the region")
+			return
+		}
+		oldDomTerminus = oldTermini.DomTerminus(nodeLocation)
+		newTermini := sl.hc.GetTerminiByHash(pendingHeader.ParentHash(common.REGION_CTX))
+		if newTermini == nil {
+			sl.logger.Warn("new prime terminus not found in the database in the region")
+			return
+		}
+		newDomTerminus = newTermini.DomTerminus(nodeLocation)
+		// If the old Prime terminus and the new prime terminus is the same,
+		// then the conflict is intra region and using the subrelay we can
+		// resolve this
+		if oldDomTerminus == newDomTerminus {
+			// Can update
+			sl.WriteBestPhKey(newDomTerminus)
 			for _, i := range sl.randomRelayArray() {
 				if sl.subInterface[i] != nil {
 					sl.logger.WithFields(log.Fields{
-						"parentHash": newPh.WorkObject().ParentHash(nodeCtx),
-						"number":     newPh.WorkObject().NumberArray(),
-						"newTermini": newPh.Termini().SubTerminiAtIndex(i),
+						"parentHash": pendingHeader.ParentHash(nodeCtx),
+						"number":     pendingHeader.NumberArray(),
 					}).Info("SubRelay in UpdateDom")
-					sl.subInterface[i].SubRelayPendingHeader(newPh, sl.engine.TotalLogPhS(pendingHeader.WorkObject()), common.Location{}, true, nodeCtx, location)
+					sl.subInterface[i].SubRelayPendingHeader(types.NewPendingHeader(pendingHeader, *newTermini), sl.engine.TotalLogPhS(pendingHeader), common.Location{}, true, nodeCtx, location)
 				}
-			}
-		} else {
-			sl.logger.WithField("newTerminus", newDomTerminus).Warn("Update Dom: phCache at newTerminus doesn't exist")
-		}
-		return
-	} else {
-		// need to update dom
-		sl.logger.WithFields(log.Fields{
-			"oldDomTermini": oldDomTerminus,
-			"newDomTermini": newPh.Termini(),
-			"location":      location,
-		}).Info("UpdateDom needs to updateDom")
-		if sl.domInterface != nil {
-			go sl.domInterface.UpdateDom(oldDomTerminus, types.NewPendingHeader(pendingHeader.WorkObject(), newPh.Termini()), location)
-		} else {
-			// Can update
-			sl.WriteBestPhKey(newDomTerminus)
-			newPh, exists := sl.readPhCache(newDomTerminus)
-			if exists {
-				for _, i := range sl.randomRelayArray() {
-					if sl.subInterface[i] != nil {
-						sl.logger.WithFields(log.Fields{
-							"parentHash": newPh.WorkObject().ParentHash(nodeCtx),
-							"number":     newPh.WorkObject().NumberArray(),
-							"newTermini": newPh.Termini().SubTerminiAtIndex(i),
-						}).Info("SubRelay in UpdateDom")
-						sl.subInterface[i].SubRelayPendingHeader(newPh, sl.engine.TotalLogPhS(pendingHeader.WorkObject()), common.Location{}, true, nodeCtx, location)
-					}
-				}
-			} else {
-				sl.logger.WithField("newTerminus", newDomTerminus).Warn("Update Dom: phCache at newTerminus doesn't exist")
 			}
 			return
+		} else {
+			go sl.domInterface.UpdateDom(common.Hash{}, pendingHeader, location)
+		}
+	} else { // PRIME case
+		// In the prime case, the newDomReference is the key to use for the ph
+		// cache, because the termini for any block in prime chain is the parent
+		// block itself
+		sl.WriteBestPhKey(pendingHeader.ParentHash(common.PRIME_CTX))
+		newTermini := sl.hc.GetTerminiByHash(pendingHeader.ParentHash(common.PRIME_CTX))
+		if newTermini == nil {
+			sl.logger.Warn("new prime terminus not found in the database in the region")
+			return
+		}
+		for _, i := range sl.randomRelayArray() {
+			if sl.subInterface[i] != nil {
+				sl.logger.WithFields(log.Fields{
+					"parentHash": pendingHeader.ParentHash(nodeCtx),
+					"number":     pendingHeader.NumberArray(),
+				}).Info("SubRelay in UpdateDom")
+				sl.subInterface[i].SubRelayPendingHeader(types.NewPendingHeader(pendingHeader, *newTermini), sl.engine.TotalLogPhS(pendingHeader), common.Location{}, true, nodeCtx, location)
+			}
 		}
 	}
 }
@@ -1115,7 +1098,7 @@ func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, termini
 					"newentropy":         newEntropy,
 				}).Warn("Subrelay Rejected")
 				sl.updatePhCache(types.NewPendingHeader(combinedPendingHeader, localTermini), false, nil, false, location)
-				go sl.domInterface.UpdateDom(localPendingHeader.Termini().DomTerminus(nodeLocation), bestPh, sl.NodeLocation())
+				go sl.domInterface.UpdateDom(pendingHeader.WorkObject().ParentHash(common.REGION_CTX), bestPh.WorkObject(), sl.NodeLocation())
 				return nil
 			}
 		}

@@ -510,8 +510,8 @@ func (b *QuaiAPIBackend) SubRelayPendingHeader(pendingHeader types.PendingHeader
 	b.quai.core.SubRelayPendingHeader(pendingHeader, newEntropy, location, subReorg, order, updateDomLocation)
 }
 
-func (b *QuaiAPIBackend) UpdateDom(oldTerminus common.Hash, pendingHeader types.PendingHeader, location common.Location) {
-	b.quai.core.UpdateDom(oldTerminus, pendingHeader, location)
+func (b *QuaiAPIBackend) UpdateDom(oldDomReference common.Hash, pendingHeader *types.WorkObject, location common.Location) {
+	b.quai.core.UpdateDom(oldDomReference, pendingHeader, location)
 }
 
 func (b *QuaiAPIBackend) RequestDomToAppendOrFetch(hash common.Hash, entropy *big.Int, order int) {

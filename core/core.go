@@ -662,8 +662,8 @@ func (c *Core) SubRelayPendingHeader(slPendingHeader types.PendingHeader, newEnt
 	c.sl.SubRelayPendingHeader(slPendingHeader, newEntropy, location, subReorg, order, updateDomLocation)
 }
 
-func (c *Core) UpdateDom(oldTerminus common.Hash, pendingHeader types.PendingHeader, location common.Location) {
-	c.sl.UpdateDom(oldTerminus, pendingHeader, location)
+func (c *Core) UpdateDom(oldDomReference common.Hash, pendingHeader *types.WorkObject, location common.Location) {
+	c.sl.UpdateDom(oldDomReference, pendingHeader, location)
 }
 
 func (c *Core) NewGenesisPendigHeader(pendingHeader *types.WorkObject, domTerminus common.Hash, genesisHash common.Hash) error {
