@@ -135,7 +135,7 @@ func (c *Core) InsertChain(blocks types.WorkObjects) (int, error) {
 				}).Info("Already processing block")
 				return idx, errors.New("Already in process of appending this block")
 			}
-			newPendingEtxs, _, _, err := c.sl.Append(block, types.EmptyWorkObject(c.NodeCtx()), common.Hash{}, false, nil)
+			newPendingEtxs, _, err := c.sl.Append(block, types.EmptyWorkObject(c.NodeCtx()), common.Hash{}, false, nil)
 			c.processingCache.Remove(block.Hash())
 			if err == nil {
 				// If we have a dom, send the dom any pending ETXs which will become
@@ -595,11 +595,11 @@ func (c *Core) WriteBlock(block *types.WorkObject) {
 	}
 }
 
-func (c *Core) Append(header *types.WorkObject, manifest types.BlockManifest, domPendingHeader *types.WorkObject, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.Transactions) (types.Transactions, bool, bool, error) {
+func (c *Core) Append(header *types.WorkObject, manifest types.BlockManifest, domPendingHeader *types.WorkObject, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.Transactions) (types.Transactions, bool, error) {
 	nodeCtx := c.NodeCtx()
 	// Set the coinbase into the right interface before calling append in the sub
 	header.WorkObjectHeader().SetCoinbase(common.BytesToAddress(header.Coinbase().Bytes(), c.NodeLocation()))
-	newPendingEtxs, subReorg, setHead, err := c.sl.Append(header, domPendingHeader, domTerminus, domOrigin, newInboundEtxs)
+	newPendingEtxs, setHead, err := c.sl.Append(header, domPendingHeader, domTerminus, domOrigin, newInboundEtxs)
 	if err != nil {
 		if err.Error() == ErrBodyNotFound.Error() || err.Error() == consensus.ErrUnknownAncestor.Error() || err.Error() == ErrSubNotSyncedToDom.Error() {
 			// Fetch the blocks for each hash in the manifest
@@ -625,7 +625,7 @@ func (c *Core) Append(header *types.WorkObject, manifest types.BlockManifest, do
 			}
 		}
 	}
-	return newPendingEtxs, subReorg, setHead, err
+	return newPendingEtxs, setHead, err
 }
 
 func (c *Core) DownloadBlocksInManifest(blockHash common.Hash, manifest types.BlockManifest, entropy *big.Int) {
@@ -760,6 +760,10 @@ func (c *Core) SubscribeExpansionEvent(ch chan<- ExpansionEvent) event.Subscript
 
 func (c *Core) SetDomInterface(domInterface CoreBackend) {
 	c.sl.SetDomInterface(domInterface)
+}
+
+func (c *Core) POEM(currentHeader *types.WorkObject, header *types.WorkObject) bool {
+	return c.sl.POEM(currentHeader, header)
 }
 
 //---------------------//

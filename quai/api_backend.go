@@ -474,7 +474,7 @@ func (b *QuaiAPIBackend) StateAtTransaction(ctx context.Context, block *types.Wo
 	return b.quai.core.StateAtTransaction(block, txIndex, reexec)
 }
 
-func (b *QuaiAPIBackend) Append(header *types.WorkObject, manifest types.BlockManifest, domPendingHeader *types.WorkObject, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.Transactions) (types.Transactions, bool, bool, error) {
+func (b *QuaiAPIBackend) Append(header *types.WorkObject, manifest types.BlockManifest, domPendingHeader *types.WorkObject, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.Transactions) (types.Transactions, bool, error) {
 	return b.quai.core.Append(header, manifest, domPendingHeader, domTerminus, domOrigin, newInboundEtxs)
 }
 
