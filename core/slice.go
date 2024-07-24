@@ -1100,6 +1100,14 @@ func (sl *Slice) updatePhCacheFromDom(pendingHeader types.PendingHeader, termini
 				"ParentHash":  combinedPendingHeader.ParentHash(nodeCtx),
 				"Terminus":    localPendingHeader.Termini().DomTerminus(nodeLocation),
 			}).Info("Choosing phHeader pickPhHead")
+			parent := sl.hc.GetBlockByHash(localPendingHeader.WorkObject().ParentHash(nodeCtx))
+			if parent != nil {
+				sl.hc.SetCurrentHeader(parent)
+			} else {
+				sl.logger.WithFields(log.Fields{
+					"hash": localPendingHeader.WorkObject().ParentHash(nodeCtx),
+				}).Warn("Parent not found")
+			}
 			sl.WriteBestPhKey(localPendingHeader.Termini().DomTerminus(nodeLocation))
 		}
 
