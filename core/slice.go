@@ -542,8 +542,6 @@ func (sl *Slice) relayPh(block *types.WorkObject, pendingHeaderWithTermini types
 func (sl *Slice) UpdateDom(oldDomReference common.Hash, pendingHeader *types.WorkObject, location common.Location) {
 	nodeLocation := sl.NodeLocation()
 	nodeCtx := sl.NodeLocation().Context()
-	sl.phCacheMu.Lock()
-	defer sl.phCacheMu.Unlock()
 
 	// If we are in the region case, that means one of the zones in this region
 	// disagrees about the terminus it choses to mine to its previous terminus
