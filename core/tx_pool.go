@@ -1256,10 +1256,12 @@ func (pool *TxPool) addQiTxs(txs types.Transactions) []error {
 }
 
 func (pool *TxPool) addQiTxsWithoutValidationLocked(txs types.Transactions) {
-	for _, tx := range txs {
+	for i, tx := range txs {
 		fee, exists := pool.qiTxFees.Get(tx.Hash())
 		if fee == nil || !exists { // this should almost never happen
-			pool.logger.Errorf("Fee is nil or doesn't exist in cache for tx %s", tx.Hash().String())
+			if i%1000 == 0 {
+				pool.logger.Errorf("Fee is nil or doesn't exist in cache for tx %s", tx.Hash().String())
+			}
 			currentBlock := pool.chain.CurrentBlock()
 			etxRLimit := len(currentBlock.Transactions()) / params.ETXRegionMaxFraction
 			if etxRLimit < params.ETXRLimitMin {
