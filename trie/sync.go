@@ -358,11 +358,11 @@ func (s *Sync) schedule(req *request) {
 
 // children retrieves all the missing children of a state trie entry for future
 // retrieval scheduling.
-func (s *Sync) children(req *request, object node) ([]*request, error) {
+func (s *Sync) children(req *request, object Node) ([]*request, error) {
 	// Gather all the children of the node, irrelevant whether known or not
 	type child struct {
 		path []byte
-		node node
+		node Node
 	}
 	var children []child
 

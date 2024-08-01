@@ -198,3 +198,7 @@ func (t *SecureTrie) getSecKeyCache() map[string][]byte {
 	}
 	return t.secKeyCache
 }
+
+func (t *SecureTrie) Dirties() []Node {
+	return t.trie.Dirties()
+}

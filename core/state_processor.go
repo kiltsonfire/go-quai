@@ -1182,6 +1182,7 @@ func (p *StateProcessor) Apply(batch ethdb.Batch, block *types.WorkObject) ([]*t
 	if err := p.etxCache.TrieDB().Commit(etxRoot, false, nil); err != nil {
 		return nil, err
 	}
+	statedb.Dirties()
 	time8 = common.PrettyDuration(time.Since(start))
 
 	p.logger.WithFields(log.Fields{

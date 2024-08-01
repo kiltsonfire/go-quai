@@ -383,7 +383,7 @@ func (st *StackTrie) hash() {
 
 	switch st.nodeType {
 	case branchNode:
-		var nodes [17]node
+		var nodes [17]Node
 		for i, child := range st.children {
 			if child == nil {
 				nodes[i] = nilValueNode
@@ -410,7 +410,7 @@ func (st *StackTrie) hash() {
 		h = newHasher(false)
 		defer returnHasherToPool(h)
 		h.tmp.Reset()
-		var valuenode node
+		var valuenode Node
 		if len(st.children[0].val) < 32 {
 			valuenode = rawNode(st.children[0].val)
 		} else {
@@ -418,7 +418,7 @@ func (st *StackTrie) hash() {
 		}
 		n := struct {
 			Key []byte
-			Val node
+			Val Node
 		}{
 			Key: hexToCompact(st.key),
 			Val: valuenode,

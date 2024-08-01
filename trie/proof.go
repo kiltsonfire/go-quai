@@ -37,7 +37,7 @@ import (
 func (t *Trie) Prove(key []byte, fromLevel uint, proofDb ethdb.KeyValueWriter) error {
 	// Collect all nodes on the path to key.
 	key = keybytesToHex(key)
-	var nodes []node
+	var nodes []Node
 	tn := t.root
 	for len(key) > 0 && tn != nil {
 		switch n := tn.(type) {
@@ -73,7 +73,7 @@ func (t *Trie) Prove(key []byte, fromLevel uint, proofDb ethdb.KeyValueWriter) e
 			fromLevel--
 			continue
 		}
-		var hn node
+		var hn Node
 		n, hn = hasher.proofHash(n)
 		if hash, ok := hn.(hashNode); ok || i == 0 {
 			// If the node's database encoding is a hash (or is the
@@ -133,9 +133,9 @@ func VerifyProof(rootHash common.Hash, key []byte, proofDb ethdb.KeyValueReader)
 // necessary nodes will be resolved and leave the remaining as hashnode.
 //
 // The given edge proof is allowed to be an existent or non-existent proof.
-func proofToPath(rootHash common.Hash, root node, key []byte, proofDb ethdb.KeyValueReader, allowNonExistent bool) (node, []byte, error) {
+func proofToPath(rootHash common.Hash, root Node, key []byte, proofDb ethdb.KeyValueReader, allowNonExistent bool) (Node, []byte, error) {
 	// resolveNode retrieves and resolves trie node from merkle proof stream
-	resolveNode := func(hash common.Hash) (node, error) {
+	resolveNode := func(hash common.Hash) (Node, error) {
 		buf, _ := proofDb.Get(hash[:])
 		if buf == nil {
 			return nil, fmt.Errorf("proof node (hash %064x) missing", hash)
@@ -157,7 +157,7 @@ func proofToPath(rootHash common.Hash, root node, key []byte, proofDb ethdb.KeyV
 	}
 	var (
 		err           error
-		child, parent node
+		child, parent Node
 		keyrest       []byte
 		valnode       []byte
 	)
@@ -215,7 +215,7 @@ func proofToPath(rootHash common.Hash, root node, key []byte, proofDb ethdb.KeyV
 //
 // Note we have the assumption here the given boundary keys are different
 // and right is larger than left.
-func unsetInternal(n node, left []byte, right []byte) (bool, error) {
+func unsetInternal(n Node, left []byte, right []byte) (bool, error) {
 	left, right = keybytesToHex(left), keybytesToHex(right)
 
 	// Step down to the fork point. There are two scenarios can happen:
@@ -225,7 +225,7 @@ func unsetInternal(n node, left []byte, right []byte) (bool, error) {
 	//   to point to a non-existent key.
 	var (
 		pos    = 0
-		parent node
+		parent Node
 
 		// fork indicator, 0 means no fork, -1 means proof is less, 1 means proof is greater
 		shortForkLeft, shortForkRight int
@@ -343,7 +343,7 @@ findFork:
 //     keep the entire branch and return.
 //   - the fork point is a shortnode, the shortnode is excluded in the range,
 //     unset the entire branch.
-func unset(parent node, child node, key []byte, pos int, removeLeft bool) error {
+func unset(parent Node, child Node, key []byte, pos int, removeLeft bool) error {
 	switch cld := child.(type) {
 	case *fullNode:
 		if removeLeft {
@@ -400,7 +400,7 @@ func unset(parent node, child node, key []byte, pos int, removeLeft bool) error 
 // in the right side of the given path. The given path can point to an existent
 // key or a non-existent one. This function has the assumption that the whole
 // path should already be resolved.
-func hasRightElement(node node, key []byte) bool {
+func hasRightElement(node Node, key []byte) bool {
 	pos, key := 0, keybytesToHex(key)
 	for node != nil {
 		switch rn := node.(type) {
@@ -557,7 +557,7 @@ func VerifyRangeProof(rootHash common.Hash, firstKey []byte, lastKey []byte, key
 //
 // There is an additional flag `skipResolved`. If it's set then
 // all resolved nodes won't be returned.
-func get(tn node, key []byte, skipResolved bool) ([]byte, node) {
+func get(tn Node, key []byte, skipResolved bool) ([]byte, Node) {
 	for {
 		switch n := tn.(type) {
 		case *shortNode:

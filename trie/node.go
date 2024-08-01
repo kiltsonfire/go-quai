@@ -27,19 +27,19 @@ import (
 
 var indices = []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f", "[17]"}
 
-type node interface {
+type Node interface {
 	fstring(string) string
 	cache() (hashNode, bool)
 }
 
 type (
 	fullNode struct {
-		Children [17]node // Actual trie node data to encode/decode (needs custom encoder)
+		Children [17]Node // Actual trie node data to encode/decode (needs custom encoder)
 		flags    nodeFlag
 	}
 	shortNode struct {
 		Key   []byte
-		Val   node
+		Val   Node
 		flags nodeFlag
 	}
 	hashNode  []byte
@@ -52,7 +52,7 @@ var nilValueNode = valueNode(nil)
 
 // EncodeRLP encodes a full node into the consensus RLP format.
 func (n *fullNode) EncodeRLP(w io.Writer) error {
-	var nodes [17]node
+	var nodes [17]Node
 
 	for i, child := range &n.Children {
 		if child != nil {
@@ -105,7 +105,7 @@ func (n valueNode) fstring(ind string) string {
 	return fmt.Sprintf("%x ", []byte(n))
 }
 
-func mustDecodeNode(hash, buf []byte) node {
+func mustDecodeNode(hash, buf []byte) Node {
 	n, err := decodeNode(hash, buf)
 	if err != nil {
 		panic(fmt.Sprintf("node %x: %v", hash, err))
@@ -114,7 +114,7 @@ func mustDecodeNode(hash, buf []byte) node {
 }
 
 // decodeNode parses the RLP encoding of a trie node.
-func decodeNode(hash, buf []byte) (node, error) {
+func decodeNode(hash, buf []byte) (Node, error) {
 	if len(buf) == 0 {
 		return nil, io.ErrUnexpectedEOF
 	}
@@ -134,7 +134,7 @@ func decodeNode(hash, buf []byte) (node, error) {
 	}
 }
 
-func decodeShort(hash, elems []byte) (node, error) {
+func decodeShort(hash, elems []byte) (Node, error) {
 	kbuf, rest, err := rlp.SplitString(elems)
 	if err != nil {
 		return nil, err
@@ -177,7 +177,7 @@ func decodeFull(hash, elems []byte) (*fullNode, error) {
 
 const hashLen = len(common.Hash{})
 
-func decodeRef(buf []byte) (node, []byte, error) {
+func decodeRef(buf []byte) (Node, []byte, error) {
 	kind, val, rest, err := rlp.Split(buf)
 	if err != nil {
 		return nil, buf, err

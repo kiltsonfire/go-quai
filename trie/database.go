@@ -29,6 +29,7 @@ import (
 
 	"github.com/dominant-strategies/go-quai/common"
 	"github.com/dominant-strategies/go-quai/core/rawdb"
+	"github.com/dominant-strategies/go-quai/crypto"
 	"github.com/dominant-strategies/go-quai/ethdb"
 	"github.com/dominant-strategies/go-quai/log"
 	"github.com/dominant-strategies/go-quai/rlp"
@@ -83,13 +84,13 @@ func (n rawNode) EncodeRLP(w io.Writer) error {
 // rawFullNode represents only the useful data content of a full node, with the
 // caches and flags stripped out to minimize its data storage. This type honors
 // the same RLP encoding as the original parent.
-type rawFullNode [17]node
+type rawFullNode [17]Node
 
 func (n rawFullNode) cache() (hashNode, bool)   { panic("this should never end up in a live trie") }
 func (n rawFullNode) fstring(ind string) string { panic("this should never end up in a live trie") }
 
 func (n rawFullNode) EncodeRLP(w io.Writer) error {
-	var nodes [17]node
+	var nodes [17]Node
 
 	for i, child := range n {
 		if child != nil {
@@ -106,7 +107,7 @@ func (n rawFullNode) EncodeRLP(w io.Writer) error {
 // the same RLP encoding as the original parent.
 type rawShortNode struct {
 	Key []byte
-	Val node
+	Val Node
 }
 
 func (n rawShortNode) cache() (hashNode, bool)   { panic("this should never end up in a live trie") }
@@ -115,7 +116,7 @@ func (n rawShortNode) fstring(ind string) string { panic("this should never end 
 // cachedNode is all the information we know about a single cached trie node
 // in the memory database write layer.
 type cachedNode struct {
-	node node   // Cached collapsed trie node, or raw rlp data
+	node Node   // Cached collapsed trie node, or raw rlp data
 	size uint16 // Byte size of the useful cached data
 
 	parents  uint32                 // Number of live nodes referencing this one
@@ -149,7 +150,7 @@ func (n *cachedNode) rlp() []byte {
 
 // obj returns the decoded and expanded trie node, either directly from the cache,
 // or by regenerating it from the rlp encoded blob.
-func (n *cachedNode) obj(hash common.Hash) node {
+func (n *cachedNode) obj(hash common.Hash) Node {
 	if node, ok := n.node.(rawNode); ok {
 		return mustDecodeNode(hash[:], node)
 	}
@@ -170,7 +171,7 @@ func (n *cachedNode) forChilds(onChild func(hash common.Hash)) {
 
 // forGatherChildren traverses the node hierarchy of a collapsed storage node and
 // invokes the callback for all the hashnode children.
-func forGatherChildren(n node, onChild func(hash common.Hash)) {
+func forGatherChildren(n Node, onChild func(hash common.Hash)) {
 	switch n := n.(type) {
 	case *rawShortNode:
 		forGatherChildren(n.Val, onChild)
@@ -188,7 +189,7 @@ func forGatherChildren(n node, onChild func(hash common.Hash)) {
 
 // simplifyNode traverses the hierarchy of an expanded memory node and discards
 // all the internal caches, returning a node that only contains the raw data.
-func simplifyNode(n node) node {
+func simplifyNode(n Node) Node {
 	switch n := n.(type) {
 	case *shortNode:
 		// Short nodes discard the flags and cascade
@@ -214,7 +215,7 @@ func simplifyNode(n node) node {
 
 // expandNode traverses the node hierarchy of a collapsed storage node and converts
 // all fields and keys into expanded memory form.
-func expandNode(hash hashNode, n node) node {
+func expandNode(hash hashNode, n Node) Node {
 	switch n := n.(type) {
 	case *rawShortNode:
 		// Short nodes need key and child expansion
@@ -296,7 +297,7 @@ func (db *Database) DiskDB() ethdb.KeyValueStore {
 // The blob size must be specified to allow proper size tracking.
 // All nodes inserted by this function will be reference tracked
 // and in theory should only used for **trie nodes** insertion.
-func (db *Database) insert(hash common.Hash, size int, node node) {
+func (db *Database) insert(hash common.Hash, size int, node Node) {
 	// If the node's already cached, skip
 	if _, ok := db.dirties[hash]; ok {
 		return
@@ -344,7 +345,7 @@ func (db *Database) insertPreimage(hash common.Hash, preimage []byte) {
 
 // node retrieves a cached trie node from memory, or returns nil if none can be
 // found in the memory cache.
-func (db *Database) node(hash common.Hash) node {
+func (db *Database) node(hash common.Hash) Node {
 	// Retrieve the node from the clean cache if available
 	if db.cleans != nil {
 		if enc := db.cleans.Get(nil, hash[:]); enc != nil {
@@ -733,6 +734,12 @@ func (db *Database) commit(hash common.Hash, batch ethdb.Batch, uncacher *cleane
 	})
 	if err != nil {
 		return err
+	}
+	if hash != crypto.Keccak256Hash(node.rlp()) {
+		return fmt.Errorf("hash mismatch: %v, %v", hash, crypto.Keccak256Hash(node.rlp()))
+	}
+	if hash == common.HexToHash("0xdec97608747592cd9732f98b30cdb37c856420b779ef684f5fee7480f9c5cfd0") {
+		fmt.Println("commit", hash, node.rlp())
 	}
 	// If we've reached an optimal batch size, commit and start over
 	rawdb.WriteTrieNode(batch, hash, node.rlp())

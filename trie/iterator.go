@@ -122,7 +122,7 @@ type NodeIterator interface {
 // trie, which can be resumed at a later invocation.
 type nodeIteratorState struct {
 	hash    common.Hash // Hash of the node being iterated (nil if not standalone)
-	node    node        // Trie node being iterated
+	node    Node        // Trie node being iterated
 	parent  common.Hash // Hash of the first full ancestor node (nil if current is the root)
 	index   int         // Child to be processed next
 	pathlen int         // Length of the path to this node
@@ -350,7 +350,7 @@ func (it *nodeIterator) peekSeek(seekKey []byte) (*nodeIteratorState, *int, []by
 	return nil, nil, nil, errIteratorEnd
 }
 
-func (it *nodeIterator) resolveHash(hash hashNode, path []byte) (node, error) {
+func (it *nodeIterator) resolveHash(hash hashNode, path []byte) (Node, error) {
 	if it.resolver != nil {
 		if blob, err := it.resolver.Get(hash); err == nil && len(blob) > 0 {
 			if resolved, err := decodeNode(hash, blob); err == nil {
@@ -374,9 +374,9 @@ func (st *nodeIteratorState) resolve(it *nodeIterator, path []byte) error {
 	return nil
 }
 
-func findChild(n *fullNode, index int, path []byte, ancestor common.Hash) (node, *nodeIteratorState, []byte, int) {
+func findChild(n *fullNode, index int, path []byte, ancestor common.Hash) (Node, *nodeIteratorState, []byte, int) {
 	var (
-		child     node
+		child     Node
 		state     *nodeIteratorState
 		childPath []byte
 	)

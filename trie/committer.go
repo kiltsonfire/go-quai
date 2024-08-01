@@ -34,7 +34,7 @@ const leafChanSize = 200
 type leaf struct {
 	size int         // size of the rlp data (estimate)
 	hash common.Hash // hash of rlp data
-	node node        // the node to commit
+	node Node        // the node to commit
 }
 
 // committer is a type used for the trie Commit operation. A committer has some
@@ -73,7 +73,7 @@ func returnCommitterToPool(h *committer) {
 }
 
 // commit collapses a node down into a hash node and inserts it into the database
-func (c *committer) Commit(n node, db *Database) (hashNode, error) {
+func (c *committer) Commit(n Node, db *Database) (hashNode, error) {
 	if db == nil {
 		return nil, errors.New("no db provided")
 	}
@@ -85,7 +85,7 @@ func (c *committer) Commit(n node, db *Database) (hashNode, error) {
 }
 
 // commit collapses a node down into a hash node and inserts it into the database
-func (c *committer) commit(n node, db *Database) (node, error) {
+func (c *committer) commit(n Node, db *Database) (Node, error) {
 	// if this path is clean, use available cached data
 	hash, dirty := n.cache()
 	if hash != nil && !dirty {
@@ -135,8 +135,8 @@ func (c *committer) commit(n node, db *Database) (node, error) {
 }
 
 // commitChildren commits the children of the given fullnode
-func (c *committer) commitChildren(n *fullNode, db *Database) ([17]node, error) {
-	var children [17]node
+func (c *committer) commitChildren(n *fullNode, db *Database) ([17]Node, error) {
+	var children [17]Node
 	for i := 0; i < 16; i++ {
 		child := n.Children[i]
 		if child == nil {
@@ -168,7 +168,7 @@ func (c *committer) commitChildren(n *fullNode, db *Database) ([17]node, error) 
 // store hashes the node n and if we have a storage layer specified, it writes
 // the key/value pair to it and tracks any node->child references as well as any
 // node->external trie references.
-func (c *committer) store(n node, db *Database) node {
+func (c *committer) store(n Node, db *Database) Node {
 	// Larger nodes are replaced by their hash and stored in the database.
 	var (
 		hash, _ = n.cache()
@@ -237,7 +237,7 @@ func (c *committer) commitLoop(db *Database) {
 // rlp-encoding it (zero allocs). This method has been experimentally tried, and with a trie
 // with 1000 leafs, the only errors above 1% are on small shortnodes, where this
 // method overestimates by 2 or 3 bytes (e.g. 37 instead of 35)
-func estimateSize(n node) int {
+func estimateSize(n Node) int {
 	switch n := n.(type) {
 	case *shortNode:
 		// A short node contains a compacted key, and a value.
