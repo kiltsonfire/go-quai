@@ -715,7 +715,7 @@ func (t *Trie) Dirties() []Node {
 				t.db.Logger().Info("Short node hash matches")
 				data := t.db.node(common.BytesToHash(shortNodeHash.(hashNode)))
 				if data != nil {
-					t.db.Logger().Infof("Have the shortNode")
+					t.db.Logger().Infof("Have the cached shortNode %x", common.BytesToHash(shortNodeHash.(hashNode)))
 				} else {
 					t.db.Logger().Infof("Don't have the shortNode")
 				}
@@ -723,7 +723,7 @@ func (t *Trie) Dirties() []Node {
 				t.db.Logger().Infof("Short node hash doesn't match %v %v", shortNodeHash, shortNodeCachedHash)
 				data := t.db.node(common.BytesToHash(shortNodeCachedHash))
 				if data != nil {
-					t.db.Logger().Infof("Have the shortNode")
+					t.db.Logger().Infof("Have the shortNode %x", common.BytesToHash(shortNodeCachedHash))
 				} else {
 					t.db.Logger().Infof("Don't have the shortNode")
 				}
@@ -736,7 +736,7 @@ func (t *Trie) Dirties() []Node {
 				t.db.Logger().Info("Full node hash matches")
 				data := t.db.node(common.BytesToHash(fullNodeHash.(hashNode)))
 				if data != nil {
-					t.db.Logger().Info("Have the full node")
+					t.db.Logger().Infof("Have the full node %x", common.BytesToHash(fullNodeHash.(hashNode)))
 				} else {
 					t.db.Logger().Info("Don't have the full node")
 				}
@@ -744,7 +744,7 @@ func (t *Trie) Dirties() []Node {
 				t.db.Logger().Infof("Full node hash doesn't match %v %v", fullNodeHash, fullNodeCachedHash)
 				data := t.db.node(common.BytesToHash(fullNodeCachedHash))
 				if data != nil {
-					t.db.Logger().Info("Have the full node")
+					t.db.Logger().Infof("Have the full node %x", common.BytesToHash(fullNodeCachedHash))
 				} else {
 					t.db.Logger().Info("Don't have the full node")
 				}
@@ -753,14 +753,14 @@ func (t *Trie) Dirties() []Node {
 		case hashNode:
 			decodedNode := t.db.node(common.BytesToHash(node))
 			if decodedNode == nil {
-				switch d := decodedNode.(type) {
+				switch decodedNode.(type) {
 				default:
-					t.db.Logger().Infof("Don't have the hashNode %T", d)
+					t.db.Logger().Infof("Don't have the hashNode")
 				}
 			} else {
-				switch d := decodedNode.(type) {
+				switch decodedNode.(type) {
 				default:
-					t.db.Logger().Infof("have the hashNode %T", d)
+					t.db.Logger().Infof("have the hashNode %x", common.BytesToHash(node))
 				}
 			}
 		default:

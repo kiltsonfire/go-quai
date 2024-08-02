@@ -180,8 +180,31 @@ func TestInsert(t *testing.T) {
 	if root != exp {
 		t.Errorf("case 2: exp %x got %x", exp, root)
 	}
+	trie.Dirties()
 }
 
+func TestInsertModify(t *testing.T) {
+	trie := newEmpty()
+
+	updateString(trie, "doe", "reindeer")
+	updateString(trie, "dog", "puppy")
+	updateString(trie, "dogglesworth", "cat")
+	updateString(trie, "do", "deer")
+
+	exp := common.HexToHash("8aad789dff2f538bca5d8ea56e8abe10f4c7ba3a5dea95fea4cd6e7c3a1168d3")
+	root := trie.Hash()
+	if root != exp {
+		t.Errorf("case 1: exp %x got %x", exp, root)
+	}
+	trie.Commit(nil)
+
+	t.Logf("Dirties one")
+	trie.Dirties()
+	// Delete an entry
+	deleteString(trie, "dog")
+	t.Logf("Dirties two")
+	trie.Dirties()
+}
 func TestGet(t *testing.T) {
 	trie := newEmpty()
 	updateString(trie, "doe", "reindeer")
@@ -204,6 +227,7 @@ func TestGet(t *testing.T) {
 		}
 		trie.Commit(nil)
 	}
+	trie.Dirties()
 }
 
 func TestDelete(t *testing.T) {
@@ -231,6 +255,7 @@ func TestDelete(t *testing.T) {
 	if hash != exp {
 		t.Errorf("expected %x got %x", exp, hash)
 	}
+	trie.Dirties()
 }
 
 func TestEmptyValues(t *testing.T) {
