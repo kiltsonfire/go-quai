@@ -1263,37 +1263,39 @@ func (pool *TxPool) addQiTxsWithoutValidationLocked(txs types.Transactions) {
 			} else {
 				pool.logger.Debugf("Fee is nil or doesn't exist in cache for tx %s", tx.Hash().String())
 			}
-			currentBlock := pool.chain.CurrentBlock()
-			etxRLimit := len(currentBlock.Transactions()) / params.ETXRegionMaxFraction
-			if etxRLimit < params.ETXRLimitMin {
-				etxRLimit = params.ETXRLimitMin
-			}
-			etxPLimit := len(currentBlock.Transactions()) / params.ETXPrimeMaxFraction
-			if etxPLimit < params.ETXPLimitMin {
-				etxPLimit = params.ETXPLimitMin
-			}
-			totalQitIn, err := ValidateQiTxInputs(tx, pool.chain, pool.db, currentBlock, pool.signer, pool.chainconfig.Location, *pool.chainconfig.ChainID)
-			if err != nil {
-				pool.logger.WithFields(logrus.Fields{
-					"tx":  tx.Hash().String(),
-					"err": err,
-				}).Debug("Invalid Qi transaction, skipping re-inject")
-				continue
-			}
-			fee, err = ValidateQiTxOutputsAndSignature(tx, pool.chain, totalQitIn, currentBlock, pool.signer, pool.chainconfig.Location, *pool.chainconfig.ChainID, etxRLimit, etxPLimit)
-			if err != nil {
-				pool.logger.WithFields(logrus.Fields{
-					"tx":  tx.Hash().String(),
-					"err": err,
-				}).Debug("Invalid Qi transaction, skipping re-inject")
-				continue
-			}
-			select {
-			case pool.feesCh <- newFee{hash16, fee}:
-			default:
-				pool.logger.Error("feesCh is full, skipping until there is room")
-			}
+			continue
 		}
+		currentBlock := pool.chain.CurrentBlock()
+		etxRLimit := len(currentBlock.Transactions()) / params.ETXRegionMaxFraction
+		if etxRLimit < params.ETXRLimitMin {
+			etxRLimit = params.ETXRLimitMin
+		}
+		etxPLimit := len(currentBlock.Transactions()) / params.ETXPrimeMaxFraction
+		if etxPLimit < params.ETXPLimitMin {
+			etxPLimit = params.ETXPLimitMin
+		}
+		totalQitIn, err := ValidateQiTxInputs(tx, pool.chain, pool.db, currentBlock, pool.signer, pool.chainconfig.Location, *pool.chainconfig.ChainID)
+		if err != nil {
+			pool.logger.WithFields(logrus.Fields{
+				"tx":  tx.Hash().String(),
+				"err": err,
+			}).Debug("Invalid Qi transaction, skipping re-inject")
+			continue
+		}
+		fee, err = ValidateQiTxOutputsAndSignature(tx, pool.chain, totalQitIn, currentBlock, pool.signer, pool.chainconfig.Location, *pool.chainconfig.ChainID, etxRLimit, etxPLimit)
+		if err != nil {
+			pool.logger.WithFields(logrus.Fields{
+				"tx":  tx.Hash().String(),
+				"err": err,
+			}).Debug("Invalid Qi transaction, skipping re-inject")
+			continue
+		}
+		select {
+		case pool.feesCh <- newFee{hash16, fee}:
+		default:
+			pool.logger.Error("feesCh is full, skipping until there is room")
+		}
+
 		txWithMinerFee, err := types.NewTxWithMinerFee(tx, nil, fee)
 		if err != nil {
 			pool.logger.Error("Error creating txWithMinerFee: " + err.Error())
