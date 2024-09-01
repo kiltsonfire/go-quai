@@ -561,9 +561,12 @@ func (hc *HierarchicalCoordinator) BuildPendingHeaders() {
 
 	for i := 0; i < int(numRegions); i++ {
 		regionLocation := common.Location{byte(i)}.Name()
+		// regionLocation := hc.GetContextLocation(t.location, common.REGION_CTX).Name()
+		log.Global.Error("computing the pending header", bestPrime, regionLocation)
 		var bestRegion common.Hash
 		t, exists := modifiedConstraintMap[regionLocation]
 		if !exists {
+			log.Global.Error("Region not found in the constraint map")
 			bestRegion = defaultGenesisHash
 		} else {
 			bestRegion = t.termini[t.location.Zone()]
@@ -690,19 +693,33 @@ func (hc *HierarchicalCoordinator) calculateFrontierPoints(constraintMap map[str
 		if parentOrder < currentOrder {
 			// If a constraint exists
 			t, exists := constraintMap[string(hc.GetContextLocation(parent.Location(), parentOrder).Name())]
+			// possibly update to new constraint
+			backend := hc.GetBackend(hc.GetContextLocation(parent.Location(), parentOrder))
+			newTermini := backend.GetTerminiByHash(parent.Hash())
+			if newTermini == nil {
+				panic("termini shouldnt be nil for the parent")
+			}
 			if exists {
 				log.Global.Error("Constraint exists for the parent", t.termini, t.location)
 				// check that it meets the constraint
 				if parentOrder == common.PRIME_CTX {
-					if t.termini[parent.Location().Region()] == parent.Hash() {
+					if t.termini[parent.Location().Region()] == parent.Hash() || t.termini[parent.Location().Zone()] == parent.Hash() || newTermini.SubTermini()[t.location.Region()] == t.termini[t.location.Region()] {
 						log.Global.Error("Prime constraint met")
+						if newTermini.SubTermini()[t.location.Region()] == t.termini[t.location.Region()] {
+							log.Global.Error("Updating prime constraint")
+							constraintMap[string(hc.GetContextLocation(parent.Location(), common.PRIME_CTX).Name())] = TerminiLocation{termini: newTermini.SubTermini(), location: parent.Location()}
+						}
 						break
 					} else {
 						return startingConstraintMap, errors.New("region not in prime constraint")
 					}
 				} else {
-					if t.termini[parent.Location().Zone()] == parent.Hash() {
+					if t.termini[parent.Location().Zone()] == parent.Hash() || newTermini.SubTermini()[t.location.Zone()] == t.termini[t.location.Zone()] {
 						log.Global.Error("Region constraint met")
+						if newTermini.SubTermini()[t.location.Zone()] == t.termini[t.location.Zone()] {
+							log.Global.Error("Updating region constraint")
+							constraintMap[string(hc.GetContextLocation(parent.Location(), common.REGION_CTX).Name())] = TerminiLocation{termini: newTermini.SubTermini(), location: parent.Location()}
+						}
 						break
 					} else {
 						return startingConstraintMap, errors.New("zone not in region constraint")
@@ -726,9 +743,11 @@ func (hc *HierarchicalCoordinator) calculateFrontierPoints(constraintMap map[str
 				} else {
 					if parentOrder == common.PRIME_CTX && currentOrder == common.REGION_CTX {
 						constraintMap[string(hc.GetContextLocation(parent.Location(), common.PRIME_CTX).Name())] = TerminiLocation{termini: termini.SubTermini(), location: parent.Location()}
+						break
 					} else if parentOrder == common.PRIME_CTX {
 						constraintMap[string(hc.GetContextLocation(parent.Location(), common.PRIME_CTX).Name())] = TerminiLocation{termini: termini.SubTermini(), location: parent.Location()}
 						constraintMap[string(hc.GetContextLocation(parent.Location(), common.REGION_CTX).Name())] = TerminiLocation{termini: termini.SubTermini(), location: parent.Location()}
+						break
 					} else {
 						constraintMap[string(hc.GetContextLocation(parent.Location(), common.REGION_CTX).Name())] = TerminiLocation{termini: termini.SubTermini(), location: parent.Location()}
 					}
@@ -739,7 +758,7 @@ func (hc *HierarchicalCoordinator) calculateFrontierPoints(constraintMap map[str
 			leaderOrder = common.ZONE_CTX
 		}
 		current = parent
-		currentOrder = parentOrder
+		currentOrder = min(parentOrder, currentOrder)
 	}
 	return constraintMap, nil
 }
