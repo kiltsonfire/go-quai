@@ -512,6 +512,7 @@ func (hc *HierarchicalCoordinator) BuildPendingHeaders() {
 
 	// Go through all the zones to update the constraint map
 	modifiedConstraintMap := constraintMap
+	first := true
 	for i := 0; i < int(numRegions); i++ {
 		for j := 0; j < int(numZones); j++ {
 			var leader *types.WorkObject
@@ -521,16 +522,18 @@ func (hc *HierarchicalCoordinator) BuildPendingHeaders() {
 			if !exists {
 				otherBackend := *hc.consensus.GetBackend(common.Location{byte(i), byte(j)})
 				leader = otherBackend.GetBlockByHash(defaultGenesisHash)
-				modifiedConstraintMap, _ = hc.calculateFrontierPoints(modifiedConstraintMap, leader)
+				modifiedConstraintMap, _ = hc.calculateFrontierPoints(modifiedConstraintMap, leader, first)
+				first = false
 			} else {
 				// Try all the options on the location candidate set
-				for i := 1; i <= len(locationCache.Keys()); i++ {
-					log.Global.Error("location", locationCache.Keys()[len(locationCache.Keys())-i])
-					block, exists := locationCache.Peek(locationCache.Keys()[len(locationCache.Keys())-i])
+				for k := 1; k <= len(locationCache.Keys()); k++ {
+					log.Global.Error("location", locationCache.Keys()[len(locationCache.Keys())-k])
+					block, exists := locationCache.Peek(locationCache.Keys()[len(locationCache.Keys())-k])
 					if exists {
 						leader = block
 					}
-					modifiedConstraintMap, err = hc.calculateFrontierPoints(modifiedConstraintMap, leader)
+					modifiedConstraintMap, err = hc.calculateFrontierPoints(modifiedConstraintMap, leader, first)
+					first = false
 					if err != nil {
 						log.Global.Error("error tracing back from block ", leader.Hash())
 						continue
@@ -624,7 +627,7 @@ func (hc *HierarchicalCoordinator) GetContextLocation(location common.Location, 
 	return nil
 }
 
-func (hc *HierarchicalCoordinator) calculateFrontierPoints(constraintMap map[string]TerminiLocation, leader *types.WorkObject) (map[string]TerminiLocation, error) {
+func (hc *HierarchicalCoordinator) calculateFrontierPoints(constraintMap map[string]TerminiLocation, leader *types.WorkObject, first bool) (map[string]TerminiLocation, error) {
 	leaderLocation := leader.Location()
 	leaderBackend := *hc.consensus.GetBackend(leaderLocation)
 
@@ -673,6 +676,7 @@ func (hc *HierarchicalCoordinator) calculateFrontierPoints(constraintMap map[str
 
 	currentOrder := leaderOrder
 	current := leader
+	count := 0
 
 	log.Global.Error("Starting the trace back from the leader", "order:", leaderOrder, "number:", leader.NumberArray(), "location:", leader.Location(), "hash:", leader.Hash())
 	for {
@@ -716,13 +720,13 @@ func (hc *HierarchicalCoordinator) calculateFrontierPoints(constraintMap map[str
 					log.Global.Error("Checking prime constraint: ", t.termini[parent.Location().Region()], parent.Hash(), t.termini[parent.Location().Zone()], parent.Hash(), newTermini.SubTermini()[t.location.Region()], t.termini[t.location.Region()])
 					log.Global.Error("newTermini: ", newTermini.SubTermini())
 					log.Global.Error("t.termini[parent.Location().Region()]: ", t.termini[parent.Location().Region()], "parent.Hash(): ", parent.Hash(), "t.hash: ", t.hash, "newTermini.SubTermini()[t.location.Region()]: ", newTermini.SubTermini()[t.location.Region()], parentHeader.ParentHash(common.PRIME_CTX))
-					isAncestor := hc.IsAncestor(t.hash, parentHeader, common.PRIME_CTX)
-					if t.termini[parent.Location().Region()] == parent.Hash() || isAncestor {
+					isAncestor := hc.IsAncestor(t.hash, parentHeader.Hash(), parentHeader.Location(), common.PRIME_CTX)
+					isProgeny := hc.IsAncestor(parent.Hash(), t.hash, t.location, common.PRIME_CTX)
+					if t.termini[parent.Location().Region()] == parent.Hash() || isAncestor || isProgeny {
 						log.Global.Error("Prime constraint met")
 						if isAncestor {
 							log.Global.Error("Updating prime constraint")
 							constraintMap[string(hc.GetContextLocation(parent.Location(), common.PRIME_CTX).Name())] = TerminiLocation{termini: newTermini.SubTermini(), location: parent.Location(), hash: parent.Hash()}
-							constraintMap[string(hc.GetContextLocation(parent.Location(), common.REGION_CTX).Name())] = TerminiLocation{termini: regionTermini.SubTermini(), location: parent.Location(), hash: parent.Hash()}
 						}
 						break
 					} else {
@@ -731,8 +735,9 @@ func (hc *HierarchicalCoordinator) calculateFrontierPoints(constraintMap map[str
 				} else {
 
 					log.Global.Error("Checking region constraint: ", t.termini[parent.Location().Zone()], parent.Hash(), t.termini[t.location.Zone()], parent.Hash(), regionTermini.SubTermini()[t.location.Zone()], t.termini[t.location.Zone()], parentHeader.ParentHash(common.REGION_CTX))
-					isAncestor := hc.IsAncestor(t.hash, parentHeader, common.REGION_CTX)
-					if t.termini[parent.Location().Zone()] == parent.Hash() || isAncestor {
+					isAncestor := hc.IsAncestor(t.hash, parentHeader.Hash(), parentHeader.Location(), common.REGION_CTX)
+					isProgeny := hc.IsAncestor(parent.Hash(), t.hash, t.location, common.REGION_CTX)
+					if t.termini[parent.Location().Zone()] == parent.Hash() || isAncestor || isProgeny {
 						log.Global.Error("Region constraint met")
 						if isAncestor {
 							log.Global.Error("Updating region constraint")
@@ -778,24 +783,29 @@ func (hc *HierarchicalCoordinator) calculateFrontierPoints(constraintMap map[str
 		current = parent
 		currentOrder = min(parentOrder, currentOrder)
 		if currentOrder == common.PRIME_CTX {
-			break
+			count++
+			if first && count > 10 {
+				break
+			} else if !first {
+				break
+			}
 		}
 	}
 	return constraintMap, nil
 }
 
-func (hc *HierarchicalCoordinator) IsAncestor(ancestor common.Hash, header *types.WorkObject, order int) bool {
-	if ancestor == header.Hash() {
+func (hc *HierarchicalCoordinator) IsAncestor(ancestor common.Hash, header common.Hash, headerLoc common.Location, order int) bool {
+	if ancestor == header {
 		return true
 	}
-	backend := hc.GetBackend(hc.GetContextLocation(header.Location(), order))
+	backend := hc.GetBackend(hc.GetContextLocation(headerLoc, order))
 	for i := 0; i < 10; i++ {
-		parent := backend.GetHeaderByHash(header.ParentHash(order))
+		parent := backend.GetHeaderByHash(header)
 		if parent != nil {
 			if parent.Hash() == ancestor {
 				return true
 			}
-			header = parent
+			header = parent.Hash()
 		}
 	}
 	return false
