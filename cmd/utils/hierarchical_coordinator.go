@@ -670,13 +670,12 @@ func (hc *HierarchicalCoordinator) calculateFrontierPoints(constraintMap map[str
 		constraintMap[leader.Location().Name()] = TerminiLocation{termini: []common.Hash{leader.Hash()}, location: leader.Location()}
 	}
 
-	backend := hc.GetBackendForLocationAndOrder(leaderLocation, leaderOrder)
-
 	currentOrder := leaderOrder
 	current := leader
 
 	log.Global.Error("Starting the trace back from the leader", "order:", leaderOrder, "number:", leader.NumberArray(), "location:", leader.Location(), "hash:", leader.Hash())
 	for {
+		backend := hc.GetBackendForLocationAndOrder(current.Location(), currentOrder)
 		// TODO: the genesis check has to be done correctly based on the hash
 		if current.NumberU64(currentOrder) == 1 {
 			break
@@ -703,6 +702,8 @@ func (hc *HierarchicalCoordinator) calculateFrontierPoints(constraintMap map[str
 				log.Global.Error("Constraint exists for the parent", t.termini, t.location)
 				// check that it meets the constraint
 				if parentOrder == common.PRIME_CTX {
+					log.Global.Error("Checking prime constraint: ", t.termini[parent.Location().Region()], parent.Hash(), t.termini[parent.Location().Zone()], parent.Hash(), newTermini.SubTermini()[t.location.Region()], t.termini[t.location.Region()])
+					log.Global.Error("newTermini: ", newTermini.SubTermini())
 					if t.termini[parent.Location().Region()] == parent.Hash() || t.termini[parent.Location().Zone()] == parent.Hash() || newTermini.SubTermini()[t.location.Region()] == t.termini[t.location.Region()] {
 						log.Global.Error("Prime constraint met")
 						if newTermini.SubTermini()[t.location.Region()] == t.termini[t.location.Region()] {
@@ -759,6 +760,9 @@ func (hc *HierarchicalCoordinator) calculateFrontierPoints(constraintMap map[str
 		}
 		current = parent
 		currentOrder = min(parentOrder, currentOrder)
+		if currentOrder == common.PRIME_CTX {
+			break
+		}
 	}
 	return constraintMap, nil
 }
