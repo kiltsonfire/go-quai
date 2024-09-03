@@ -638,6 +638,8 @@ func (hc *HierarchicalCoordinator) calculateFrontierPoints(constraintMap map[str
 		return constraintMap, nil
 	}
 
+	log.Global.Error("Starting contraint map")
+	PrintConstraintMap(constraintMap)
 	// copy the starting constraint map
 	startingConstraintMap := CopyConstraintMap(constraintMap)
 
@@ -670,12 +672,22 @@ func (hc *HierarchicalCoordinator) calculateFrontierPoints(constraintMap map[str
 		if regionTermini == nil {
 			panic("termini shouldnt be nil in region")
 		}
+		// modifiedTermini, exists := constraintMap[hc.GetContextLocation(leader.Location(), common.REGION_CTX).Name()]
+		// if exists {
+		// 	modifiedTermini.termini[leader.Location().Zone()] = leader.Hash()
+		// 	modifiedTermini.location = leader.Location()
+		// } else {
+		// 	modifiedTermini = TerminiLocation{termini: regionTermini.SubTermini(), location: leader.Location(), hash: leader.Hash()}
+		// }
+		// modifiedTermini.termini[leader.Location().Zone()] = leader.Hash()
+		// constraintMap[hc.GetContextLocation(leader.Location(), common.REGION_CTX).Name()] = modifiedTermini
 		constraintMap[hc.GetContextLocation(leader.Location(), common.REGION_CTX).Name()] = TerminiLocation{termini: regionTermini.SubTermini(), location: leader.Location(), hash: leader.Hash()}
 		constraintMap[leader.Location().Name()] = TerminiLocation{termini: []common.Hash{leader.Hash()}, location: leader.Location(), hash: leader.Hash()}
 
 	case common.ZONE_CTX:
 		constraintMap[leader.Location().Name()] = TerminiLocation{termini: []common.Hash{leader.Hash()}, location: leader.Location(), hash: leader.Hash()}
 	}
+	log.Global.Error("Constraint map after first update")
 	PrintConstraintMap(constraintMap)
 	currentOrder := leaderOrder
 	current := leader
@@ -729,10 +741,12 @@ func (hc *HierarchicalCoordinator) calculateFrontierPoints(constraintMap map[str
 					log.Global.Error("isAncestor: ", isAncestor, "isProgeny: ", isProgeny)
 					if t.termini[parent.Location().Region()] == parent.Hash() || isAncestor || isProgeny {
 						log.Global.Error("Prime constraint met")
-						if isAncestor {
+						if isAncestor && !isProgeny {
 							log.Global.Error("Updating prime constraint")
 							constraintMap[string(hc.GetContextLocation(parent.Location(), common.PRIME_CTX).Name())] = TerminiLocation{termini: newTermini.SubTermini(), location: parent.Location(), hash: parent.Hash()}
-							constraintMap[string(hc.GetContextLocation(parent.Location(), common.REGION_CTX).Name())] = TerminiLocation{termini: regionTermini.SubTermini(), location: parent.Location(), hash: parent.Hash()}
+							if leaderOrder != common.REGION_CTX {
+								constraintMap[string(hc.GetContextLocation(parent.Location(), common.REGION_CTX).Name())] = TerminiLocation{termini: regionTermini.SubTermini(), location: parent.Location(), hash: parent.Hash()}
+							}
 						}
 						break
 					} else {
@@ -746,8 +760,12 @@ func (hc *HierarchicalCoordinator) calculateFrontierPoints(constraintMap map[str
 					log.Global.Error("isAncestor: ", isAncestor, "isProgeny: ", isProgeny)
 					if t.termini[parent.Location().Zone()] == parent.Hash() || isAncestor || isProgeny {
 						log.Global.Error("Region constraint met")
-						if isAncestor {
+						if isAncestor && !isProgeny {
 							log.Global.Error("Updating region constraint")
+							primeTermini := hc.GetBackend(hc.GetContextLocation(parent.Location(), common.PRIME_CTX)).GetTerminiByHash(parent.Hash())
+							if primeTermini != nil {
+								constraintMap[string(hc.GetContextLocation(parent.Location(), common.PRIME_CTX).Name())] = TerminiLocation{termini: primeTermini.SubTermini(), location: parent.Location(), hash: parent.Hash()}
+							}
 							constraintMap[string(hc.GetContextLocation(parent.Location(), common.REGION_CTX).Name())] = TerminiLocation{termini: regionTermini.SubTermini(), location: parent.Location(), hash: parent.Hash()}
 						}
 						break
@@ -766,10 +784,10 @@ func (hc *HierarchicalCoordinator) calculateFrontierPoints(constraintMap map[str
 				if parent.NumberU64(parentOrder) == 0 {
 					if parentOrder == common.PRIME_CTX {
 						constraintMap[common.Location{}.Name()] = TerminiLocation{termini: termini.SubTermini(), location: current.Location(), hash: current.Hash()}
-						constraintMap[string(hc.GetContextLocation(current.Location(), common.REGION_CTX).Name())] = TerminiLocation{termini: termini.SubTermini(), location: current.Location(), hash: current.Hash()}
+						constraintMap[string(hc.GetContextLocation(current.Location(), common.REGION_CTX).Name())] = TerminiLocation{termini: regionTermini.SubTermini(), location: current.Location(), hash: current.Hash()}
 						break
 					} else {
-						constraintMap[string(hc.GetContextLocation(current.Location(), common.REGION_CTX).Name())] = TerminiLocation{termini: termini.SubTermini(), location: current.Location(), hash: current.Hash()}
+						constraintMap[string(hc.GetContextLocation(current.Location(), common.REGION_CTX).Name())] = TerminiLocation{termini: regionTermini.SubTermini(), location: current.Location(), hash: current.Hash()}
 						break
 					}
 				} else {
@@ -778,10 +796,10 @@ func (hc *HierarchicalCoordinator) calculateFrontierPoints(constraintMap map[str
 						break
 					} else if parentOrder == common.PRIME_CTX {
 						constraintMap[string(hc.GetContextLocation(parent.Location(), common.PRIME_CTX).Name())] = TerminiLocation{termini: termini.SubTermini(), location: parent.Location(), hash: parent.Hash()}
-						constraintMap[string(hc.GetContextLocation(parent.Location(), common.REGION_CTX).Name())] = TerminiLocation{termini: termini.SubTermini(), location: parent.Location(), hash: parent.Hash()}
+						constraintMap[string(hc.GetContextLocation(parent.Location(), common.REGION_CTX).Name())] = TerminiLocation{termini: regionTermini.SubTermini(), location: parent.Location(), hash: parent.Hash()}
 						break
 					} else {
-						constraintMap[string(hc.GetContextLocation(parent.Location(), common.REGION_CTX).Name())] = TerminiLocation{termini: termini.SubTermini(), location: parent.Location(), hash: parent.Hash()}
+						constraintMap[string(hc.GetContextLocation(parent.Location(), common.REGION_CTX).Name())] = TerminiLocation{termini: regionTermini.SubTermini(), location: parent.Location(), hash: parent.Hash()}
 					}
 				}
 
