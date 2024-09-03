@@ -1576,6 +1576,9 @@ func (sl *Slice) GeneratePendingHeader(block *types.WorkObject, fill bool) (*typ
 	case common.ZONE_CTX:
 		sl.hc.SetCurrentHeader(block)
 	}
+	if sl.bestPh != nil && sl.bestPh.ParentHash(sl.NodeCtx()) == block.Hash() {
+		return sl.bestPh, nil
+	}
 	return sl.miner.worker.GeneratePendingHeader(block, fill)
 }
 

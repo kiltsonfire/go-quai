@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"runtime/debug"
+	"sort"
 	"sync"
 	"time"
 
@@ -37,7 +38,7 @@ type TerminiLocation struct {
 	hash     common.Hash
 }
 
-type Child struct {
+type Node struct {
 	hash     common.Hash
 	number   []*big.Int
 	location common.Location
@@ -46,11 +47,9 @@ type Child struct {
 }
 
 // TODO: add all the field at the end
-func (ch *Child) Empty() bool {
+func (ch *Node) Empty() bool {
 	return ch.hash == common.Hash{} && ch.location.Equal(common.Location{}) && ch.entropy == nil
 }
-
-type Children []Child
 
 type HierarchicalCoordinator struct {
 	db *leveldb.DB
@@ -68,7 +67,7 @@ type HierarchicalCoordinator struct {
 	chainHeadSubs []event.Subscription
 	chainSubs     []event.Subscription
 
-	bestBlocks map[string]*lru.Cache[common.Hash, *types.WorkObject]
+	recentBlocks map[string]*lru.Cache[common.Hash, Node]
 
 	expansionCh  chan core.ExpansionEvent
 	expansionSub event.Subscription
@@ -94,7 +93,7 @@ func NewHierarchicalCoordinator(p2p quai.NetworkingAPI, logLevel string, nodeWg 
 		treeExpansionTriggerStarted: false,
 		quitCh:                      quitCh,
 		newBlockCh:                  make(chan *types.WorkObject),
-		bestBlocks:                  make(map[string]*lru.Cache[common.Hash, *types.WorkObject]),
+		recentBlocks:                make(map[string]*lru.Cache[common.Hash, Node]),
 	}
 
 	if startingExpansionNumber > common.MaxExpansionNumber {
@@ -452,13 +451,21 @@ func (hc *HierarchicalCoordinator) ChainEventLoop(chainEvent chan core.ChainEven
 	for {
 		select {
 		case head := <-chainEvent:
+			backend := hc.GetBackend(head.Block.Location())
+			entropy := backend.TotalLogS(head.Block)
+			node := Node{
+				hash:     head.Block.Hash(),
+				number:   head.Block.NumberArray(),
+				entropy:  entropy,
+				location: head.Block.Location(),
+			}
 			log.Global.Error("Mined a block", head.Block.Hash(), head.Block.NumberArray(), head.Block.Location())
-			locationCache, exists := hc.bestBlocks[head.Block.Location().Name()]
+			locationCache, exists := hc.recentBlocks[head.Block.Location().Name()]
 			if !exists {
 				// create a new lru and add this block
-				lru, _ := lru.New[common.Hash, *types.WorkObject](10)
-				lru.Add(head.Block.Hash(), head.Block)
-				hc.bestBlocks[head.Block.Location().Name()] = lru
+				lru, _ := lru.New[common.Hash, Node](20)
+				lru.Add(head.Block.Hash(), node)
+				hc.recentBlocks[head.Block.Location().Name()] = lru
 				hc.BuildPendingHeaders()
 			} else {
 				bestBlockHash := locationCache.Keys()[len(locationCache.Keys())-1]
@@ -466,9 +473,9 @@ func (hc *HierarchicalCoordinator) ChainEventLoop(chainEvent chan core.ChainEven
 				if exists {
 					oldestBlockHash := locationCache.Keys()[0]
 					oldestBlock, exists := locationCache.Peek(oldestBlockHash)
-					if exists && oldestBlock.NumberU64(common.ZONE_CTX) < head.Block.NumberU64(common.ZONE_CTX) {
-						locationCache.Add(head.Block.Hash(), head.Block)
-						hc.bestBlocks[head.Block.Location().Name()] = locationCache
+					if exists && oldestBlock.entropy.Cmp(node.entropy) < 0 {
+						locationCache.Add(head.Block.Hash(), node)
+						hc.recentBlocks[head.Block.Location().Name()] = locationCache
 						hc.BuildPendingHeaders()
 					}
 				}
@@ -501,6 +508,50 @@ func (hc *HierarchicalCoordinator) NewBlockEventLoop() {
 	}
 }
 
+func (hc *HierarchicalCoordinator) CalculateLeaders() []Node {
+	nodeList := []Node{}
+	numRegions, numZones := common.GetHierarchySizeForExpansionNumber(hc.currentExpansionNumber)
+	for i := 0; i < int(numRegions); i++ {
+		for j := 0; j < int(numZones); j++ {
+			cache, exists := hc.recentBlocks[common.Location{byte(i), byte(j)}.Name()]
+			if exists {
+				var bestNode Node
+				keys := cache.Keys()
+				for _, key := range keys {
+					node, _ := cache.Peek(key)
+					if bestNode.Empty() {
+						bestNode = node
+					} else {
+						if bestNode.entropy.Cmp(node.entropy) < 0 {
+							bestNode = node
+						}
+					}
+				}
+				nodeList = append(nodeList, bestNode)
+			}
+		}
+	}
+
+	sort.Slice(nodeList, func(i, j int) bool {
+		return nodeList[i].entropy.Cmp(nodeList[j].entropy) > 0
+	})
+
+	return nodeList
+}
+
+func (hc *HierarchicalCoordinator) GetNodeListForLocation(location common.Location) []Node {
+	keys := hc.recentBlocks[location.Name()].Keys()
+	nodeList := []Node{}
+	for _, key := range keys {
+		node, _ := hc.recentBlocks[location.Name()].Peek(key)
+		nodeList = append(nodeList, node)
+	}
+	sort.Slice(nodeList, func(i, j int) bool {
+		return nodeList[i].entropy.Cmp(nodeList[j].entropy) > 0
+	})
+	return nodeList
+}
+
 func (hc *HierarchicalCoordinator) BuildPendingHeaders() {
 	// Pick the leader among all the slices
 
@@ -510,37 +561,36 @@ func (hc *HierarchicalCoordinator) BuildPendingHeaders() {
 	constraintMap := make(map[string]TerminiLocation)
 	numRegions, numZones := common.GetHierarchySizeForExpansionNumber(hc.currentExpansionNumber)
 
+	for i := 0; i < int(numRegions); i++ {
+		for j := 0; j < int(numZones); j++ {
+			if _, exists := hc.recentBlocks[common.Location{byte(i), byte(j)}.Name()]; !exists {
+				backend := hc.GetBackend(common.Location{byte(i), byte(j)})
+				genesisBlock := backend.GetBlockByHash(defaultGenesisHash)
+				lru, _ := lru.New[common.Hash, Node](20)
+				lru.Add(genesisBlock.Hash(), Node{hash: genesisBlock.Hash(), number: genesisBlock.NumberArray(), location: common.Location{byte(i), byte(j)}, entropy: big.NewInt(0)})
+				hc.recentBlocks[common.Location{byte(i), byte(j)}.Name()] = lru
+			}
+
+		}
+	}
+
+	leaders := hc.CalculateLeaders()
 	// Go through all the zones to update the constraint map
 	modifiedConstraintMap := constraintMap
 	first := true
-	for i := 0; i < int(numRegions); i++ {
-		for j := 0; j < int(numZones); j++ {
-			var leader *types.WorkObject
-			var err error
-			location := common.Location{byte(i), byte(j)}
-			locationCache, exists := hc.bestBlocks[location.Name()]
-			if !exists {
-				otherBackend := *hc.consensus.GetBackend(common.Location{byte(i), byte(j)})
-				leader = otherBackend.GetBlockByHash(defaultGenesisHash)
-				modifiedConstraintMap, _ = hc.calculateFrontierPoints(modifiedConstraintMap, leader, first)
-				first = false
+	for _, leader := range leaders {
+		var err error
+		location := leader.location
+		backend := hc.GetBackend(location)
+		otherNodes := hc.GetNodeListForLocation(location)
+		for _, node := range otherNodes {
+			leaderBlock := backend.GetBlockByHash(node.hash)
+			modifiedConstraintMap, err = hc.calculateFrontierPoints(modifiedConstraintMap, leaderBlock, first)
+			first = false
+			if err != nil {
+				log.Global.Error("error tracing back from block ", leaderBlock.Hash())
 			} else {
-				// Try all the options on the location candidate set
-				for k := 1; k <= len(locationCache.Keys()); k++ {
-					log.Global.Error("location", locationCache.Keys()[len(locationCache.Keys())-k])
-					block, exists := locationCache.Peek(locationCache.Keys()[len(locationCache.Keys())-k])
-					if exists {
-						leader = block
-					}
-					modifiedConstraintMap, err = hc.calculateFrontierPoints(modifiedConstraintMap, leader, first)
-					first = false
-					if err != nil {
-						log.Global.Error("error tracing back from block ", leader.Hash())
-						continue
-					} else {
-						break
-					}
-				}
+				break
 			}
 		}
 	}
