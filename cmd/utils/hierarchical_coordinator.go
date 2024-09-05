@@ -699,112 +699,88 @@ func (hc *HierarchicalCoordinator) calculateFrontierPoints(constraintMap map[str
 	if err != nil {
 		log.Global.Error("Cannot calculate the order for the leader")
 	}
-	switch leaderOrder {
-	case common.PRIME_CTX:
-		primeBackend := hc.GetBackend(common.Location{})
-		primeTermini := primeBackend.GetTerminiByHash(leader.Hash())
-		if primeTermini == nil {
-			panic("termini shouldnt be nil in prime")
-		}
-		constraintMap[common.Location{}.Name()] = TerminiLocation{termini: primeTermini.SubTermini(), location: leader.Location(), hash: leader.Hash()}
 
-		regionBackend := hc.GetBackend(hc.GetContextLocation(leader.Location(), common.REGION_CTX))
-		regionTermini := regionBackend.GetTerminiByHash(leader.Hash())
-		if regionTermini == nil {
-			panic("termini shouldnt be nil in region")
-		}
-		constraintMap[hc.GetContextLocation(leader.Location(), common.REGION_CTX).Name()] = TerminiLocation{termini: regionTermini.SubTermini(), location: leader.Location(), hash: leader.Hash()}
-		constraintMap[leader.Location().Name()] = TerminiLocation{termini: []common.Hash{leader.Hash()}, location: leader.Location(), hash: leader.Hash()}
-
-	case common.REGION_CTX:
-		regionBackend := hc.GetBackend(hc.GetContextLocation(leader.Location(), common.REGION_CTX))
-		regionTermini := regionBackend.GetTerminiByHash(leader.Hash())
-		if regionTermini == nil {
-			panic("termini shouldnt be nil in region")
-		}
-		// modifiedTermini, exists := constraintMap[hc.GetContextLocation(leader.Location(), common.REGION_CTX).Name()]
-		// if exists {
-		// 	modifiedTermini.termini[leader.Location().Zone()] = leader.Hash()
-		// 	modifiedTermini.location = leader.Location()
-		// } else {
-		// 	modifiedTermini = TerminiLocation{termini: regionTermini.SubTermini(), location: leader.Location(), hash: leader.Hash()}
-		// }
-		// modifiedTermini.termini[leader.Location().Zone()] = leader.Hash()
-		// constraintMap[hc.GetContextLocation(leader.Location(), common.REGION_CTX).Name()] = modifiedTermini
-		constraintMap[hc.GetContextLocation(leader.Location(), common.REGION_CTX).Name()] = TerminiLocation{termini: regionTermini.SubTermini(), location: leader.Location(), hash: leader.Hash()}
-		constraintMap[leader.Location().Name()] = TerminiLocation{termini: []common.Hash{leader.Hash()}, location: leader.Location(), hash: leader.Hash()}
-
-	case common.ZONE_CTX:
-		constraintMap[leader.Location().Name()] = TerminiLocation{termini: []common.Hash{leader.Hash()}, location: leader.Location(), hash: leader.Hash()}
-	}
+	constraintMap[leader.Location().Name()] = TerminiLocation{termini: []common.Hash{leader.Hash()}, location: leader.Location(), hash: leader.Hash()}
 	log.Global.Error("Constraint map after first update")
 	PrintConstraintMap(constraintMap)
 	currentOrder := leaderOrder
 	current := leader
 	count := 0
+	iteration := 0
+	parent := current
+	parentOrder := currentOrder
 
 	log.Global.Error("Starting the trace back from the leader", "order:", leaderOrder, "number:", leader.NumberArray(), "location:", leader.Location(), "hash:", leader.Hash())
 	for {
-		backend := hc.GetBackendForLocationAndOrder(current.Location(), currentOrder)
-		// TODO: the genesis check has to be done correctly based on the hash
-		if current.NumberU64(currentOrder) == 1 {
-			break
-		}
-		parent := backend.GetHeaderByHash(current.ParentHash(currentOrder))
-
-		_, parentOrder, err := backend.CalcOrder(parent)
-		if err != nil {
-			log.Global.Error("error calculating the order of the parent")
-		}
 
 		log.Global.Error("Parent block", "order:", parentOrder, "number:", parent.NumberArray(), "location:", parent.Location(), "hash:", parent.Hash())
 		// If there is a change in order update constraint or break
-		if parentOrder < currentOrder {
-			// If a constraint exists
+		if parentOrder < currentOrder || iteration == 0 {
 			t, exists := constraintMap[string(hc.GetContextLocation(parent.Location(), parentOrder).Name())]
-			// possibly update to new constraint
-			backend := hc.GetBackend(hc.GetContextLocation(parent.Location(), parentOrder))
-			newTermini := backend.GetTerminiByHash(parent.Hash())
-			if newTermini == nil {
-				panic("termini shouldnt be nil for the parent")
-			}
-			parentHeader := backend.GetHeaderByHash(parent.Hash())
-			if parentHeader == nil {
-				panic("parent header shouldnt be nil")
-			}
-			regionBackend := hc.GetBackend(hc.GetContextLocation(parent.Location(), common.REGION_CTX))
-			regionTermini := regionBackend.GetTerminiByHash(parent.Hash())
-			if regionTermini == nil {
-				panic("termini shouldnt be nil in region")
-			}
-			if exists {
-				log.Global.Error("Constraint exists for the parent", t.termini, t.location)
-				// check that it meets the constraint
-				if parentOrder == common.PRIME_CTX {
-
-					log.Global.Error("Checking prime constraint: ", t.hash, t.termini[parent.Location().Region()], parent.Hash(), t.termini[parent.Location().Zone()], parent.Hash(), newTermini.SubTermini()[t.location.Region()], t.termini[t.location.Region()])
-					log.Global.Error("newTermini: ", newTermini.SubTermini())
-					log.Global.Error("t.termini[parent.Location().Region()]: ", t.termini[parent.Location().Region()], "parent.Hash(): ", parent.Hash(), "t.hash: ", t.hash, "newTermini.SubTermini()[t.location.Region()]: ", newTermini.SubTermini()[t.location.Region()], parentHeader.ParentHash(common.PRIME_CTX))
-					log.Global.Error("Checking region constraint: ", t.hash, t.termini[parent.Location().Zone()], parent.Hash(), t.termini[t.location.Zone()], parent.Hash(), regionTermini.SubTermini()[t.location.Zone()], t.termini[t.location.Zone()], parentHeader.ParentHash(common.REGION_CTX))
+			switch parentOrder {
+			case common.PRIME_CTX:
+				primeBackend := hc.GetBackend(common.Location{})
+				primeTermini := primeBackend.GetTerminiByHash(parent.Hash())
+				if primeTermini == nil {
+					panic("termini shouldnt be nil in prime")
+				}
+				regionBackend := hc.GetBackend(hc.GetContextLocation(parent.Location(), common.REGION_CTX))
+				regionTermini := regionBackend.GetTerminiByHash(parent.Hash())
+				if regionTermini == nil {
+					panic("termini shouldnt be nil in region")
+				}
+				if exists {
+					parentHeader := primeBackend.GetHeaderByHash(parent.Hash())
+					if parentHeader == nil {
+						panic("prime parent header shouldnt be nil")
+					}
+					log.Global.Error("Checking prime constraint: ", t.hash, parent.Hash())
 					isAncestor := hc.IsAncestor(t.hash, parent.Hash(), parentHeader.Location(), common.PRIME_CTX)
 					isProgeny := hc.IsAncestor(parent.Hash(), t.hash, t.location, common.PRIME_CTX)
 					log.Global.Error("isAncestor: ", isAncestor, "isProgeny: ", isProgeny)
 					if t.termini[parent.Location().Region()] == parent.Hash() || isAncestor || isProgeny {
 						log.Global.Error("Prime constraint met")
 						if isAncestor && !isProgeny {
-							log.Global.Error("Updating prime constraint")
-							constraintMap[string(hc.GetContextLocation(parent.Location(), common.PRIME_CTX).Name())] = TerminiLocation{termini: newTermini.SubTermini(), location: parent.Location(), hash: parent.Hash()}
+							log.Global.Error("Updating prime constraint, termini: ", primeTermini.SubTermini(), "location: ", parent.Location(), "hash: ", parent.Hash())
+							if !isProgeny {
+								constraintMap[string(hc.GetContextLocation(parent.Location(), common.PRIME_CTX).Name())] = TerminiLocation{termini: primeTermini.SubTermini(), location: parent.Location(), hash: parent.Hash()}
+							}
 							if leaderOrder != common.REGION_CTX {
+								log.Global.Error("Updating prime constraint for region, termini: ", regionTermini.SubTermini(), "location: ", parent.Location(), "hash: ", parent.Hash())
 								constraintMap[string(hc.GetContextLocation(parent.Location(), common.REGION_CTX).Name())] = TerminiLocation{termini: regionTermini.SubTermini(), location: parent.Location(), hash: parent.Hash()}
 							}
 						}
 						break
-					} else {
-						return startingConstraintMap, errors.New("region not in prime constraint")
 					}
 				} else {
+					if parent.NumberU64(parentOrder) == 0 {
+						constraintMap[common.Location{}.Name()] = TerminiLocation{termini: primeTermini.SubTermini(), location: current.Location(), hash: current.Hash()}
+						constraintMap[string(hc.GetContextLocation(current.Location(), common.REGION_CTX).Name())] = TerminiLocation{termini: regionTermini.SubTermini(), location: current.Location(), hash: current.Hash()}
+						break
+					} else {
+						if parentOrder == common.PRIME_CTX && currentOrder == common.REGION_CTX {
+							constraintMap[string(hc.GetContextLocation(parent.Location(), common.PRIME_CTX).Name())] = TerminiLocation{termini: primeTermini.SubTermini(), location: parent.Location(), hash: parent.Hash()}
+							break
+						} else if parentOrder == common.PRIME_CTX {
+							constraintMap[string(hc.GetContextLocation(parent.Location(), common.PRIME_CTX).Name())] = TerminiLocation{termini: primeTermini.SubTermini(), location: parent.Location(), hash: parent.Hash()}
+							constraintMap[string(hc.GetContextLocation(parent.Location(), common.REGION_CTX).Name())] = TerminiLocation{termini: regionTermini.SubTermini(), location: parent.Location(), hash: parent.Hash()}
+							break
+						}
+					}
+				}
 
-					log.Global.Error("Checking region constraint: ", t.hash, t.termini[parent.Location().Zone()], parent.Hash(), t.termini[t.location.Zone()], parent.Hash(), regionTermini.SubTermini()[t.location.Zone()], t.termini[t.location.Zone()], parentHeader.ParentHash(common.REGION_CTX))
+			case common.REGION_CTX:
+				regionBackend := hc.GetBackend(hc.GetContextLocation(parent.Location(), common.REGION_CTX))
+				regionTermini := regionBackend.GetTerminiByHash(parent.Hash())
+				if regionTermini == nil {
+					panic("termini shouldnt be nil in region")
+				}
+				if exists {
+					parentHeader := regionBackend.GetHeaderByHash(parent.Hash())
+					if parentHeader == nil {
+						panic("prime parent header shouldnt be nil")
+					}
+					log.Global.Error("Checking region constraint: ", t.hash, parent.Hash())
 					isAncestor := hc.IsAncestor(t.hash, parent.Hash(), parentHeader.Location(), common.REGION_CTX)
 					isProgeny := hc.IsAncestor(parent.Hash(), t.hash, t.location, common.REGION_CTX)
 					log.Global.Error("isAncestor: ", isAncestor, "isProgeny: ", isProgeny)
@@ -822,44 +798,43 @@ func (hc *HierarchicalCoordinator) calculateFrontierPoints(constraintMap map[str
 					} else {
 						return startingConstraintMap, errors.New("zone not in region constraint")
 					}
-				}
-			} else {
-				log.Global.Error("Constraint does not exist for the parent")
-				// create a new constraint
-				backend := hc.GetBackend(hc.GetContextLocation(parent.Location(), parentOrder))
-				termini := backend.GetTerminiByHash(parent.Hash())
-				if termini == nil {
-					panic("termini shouldnt be nil for the parent")
-				}
-				if parent.NumberU64(parentOrder) == 0 {
-					if parentOrder == common.PRIME_CTX {
-						constraintMap[common.Location{}.Name()] = TerminiLocation{termini: termini.SubTermini(), location: current.Location(), hash: current.Hash()}
-						constraintMap[string(hc.GetContextLocation(current.Location(), common.REGION_CTX).Name())] = TerminiLocation{termini: regionTermini.SubTermini(), location: current.Location(), hash: current.Hash()}
-						break
-					} else {
-						constraintMap[string(hc.GetContextLocation(current.Location(), common.REGION_CTX).Name())] = TerminiLocation{termini: regionTermini.SubTermini(), location: current.Location(), hash: current.Hash()}
-						break
-					}
+
 				} else {
-					if parentOrder == common.PRIME_CTX && currentOrder == common.REGION_CTX {
-						constraintMap[string(hc.GetContextLocation(parent.Location(), common.PRIME_CTX).Name())] = TerminiLocation{termini: termini.SubTermini(), location: parent.Location(), hash: parent.Hash()}
-						break
-					} else if parentOrder == common.PRIME_CTX {
-						constraintMap[string(hc.GetContextLocation(parent.Location(), common.PRIME_CTX).Name())] = TerminiLocation{termini: termini.SubTermini(), location: parent.Location(), hash: parent.Hash()}
-						constraintMap[string(hc.GetContextLocation(parent.Location(), common.REGION_CTX).Name())] = TerminiLocation{termini: regionTermini.SubTermini(), location: parent.Location(), hash: parent.Hash()}
-						break
-					} else {
-						constraintMap[string(hc.GetContextLocation(parent.Location(), common.REGION_CTX).Name())] = TerminiLocation{termini: regionTermini.SubTermini(), location: parent.Location(), hash: parent.Hash()}
-					}
+					constraintMap[string(hc.GetContextLocation(parent.Location(), common.REGION_CTX).Name())] = TerminiLocation{termini: regionTermini.SubTermini(), location: parent.Location(), hash: parent.Hash()}
 				}
 
+			case common.ZONE_CTX:
+				constraintMap[parent.Location().Name()] = TerminiLocation{termini: []common.Hash{parent.Hash()}, location: parent.Location(), hash: parent.Hash()}
 			}
-			// Leader order should only be used once
-			leaderOrder = common.ZONE_CTX
 		}
-		PrintConstraintMap(constraintMap)
+		log.Global.Error("Parent block", "order:", parentOrder, "number:", parent.NumberArray(), "location:", parent.Location(), "hash:", parent.Hash())
+		log.Global.Error("Current block", "order:", currentOrder, "number:", current.NumberArray(), "location:", current.Location(), "hash:", current.Hash())
 		current = parent
 		currentOrder = min(parentOrder, currentOrder)
+		var backend quaiapi.Backend
+		switch currentOrder {
+		case common.PRIME_CTX:
+			backend = hc.GetBackend(common.Location{})
+		case common.REGION_CTX:
+			backend = hc.GetBackend(common.Location{byte(current.Location().Region())})
+		case common.ZONE_CTX:
+			backend = hc.GetBackend(current.Location())
+		}
+
+		if backend.IsGenesisHash(parent.ParentHash(currentOrder)) || backend.IsGenesisHash(parent.Hash()) {
+			break
+		}
+		parent = backend.GetHeaderByHash(parent.ParentHash(currentOrder))
+
+		_, parentOrder, err = backend.CalcOrder(parent)
+		if err != nil {
+			log.Global.Error("error calculating the order of the parent")
+		}
+		iteration++
+		PrintConstraintMap(constraintMap)
+		log.Global.Error("Parent block", "order:", parentOrder, "number:", parent.NumberArray(), "location:", parent.Location(), "hash:", parent.Hash())
+		log.Global.Error("Current block", "order:", currentOrder, "number:", current.NumberArray(), "location:", current.Location(), "hash:", current.Hash())
+
 		if currentOrder == common.PRIME_CTX {
 			count++
 			if first && count > 10 {
