@@ -37,7 +37,7 @@ var (
 	Blake3PowGardenGenesisHash     = common.HexToHash("0x3b601eef673695756d2c594bd0ae116c3e9c429fb02d33eb211382ef54b52f84")
 	Blake3PowOrchardGenesisHash    = common.HexToHash("0x52a455d5d8f7fe0d82de512f18555790da0d15ae93bc405d4566eb7d105f5a4d")
 	Blake3PowLighthouseGenesisHash = common.HexToHash("0xe331738ff2837c5a5cb189ad61c78f12e6482de51c7a1227e54357c92a0591bb")
-	Blake3PowLocalGenesisHash      = common.HexToHash("0x4c7611e9684bd82f1e33ad7712fbdc05b6f355fd3df2a0d0b18f9013e905cabd")
+	Blake3PowLocalGenesisHash      = common.HexToHash("0x9a0309968fb62ea2786e284723774229f7f331381155bf51d7c2569fb95bc655")
 )
 
 // Different Network names
