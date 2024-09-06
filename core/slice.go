@@ -616,18 +616,16 @@ func (sl *Slice) asyncPendingHeaderLoop() {
 	for {
 		select {
 		case asyncPh := <-sl.asyncPhCh:
-			sl.phCacheMu.Lock()
-			sl.updatePhCache(types.PendingHeader{}, true, asyncPh, true, sl.NodeLocation())
-			sl.phCacheMu.Unlock()
-			bestPh, exists := sl.readPhCache(sl.bestPhKey)
-			if exists {
-				bestPh.WorkObject().WorkObjectHeader().SetLocation(sl.NodeLocation())
-				sl.writePhCache(sl.bestPhKey, bestPh)
-				// sl.miner.worker.pendingHeaderFeed.Send(bestPh.WorkObject())
+			sl.bestPhMu.Lock()
+			if sl.bestPh.ParentHash(common.ZONE_CTX) == asyncPh.ParentHash(common.ZONE_CTX) {
+				combinedPendingHeader := sl.combinePendingHeader(asyncPh, sl.bestPh, common.ZONE_CTX, true)
+				sl.bestPhMu.Unlock()
+				sl.SetBestPh(combinedPendingHeader)
+			} else {
+				sl.bestPhMu.Unlock()
 			}
 		case <-sl.asyncPhSub.Err():
 			return
-
 		case <-sl.quit:
 			return
 		}
@@ -1582,7 +1580,14 @@ func (sl *Slice) GeneratePendingHeader(block *types.WorkObject, fill bool, stopC
 	if bestPhCopy != nil && bestPhCopy.ParentHash(sl.NodeCtx()) == block.Hash() {
 		return bestPhCopy, nil
 	}
-	return sl.miner.worker.GeneratePendingHeader(block, fill, stopChan)
+	pendingHeader, err := sl.miner.worker.GeneratePendingHeader(block, fill, stopChan)
+	if err != nil {
+		return nil, err
+	}
+	if sl.NodeCtx() == common.ZONE_CTX {
+		sl.hc.chainHeadFeed.Send(ChainHeadEvent{block})
+	}
+	return pendingHeader, nil
 }
 
 func (sl *Slice) GetPendingBlockBody(wo *types.WorkObjectHeader) *types.WorkObject {
