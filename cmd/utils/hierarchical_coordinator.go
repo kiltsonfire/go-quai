@@ -25,7 +25,8 @@ import (
 const (
 	// c_expansionChSize is the size of the chain head channel listening to new
 	// expansion events
-	c_expansionChSize = 10
+	c_expansionChSize      = 10
+	c_recentBlockCacheSize = 100
 )
 
 var (
@@ -67,7 +68,8 @@ type HierarchicalCoordinator struct {
 	chainHeadSubs []event.Subscription
 	chainSubs     []event.Subscription
 
-	recentBlocks map[string]*lru.Cache[common.Hash, Node]
+	recentBlocks  map[string]*lru.Cache[common.Hash, Node]
+	recentBlockMu sync.RWMutex
 
 	expansionCh  chan core.ExpansionEvent
 	expansionSub event.Subscription
@@ -448,6 +450,7 @@ func (hc *HierarchicalCoordinator) ChainEventLoop(chainEvent chan core.ChainEven
 			}).Fatal("Go-Quai Panicked")
 		}
 	}()
+	stopChan := make(chan struct{})
 	for {
 		select {
 		case head := <-chainEvent:
@@ -459,14 +462,17 @@ func (hc *HierarchicalCoordinator) ChainEventLoop(chainEvent chan core.ChainEven
 				entropy:  entropy,
 				location: head.Block.Location(),
 			}
+			close(stopChan)
+			stopChan = make(chan struct{})
+			hc.recentBlockMu.Lock()
 			log.Global.Error("Mined a block", head.Block.Hash(), head.Block.NumberArray(), head.Block.Location())
 			locationCache, exists := hc.recentBlocks[head.Block.Location().Name()]
 			if !exists {
 				// create a new lru and add this block
-				lru, _ := lru.New[common.Hash, Node](20)
+				lru, _ := lru.New[common.Hash, Node](c_recentBlockCacheSize)
 				lru.Add(head.Block.Hash(), node)
 				hc.recentBlocks[head.Block.Location().Name()] = lru
-				hc.BuildPendingHeaders()
+				hc.BuildPendingHeaders(stopChan)
 			} else {
 				bestBlockHash := locationCache.Keys()[len(locationCache.Keys())-1]
 				_, exists := locationCache.Peek(bestBlockHash)
@@ -476,10 +482,11 @@ func (hc *HierarchicalCoordinator) ChainEventLoop(chainEvent chan core.ChainEven
 					if exists && oldestBlock.entropy.Cmp(node.entropy) < 0 {
 						locationCache.Add(head.Block.Hash(), node)
 						hc.recentBlocks[head.Block.Location().Name()] = locationCache
-						hc.BuildPendingHeaders()
+						hc.BuildPendingHeaders(stopChan)
 					}
 				}
 			}
+			hc.recentBlockMu.Unlock()
 		case <-sub.Err():
 			return
 		}
@@ -552,91 +559,97 @@ func (hc *HierarchicalCoordinator) GetNodeListForLocation(location common.Locati
 	return nodeList
 }
 
-func (hc *HierarchicalCoordinator) BuildPendingHeaders() {
-	// Pick the leader among all the slices
+func (hc *HierarchicalCoordinator) BuildPendingHeaders(stopChan chan struct{}) {
 
-	backend := *hc.consensus.GetBackend(common.Location{0, 0})
-	defaultGenesisHash := backend.Config().DefaultGenesisHash
+	select {
+	case <-stopChan:
+		return
+	default:
+		// Pick the leader among all the slices
 
-	constraintMap := make(map[string]common.Hash)
-	numRegions, numZones := common.GetHierarchySizeForExpansionNumber(hc.currentExpansionNumber)
+		backend := *hc.consensus.GetBackend(common.Location{0, 0})
+		defaultGenesisHash := backend.Config().DefaultGenesisHash
 
-	for i := 0; i < int(numRegions); i++ {
-		for j := 0; j < int(numZones); j++ {
-			if _, exists := hc.recentBlocks[common.Location{byte(i), byte(j)}.Name()]; !exists {
-				backend := hc.GetBackend(common.Location{byte(i), byte(j)})
-				genesisBlock := backend.GetBlockByHash(defaultGenesisHash)
-				lru, _ := lru.New[common.Hash, Node](20)
-				lru.Add(genesisBlock.Hash(), Node{hash: genesisBlock.Hash(), number: genesisBlock.NumberArray(), location: common.Location{byte(i), byte(j)}, entropy: big.NewInt(0)})
-				hc.recentBlocks[common.Location{byte(i), byte(j)}.Name()] = lru
-			}
+		constraintMap := make(map[string]common.Hash)
+		numRegions, numZones := common.GetHierarchySizeForExpansionNumber(hc.currentExpansionNumber)
 
-		}
-	}
+		for i := 0; i < int(numRegions); i++ {
+			for j := 0; j < int(numZones); j++ {
+				if _, exists := hc.recentBlocks[common.Location{byte(i), byte(j)}.Name()]; !exists {
+					backend := hc.GetBackend(common.Location{byte(i), byte(j)})
+					genesisBlock := backend.GetBlockByHash(defaultGenesisHash)
+					lru, _ := lru.New[common.Hash, Node](c_recentBlockCacheSize)
+					lru.Add(genesisBlock.Hash(), Node{hash: genesisBlock.Hash(), number: genesisBlock.NumberArray(), location: common.Location{byte(i), byte(j)}, entropy: big.NewInt(0)})
+					hc.recentBlocks[common.Location{byte(i), byte(j)}.Name()] = lru
+				}
 
-	leaders := hc.CalculateLeaders()
-	// Go through all the zones to update the constraint map
-	modifiedConstraintMap := constraintMap
-	first := true
-	for _, leader := range leaders {
-		var err error
-		location := leader.location
-		backend := hc.GetBackend(location)
-		otherNodes := hc.GetNodeListForLocation(location)
-		for _, node := range otherNodes {
-			leaderBlock := backend.GetBlockByHash(node.hash)
-			modifiedConstraintMap, err = hc.calculateFrontierPoints(modifiedConstraintMap, leaderBlock, first)
-			first = false
-			if err != nil {
-				log.Global.Error("error tracing back from block ", leaderBlock.Hash())
-			} else {
-				break
 			}
 		}
-	}
 
-	PrintConstraintMap(modifiedConstraintMap)
+		leaders := hc.CalculateLeaders()
+		// Go through all the zones to update the constraint map
+		modifiedConstraintMap := constraintMap
+		first := true
+		for _, leader := range leaders {
+			var err error
+			location := leader.location
+			backend := hc.GetBackend(location)
+			otherNodes := hc.GetNodeListForLocation(location)
+			for _, node := range otherNodes {
+				leaderBlock := backend.GetBlockByHash(node.hash)
+				modifiedConstraintMap, err = hc.calculateFrontierPoints(modifiedConstraintMap, leaderBlock, first)
+				first = false
+				if err != nil {
+					log.Global.Error("error tracing back from block ", leaderBlock.Hash())
+				} else {
+					break
+				}
+			}
+		}
 
-	var bestPrime common.Hash
-	t, exists := modifiedConstraintMap[common.Location{}.Name()]
-	if !exists {
-		bestPrime = defaultGenesisHash
-	} else {
-		bestPrime = t
-	}
+		PrintConstraintMap(modifiedConstraintMap)
 
-	var wg sync.WaitGroup
-
-	for i := 0; i < int(numRegions); i++ {
-		regionLocation := common.Location{byte(i)}.Name()
-		// regionLocation := hc.GetContextLocation(t.location, common.REGION_CTX).Name()
-		log.Global.Error("computing the pending header", bestPrime, regionLocation)
-		var bestRegion common.Hash
-		t, exists := modifiedConstraintMap[regionLocation]
+		var bestPrime common.Hash
+		t, exists := modifiedConstraintMap[common.Location{}.Name()]
 		if !exists {
-			log.Global.Error("Region not found in the constraint map")
-			bestRegion = defaultGenesisHash
+			bestPrime = defaultGenesisHash
 		} else {
-			bestRegion = t
+			bestPrime = t
 		}
-		for j := 0; j < int(numZones); j++ {
-			var bestZone common.Hash
-			zoneLocation := common.Location{byte(i), byte(j)}.Name()
-			t, exists := modifiedConstraintMap[zoneLocation]
+
+		var wg sync.WaitGroup
+
+		for i := 0; i < int(numRegions); i++ {
+			regionLocation := common.Location{byte(i)}.Name()
+			// regionLocation := hc.GetContextLocation(t.location, common.REGION_CTX).Name()
+			log.Global.Error("computing the pending header", bestPrime, regionLocation)
+			var bestRegion common.Hash
+			t, exists := modifiedConstraintMap[regionLocation]
 			if !exists {
-				bestZone = defaultGenesisHash
+				log.Global.Error("Region not found in the constraint map")
+				bestRegion = defaultGenesisHash
 			} else {
-				bestZone = t
+				bestRegion = t
 			}
-			log.Global.Error("computing the pending header", bestPrime, bestRegion, bestZone, zoneLocation)
-			wg.Add(1)
-			go hc.ComputePendingHeader(&wg, bestPrime, bestRegion, bestZone, common.Location{byte(i), byte(j)})
+			for j := 0; j < int(numZones); j++ {
+				var bestZone common.Hash
+				zoneLocation := common.Location{byte(i), byte(j)}.Name()
+				t, exists := modifiedConstraintMap[zoneLocation]
+				if !exists {
+					bestZone = defaultGenesisHash
+				} else {
+					bestZone = t
+				}
+				log.Global.Error("computing the pending header", bestPrime, bestRegion, bestZone, zoneLocation)
+				wg.Add(1)
+				go hc.ComputePendingHeader(&wg, bestPrime, bestRegion, bestZone, common.Location{byte(i), byte(j)}, stopChan)
+			}
 		}
+
+		wg.Wait()
+		log.Global.Error("Done computing the pending header")
+
 	}
-
-	wg.Wait()
-	log.Global.Error("Done computing the pending header")
-
 }
 func PrintConstraintMap(modifiedConstraintMap map[string]common.Hash) {
 	for loc, t := range modifiedConstraintMap {
@@ -795,14 +808,7 @@ func (hc *HierarchicalCoordinator) calculateFrontierPoints(constraintMap map[str
 						log.Global.Error("Region constraint met")
 						if isAncestor && !isProgeny {
 							log.Global.Error("Updating region constraint")
-							primeTermini := hc.GetBackend(hc.GetContextLocation(parent.Location(), common.PRIME_CTX)).GetTerminiByHash(parent.Hash())
-							if primeTermini != nil {
-								constraintMap[string(hc.GetContextLocation(parent.Location(), common.PRIME_CTX).Name())] = parent.Hash()
-							}
 							constraintMap[string(hc.GetContextLocation(parent.Location(), common.REGION_CTX).Name())] = parent.Hash()
-						}
-						if !first {
-							finished = true
 						}
 					} else {
 						return startingConstraintMap, errors.New("zone not in region constraint")
@@ -869,39 +875,55 @@ func (hc *HierarchicalCoordinator) IsAncestor(ancestor common.Hash, header commo
 	return false
 }
 
-func (hc *HierarchicalCoordinator) ComputePendingHeader(wg *sync.WaitGroup, primeNode, regionNode, zoneNode common.Hash, location common.Location) {
+func (hc *HierarchicalCoordinator) ComputePendingHeader(wg *sync.WaitGroup, primeNode, regionNode, zoneNode common.Hash, location common.Location, stopChan chan struct{}) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Global.WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Fatal("Go-Quai Panicked")
+		}
+	}()
 	defer wg.Done()
-	primeBackend := *hc.consensus.GetBackend(common.Location{})
-	regionBackend := *hc.consensus.GetBackend(common.Location{byte(location.Region())})
-	zoneBackend := *hc.consensus.GetBackend(location)
-	primeBlock := primeBackend.BlockOrCandidateByHash(primeNode)
-	if primeBlock == nil {
-		log.Global.Error("prime block is nil", primeBackend.Config().Location)
-		panic("prime block is nil")
+	select {
+	case <-stopChan:
+		return
+	default:
+		primeBackend := *hc.consensus.GetBackend(common.Location{})
+		regionBackend := *hc.consensus.GetBackend(common.Location{byte(location.Region())})
+		zoneBackend := *hc.consensus.GetBackend(location)
+		primeBlock := primeBackend.BlockOrCandidateByHash(primeNode)
+		if primeBlock == nil {
+			log.Global.Error("prime block is nil", primeBackend.Config().Location)
+			panic("prime block is nil")
+		}
+		primePendingHeader, err := primeBackend.GeneratePendingHeader(primeBlock, false, stopChan)
+		if err != nil {
+			log.Global.Error("error generating prime pending header")
+			return
+		}
+		regionBlock := regionBackend.BlockOrCandidateByHash(regionNode)
+		if regionBlock == nil {
+			log.Global.Error("region block is nil", regionBackend.Config().Location)
+			panic("region block is nil")
+		}
+		regionPendingHeader, err := regionBackend.GeneratePendingHeader(regionBlock, false, stopChan)
+		if err != nil {
+			log.Global.Error("error generating region pending header")
+			return
+		}
+		zoneBlock := zoneBackend.GetBlockByHash(zoneNode)
+		if zoneBlock == nil {
+			log.Global.Error("zone block is nil", zoneBackend.Config().Location)
+			panic("zone block is nil")
+		}
+		zonePendingHeader, err := zoneBackend.GeneratePendingHeader(zoneBlock, false, stopChan)
+		if err != nil {
+			log.Global.Error("error generating zone pending header")
+			return
+		}
+		zoneBackend.MakeFullPendingHeader(primePendingHeader, regionPendingHeader, zonePendingHeader)
 	}
-	primePendingHeader, err := primeBackend.GeneratePendingHeader(primeBlock, false)
-	if err != nil {
-		log.Global.Error("error generating prime pending header")
-	}
-	regionBlock := regionBackend.BlockOrCandidateByHash(regionNode)
-	if regionBlock == nil {
-		log.Global.Error("region block is nil", regionBackend.Config().Location)
-		panic("region block is nil")
-	}
-	regionPendingHeader, err := regionBackend.GeneratePendingHeader(regionBlock, false)
-	if err != nil {
-		log.Global.Error("error generating region pending header")
-	}
-	zoneBlock := zoneBackend.GetBlockByHash(zoneNode)
-	if zoneBlock == nil {
-		log.Global.Error("zone block is nil", zoneBackend.Config().Location)
-		panic("zone block is nil")
-	}
-	zonePendingHeader, err := zoneBackend.GeneratePendingHeader(zoneBlock, false)
-	if err != nil {
-		log.Global.Error("error generating zone pending header")
-	}
-	zoneBackend.MakeFullPendingHeader(primePendingHeader, regionPendingHeader, zonePendingHeader)
 }
 
 func (hc *HierarchicalCoordinator) GetBackendForLocationAndOrder(location common.Location, order int) quaiapi.Backend {

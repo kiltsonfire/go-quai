@@ -97,6 +97,7 @@ type Slice struct {
 	validator Validator // Block and state validator interface
 	phCacheMu sync.RWMutex
 	reorgMu   sync.RWMutex
+	bestPhMu  sync.RWMutex
 
 	badHashesCache map[common.Hash]bool
 	logger         *log.Logger
@@ -675,7 +676,7 @@ func (sl *Slice) generateSlicePendingHeader(block *types.WorkObject, newTermini 
 	var err error
 	if subReorg {
 		// Upate the local pending header
-		localPendingHeader, err = sl.miner.worker.GeneratePendingHeader(block, fill)
+		localPendingHeader, err = sl.miner.worker.GeneratePendingHeader(block, fill, nil)
 		if err != nil {
 			return types.PendingHeader{}, err
 		}
@@ -862,11 +863,10 @@ func (sl *Slice) poem(externS *big.Int, currentS *big.Int) bool {
 
 // GetPendingHeader is used by the miner to request the current pending header
 func (sl *Slice) GetPendingHeader() (*types.WorkObject, error) {
-	if ph, exists := sl.readPhCache(sl.bestPhKey); exists {
-		return ph.WorkObject(), nil
-	} else {
-		return nil, errors.New("empty pending header")
-	}
+	sl.bestPhMu.Lock()
+	defer sl.bestPhMu.Unlock()
+	phCopy := types.CopyWorkObject(sl.bestPh)
+	return phCopy, nil
 }
 
 func (sl *Slice) SetBestPh(pendingHeader *types.WorkObject) {
@@ -874,10 +874,10 @@ func (sl *Slice) SetBestPh(pendingHeader *types.WorkObject) {
 	pendingHeader.WorkObjectHeader().SetTime(uint64(time.Now().Unix()))
 	pendingHeader.WorkObjectHeader().SetHeaderHash(pendingHeader.Header().Hash())
 	sl.miner.worker.AddPendingWorkObjectBody(pendingHeader)
+	sl.bestPhMu.Lock()
 	sl.bestPh = pendingHeader
-	bestPh, _ := sl.readPhCache(sl.bestPhKey)
+	sl.bestPhMu.Unlock()
 	log.Global.Error("Best PH HC", pendingHeader.NumberArray(), pendingHeader.Hash(), sl.NodeLocation())
-	log.Global.Error("Best PH phcache", bestPh.WorkObject().NumberArray(), bestPh.WorkObject().Hash(), sl.NodeLocation())
 	sl.miner.worker.pendingHeaderFeed.Send(pendingHeader)
 }
 
@@ -1506,7 +1506,7 @@ func (sl *Slice) NewGenesisPendingHeader(domPendingHeader *types.WorkObject, dom
 	var termini types.Termini
 	sl.logger.Infof("NewGenesisPendingHeader location: %v, genesis hash %s", sl.NodeLocation(), genesisHash)
 	if sl.hc.IsGenesisHash(genesisHash) {
-		localPendingHeader, err = sl.miner.worker.GeneratePendingHeader(genesisBlock, false)
+		localPendingHeader, err = sl.miner.worker.GeneratePendingHeader(genesisBlock, false, nil)
 		if err != nil {
 			sl.logger.WithFields(log.Fields{
 				"err": err,
@@ -1554,7 +1554,7 @@ func (sl *Slice) NewGenesisPendingHeader(domPendingHeader *types.WorkObject, dom
 
 	if sl.hc.Empty() {
 		domPendingHeader.WorkObjectHeader().SetTime(uint64(time.Now().Unix()))
-		sl.writePhCache(genesisHash, types.NewPendingHeader(domPendingHeader, genesisTermini))
+		sl.SetBestPh(domPendingHeader)
 	}
 	return nil
 }
@@ -1566,7 +1566,7 @@ func (sl *Slice) MakeFullPendingHeader(primePendingHeader, regionPendingHeader, 
 	return combinedPendingHeader
 }
 
-func (sl *Slice) GeneratePendingHeader(block *types.WorkObject, fill bool) (*types.WorkObject, error) {
+func (sl *Slice) GeneratePendingHeader(block *types.WorkObject, fill bool, stopChan chan struct{}) (*types.WorkObject, error) {
 	// set the current header to this block
 	switch sl.NodeCtx() {
 	case common.PRIME_CTX:
@@ -1576,10 +1576,13 @@ func (sl *Slice) GeneratePendingHeader(block *types.WorkObject, fill bool) (*typ
 	case common.ZONE_CTX:
 		sl.hc.SetCurrentHeader(block)
 	}
-	if sl.bestPh != nil && sl.bestPh.ParentHash(sl.NodeCtx()) == block.Hash() {
-		return sl.bestPh, nil
+	sl.bestPhMu.Lock()
+	bestPhCopy := types.CopyWorkObject(sl.bestPh)
+	sl.bestPhMu.Unlock()
+	if bestPhCopy != nil && bestPhCopy.ParentHash(sl.NodeCtx()) == block.Hash() {
+		return bestPhCopy, nil
 	}
-	return sl.miner.worker.GeneratePendingHeader(block, fill)
+	return sl.miner.worker.GeneratePendingHeader(block, fill, stopChan)
 }
 
 func (sl *Slice) GetPendingBlockBody(wo *types.WorkObjectHeader) *types.WorkObject {
@@ -1818,7 +1821,7 @@ func (sl *Slice) GenerateRecoveryPendingHeader(pendingHeader *types.WorkObject, 
 // termini
 func (sl *Slice) ComputeRecoveryPendingHeader(hash common.Hash) types.PendingHeader {
 	block := sl.hc.GetBlockByHash(hash)
-	pendingHeader, err := sl.miner.worker.GeneratePendingHeader(block, false)
+	pendingHeader, err := sl.miner.worker.GeneratePendingHeader(block, false, nil)
 	if err != nil {
 		sl.logger.Error("Error generating pending header during the checkpoint recovery process")
 		return types.PendingHeader{}
