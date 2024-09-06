@@ -515,7 +515,7 @@ func (hc *HierarchicalCoordinator) NewBlockEventLoop() {
 	}
 }
 
-func (hc *HierarchicalCoordinator) CalculateLeaders() []Node {
+func (hc *HierarchicalCoordinator) CalculateLeaders(badHashes map[common.Hash]bool) []Node {
 	nodeList := []Node{}
 	numRegions, numZones := common.GetHierarchySizeForExpansionNumber(hc.currentExpansionNumber)
 	for i := 0; i < int(numRegions); i++ {
@@ -525,6 +525,9 @@ func (hc *HierarchicalCoordinator) CalculateLeaders() []Node {
 				var bestNode Node
 				keys := cache.Keys()
 				for _, key := range keys {
+					if _, exists := badHashes[key]; exists {
+						continue
+					}
 					node, _ := cache.Peek(key)
 					if bestNode.Empty() {
 						bestNode = node
@@ -539,17 +542,16 @@ func (hc *HierarchicalCoordinator) CalculateLeaders() []Node {
 		}
 	}
 
-	sort.Slice(nodeList, func(i, j int) bool {
-		return nodeList[i].entropy.Cmp(nodeList[j].entropy) > 0
-	})
-
 	return nodeList
 }
 
-func (hc *HierarchicalCoordinator) GetNodeListForLocation(location common.Location) []Node {
+func (hc *HierarchicalCoordinator) GetNodeListForLocation(location common.Location, badHashesList map[common.Hash]bool) []Node {
 	keys := hc.recentBlocks[location.Name()].Keys()
 	nodeList := []Node{}
 	for _, key := range keys {
+		if _, exists := badHashesList[key]; exists {
+			continue
+		}
 		node, _ := hc.recentBlocks[location.Name()].Peek(key)
 		nodeList = append(nodeList, node)
 	}
@@ -565,8 +567,10 @@ func (hc *HierarchicalCoordinator) BuildPendingHeaders(stopChan chan struct{}) {
 	case <-stopChan:
 		return
 	default:
-		// Pick the leader among all the slices
+		badHashes := make(map[common.Hash]bool)
 
+	search:
+		// Pick the leader among all the slices
 		backend := *hc.consensus.GetBackend(common.Location{0, 0})
 		defaultGenesisHash := backend.Config().DefaultGenesisHash
 
@@ -586,7 +590,7 @@ func (hc *HierarchicalCoordinator) BuildPendingHeaders(stopChan chan struct{}) {
 			}
 		}
 
-		leaders := hc.CalculateLeaders()
+		leaders := hc.CalculateLeaders(badHashes)
 		// Go through all the zones to update the constraint map
 		modifiedConstraintMap := constraintMap
 		first := true
@@ -594,7 +598,7 @@ func (hc *HierarchicalCoordinator) BuildPendingHeaders(stopChan chan struct{}) {
 			var err error
 			location := leader.location
 			backend := hc.GetBackend(location)
-			otherNodes := hc.GetNodeListForLocation(location)
+			otherNodes := hc.GetNodeListForLocation(location, badHashes)
 			for _, node := range otherNodes {
 				leaderBlock := backend.GetBlockByHash(node.hash)
 				modifiedConstraintMap, err = hc.calculateFrontierPoints(modifiedConstraintMap, leaderBlock, first)
@@ -617,6 +621,9 @@ func (hc *HierarchicalCoordinator) BuildPendingHeaders(stopChan chan struct{}) {
 			bestPrime = t
 		}
 
+		// Check if regions have twist
+		primeTermini := hc.GetBackend(common.Location{}).GetTerminiByHash(bestPrime)
+
 		var wg sync.WaitGroup
 
 		for i := 0; i < int(numRegions); i++ {
@@ -631,6 +638,14 @@ func (hc *HierarchicalCoordinator) BuildPendingHeaders(stopChan chan struct{}) {
 			} else {
 				bestRegion = t
 			}
+
+			if !hc.pcrc(bestRegion, primeTermini.SubTerminiAtIndex(i), common.Location{byte(i)}, common.REGION_CTX) {
+				log.Global.Error("twist in the pending header construction in region ctx")
+				badHashes[bestRegion] = true
+				goto search
+			}
+			regionTermini := hc.GetBackend(common.Location{byte(i)}).GetTerminiByHash(bestRegion)
+
 			for j := 0; j < int(numZones); j++ {
 				var bestZone common.Hash
 				zoneLocation := common.Location{byte(i), byte(j)}.Name()
@@ -639,6 +654,11 @@ func (hc *HierarchicalCoordinator) BuildPendingHeaders(stopChan chan struct{}) {
 					bestZone = defaultGenesisHash
 				} else {
 					bestZone = t
+				}
+				if !hc.pcrc(bestZone, regionTermini.SubTerminiAtIndex(j), common.Location{byte(i), byte(j)}, common.ZONE_CTX) {
+					log.Global.Error("twist in the pending header construction in zone ctx")
+					badHashes[bestZone] = true
+					goto search
 				}
 				log.Global.Error("computing the pending header", bestPrime, bestRegion, bestZone, zoneLocation)
 				wg.Add(1)
@@ -651,6 +671,20 @@ func (hc *HierarchicalCoordinator) BuildPendingHeaders(stopChan chan struct{}) {
 
 	}
 }
+
+// PCRC previous coincidence reference check makes sure there are not any cyclic references in the graph and calculates new termini and the block terminus
+func (hc *HierarchicalCoordinator) pcrc(subParentHash common.Hash, domTerminus common.Hash, location common.Location, ctx int) bool {
+	backend := hc.GetBackend(location)
+	termini := backend.GetTerminiByHash(subParentHash)
+	if termini == nil {
+		panic("termini shouldnt be nil")
+	}
+	if termini.DomTerminus(location) != domTerminus {
+		return false
+	}
+	return true
+}
+
 func PrintConstraintMap(modifiedConstraintMap map[string]common.Hash) {
 	for loc, t := range modifiedConstraintMap {
 		log.Global.Error("Constraint Map ", "loc ", loc, "hash ", t)
