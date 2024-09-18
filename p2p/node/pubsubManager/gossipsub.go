@@ -163,7 +163,7 @@ func (g *PubsubManager) Subscribe(location common.Location, datatype interface{}
 
 				// handle the received data
 				if g.onReceived != nil {
-					g.onReceived(msg.ReceivedFrom, msg.ID, *msg.Topic, data, location)
+					g.onReceived(msg.GetFrom(), msg.ID, *msg.Topic, data, location)
 				}
 			}
 		}
