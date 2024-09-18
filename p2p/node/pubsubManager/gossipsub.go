@@ -115,10 +115,6 @@ func (g *PubsubManager) Subscribe(location common.Location, datatype interface{}
 	if g.consensus == nil {
 		return ErrConsensusNotSet
 	}
-	err = g.PubSub.RegisterTopicValidator(topicSub.String(), g.ValidatorFunc())
-	if err != nil {
-		return ErrValidatorFuncNotSet
-	}
 
 	// subscribe to the topic
 	subscription, err := topic.Subscribe()
@@ -211,7 +207,7 @@ func (g *PubsubManager) ValidatorFunc() func(ctx context.Context, id p2p.PeerID,
 		}
 		topic, err := TopicFromString(*topicString)
 		if err != nil {
-			log.Global.WithField("topic", *topicString).Errorf("validator: error parsing topic: %s", err)
+			log.Global.WithField("topic", *topicString).Errorf("glodserror parsing topic: %s", err)
 			return pubsub.ValidationReject
 		}
 		// get the proto encoded data
