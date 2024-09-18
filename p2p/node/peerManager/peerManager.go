@@ -509,7 +509,14 @@ func (pm *BasicPeerManager) MarkLivelyPeer(peer p2p.PeerID, topic *pubsubManager
 		return
 	}
 	pm.TagPeer(peer, "liveness_reports", 1)
-	pm.recategorizePeer(peer, topic)
+	err := pm.recategorizePeer(peer, topic)
+	if err != nil {
+		log.Global.WithFields(log.Fields{
+			"peer":  peer,
+			"topic": topic.String(),
+			"err":   err,
+		}).Debug("Error marking lively peer")
+	}
 }
 
 func (pm *BasicPeerManager) MarkLatentPeer(peer p2p.PeerID, topic *pubsubManager.Topic) {

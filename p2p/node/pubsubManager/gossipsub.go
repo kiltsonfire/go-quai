@@ -211,6 +211,7 @@ func (g *PubsubManager) ValidatorFunc() func(ctx context.Context, id p2p.PeerID,
 		}
 		topic, err := TopicFromString(*topicString)
 		if err != nil {
+			log.Global.WithField("topic", *topicString).Errorf("validator: error parsing topic: %s", err)
 			return pubsub.ValidationReject
 		}
 		// get the proto encoded data
@@ -225,6 +226,7 @@ func (g *PubsubManager) ValidatorFunc() func(ctx context.Context, id p2p.PeerID,
 			protoWo := new(types.ProtoWorkObjectBlockView)
 			err := proto.Unmarshal(protoData, protoWo)
 			if err != nil {
+				log.Global.WithField("err", err).Error("validator: error unmarshalling proto data")
 				return pubsub.ValidationReject
 			}
 
@@ -233,6 +235,7 @@ func (g *PubsubManager) ValidatorFunc() func(ctx context.Context, id p2p.PeerID,
 			}
 			err = block.ProtoDecode(protoWo, protoWo.GetWorkObject().GetWoHeader().GetLocation().Value)
 			if err != nil {
+				log.Global.WithField("err", err).Error("validator: error decoding proto data")
 				return pubsub.ValidationReject
 			}
 
@@ -246,11 +249,11 @@ func (g *PubsubManager) ValidatorFunc() func(ctx context.Context, id p2p.PeerID,
 			}
 			err = backend.SanityCheckWorkObjectBlockViewBody(block.WorkObject)
 			if err != nil {
-				backend.Logger().WithField("err", err).Warn("Sanity check of work object failed")
+				backend.Logger().WithField("err", err).Warn("sanity check of work object failed")
 				return pubsub.ValidationReject
 			}
 			if backend.BadHashExistsInChain() {
-				backend.Logger().Warn("Bad Hashes still exist on chain, cannot handle block broadcast yet")
+				backend.Logger().Warn("bad Hashes still exist on chain, cannot handle block broadcast yet")
 				return pubsub.ValidationIgnore
 			}
 
