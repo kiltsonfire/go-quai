@@ -147,6 +147,8 @@ func NewNode(ctx context.Context, quitCh chan struct{}) (*P2PNode, error) {
 		// If publicly reachable, provide a relay service for other peers
 		libp2p.EnableRelayService(),
 
+		libp2p.EnableRelay(),
+
 		// If behind NAT, automatically advertise relay address through relay peers
 		// TODO: today the bootnodes act as static relays. In the future we should dynamically select relays from publicly reachable peers.
 		libp2p.EnableAutoRelayWithStaticRelays(peerMgr.RefreshBootpeers()),
@@ -197,7 +199,7 @@ func NewNode(ctx context.Context, quitCh chan struct{}) (*P2PNode, error) {
 
 	// log the p2p node's ID
 	nodeID := host.ID()
-	log.Global.Infof("node created: %s", nodeID)
+	log.Global.Infof("node created: %s node type: %v", nodeID, reflect.TypeOf(host))
 
 	// Set peer manager's self ID
 	peerMgr.SetSelfID(nodeID)
