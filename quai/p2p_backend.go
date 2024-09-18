@@ -3,6 +3,8 @@ package quai
 import (
 	"context"
 	"math/big"
+	"runtime/debug"
+	"time"
 
 	"github.com/dominant-strategies/go-quai/common"
 	"github.com/dominant-strategies/go-quai/core"
@@ -13,6 +15,7 @@ import (
 	"github.com/dominant-strategies/go-quai/p2p"
 	"github.com/dominant-strategies/go-quai/rpc"
 	"github.com/dominant-strategies/go-quai/trie"
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -45,6 +48,10 @@ type QuaiBackend struct {
 	primeApiBackend   *quaiapi.Backend
 	regionApiBackends []*quaiapi.Backend
 	zoneApiBackends   [][]*quaiapi.Backend
+
+	woPeers *lru.Cache[string, struct{}]
+	whPeers *lru.Cache[string, struct{}]
+	wsPeers *lru.Cache[string, struct{}]
 }
 
 // Create a new instance of the QuaiBackend consensus service
@@ -53,7 +60,39 @@ func NewQuaiBackend() (*QuaiBackend, error) {
 	for i := 0; i < common.MaxRegions; i++ {
 		zoneBackends[i] = make([]*quaiapi.Backend, common.MaxZones)
 	}
-	return &QuaiBackend{regionApiBackends: make([]*quaiapi.Backend, common.MaxZones), zoneApiBackends: zoneBackends}, nil
+	woPeers, _ := lru.New[string, struct{}](1000)
+	whPeers, _ := lru.New[string, struct{}](1000)
+	wsPeers, _ := lru.New[string, struct{}](1000)
+	backend := &QuaiBackend{regionApiBackends: make([]*quaiapi.Backend, common.MaxZones), zoneApiBackends: zoneBackends}
+
+	// peers cache
+	backend.woPeers = woPeers
+	backend.whPeers = whPeers
+	backend.wsPeers = wsPeers
+
+	go backend.peerStats()
+
+	return backend, nil
+}
+
+func (qbe *QuaiBackend) peerStats() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Global.WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Fatal("Go-Quai Panicked")
+		}
+	}()
+	futureTimer := time.NewTicker(60 * time.Second)
+	defer futureTimer.Stop()
+	for {
+		select {
+		case <-futureTimer.C:
+			log.Global.WithFields(log.Fields{"work object": qbe.woPeers.Len(),
+				"wo header": qbe.whPeers.Len(), "ws header": qbe.wsPeers.Len()}).Info("Unique peers per topic")
+		}
+	}
 }
 
 // Adds the p2pBackend into the given QuaiBackend
@@ -112,6 +151,7 @@ func (qbe *QuaiBackend) OnNewBroadcast(sourcePeer p2p.PeerID, Id string, topic s
 
 		backend.WriteBlock(data.WorkObject)
 		blockIngressCounter.Inc()
+		qbe.woPeers.Add(sourcePeer.String(), struct{}{})
 		// If it was a good broadcast, mark the peer as lively
 		qbe.p2pBackend.MarkLivelyPeer(sourcePeer, topic)
 	case types.WorkObjectHeaderView:
@@ -127,6 +167,7 @@ func (qbe *QuaiBackend) OnNewBroadcast(sourcePeer p2p.PeerID, Id string, topic s
 
 		headerIngressCounter.Inc()
 		// If it was a good broadcast, mark the peer as lively
+		qbe.whPeers.Add(sourcePeer.String(), struct{}{})
 		qbe.p2pBackend.MarkLivelyPeer(sourcePeer, topic)
 	case types.WorkObjectShareView:
 		backend := *qbe.GetBackend(nodeLocation)
@@ -153,6 +194,8 @@ func (qbe *QuaiBackend) OnNewBroadcast(sourcePeer p2p.PeerID, Id string, topic s
 				txCountersBySlice[sliceName] = newCounter
 			}
 		}
+
+		qbe.wsPeers.Add(sourcePeer.String(), struct{}{})
 		// If it was a good broadcast, mark the peer as lively
 		qbe.p2pBackend.MarkLivelyPeer(sourcePeer, topic)
 	default:
