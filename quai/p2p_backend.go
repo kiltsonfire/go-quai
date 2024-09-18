@@ -139,7 +139,7 @@ func (qbe *QuaiBackend) GetBackend(location common.Location) *quaiapi.Backend {
 }
 
 // Handle consensus data propagated to us from our peers
-func (qbe *QuaiBackend) OnNewBroadcast(sourcePeer p2p.PeerID, Id string, topic string, data interface{}, nodeLocation common.Location) bool {
+func (qbe *QuaiBackend) OnNewBroadcast(sourcePeer p2p.PeerID, relayPeer p2p.PeerID, Id string, topic string, data interface{}, nodeLocation common.Location) bool {
 	defer types.ObjectPool.Put(data)
 	switch data := data.(type) {
 	case types.WorkObjectBlockView:
@@ -152,8 +152,10 @@ func (qbe *QuaiBackend) OnNewBroadcast(sourcePeer p2p.PeerID, Id string, topic s
 		backend.WriteBlock(data.WorkObject)
 		blockIngressCounter.Inc()
 		qbe.woPeers.Add(sourcePeer.String(), struct{}{})
+		qbe.woPeers.Add(relayPeer.String(), struct{}{})
 		// If it was a good broadcast, mark the peer as lively
 		qbe.p2pBackend.MarkLivelyPeer(sourcePeer, topic)
+		qbe.p2pBackend.MarkLivelyPeer(relayPeer, topic)
 	case types.WorkObjectHeaderView:
 		backend := *qbe.GetBackend(nodeLocation)
 		if backend == nil {
@@ -168,7 +170,9 @@ func (qbe *QuaiBackend) OnNewBroadcast(sourcePeer p2p.PeerID, Id string, topic s
 		headerIngressCounter.Inc()
 		// If it was a good broadcast, mark the peer as lively
 		qbe.whPeers.Add(sourcePeer.String(), struct{}{})
+		qbe.whPeers.Add(relayPeer.String(), struct{}{})
 		qbe.p2pBackend.MarkLivelyPeer(sourcePeer, topic)
+		qbe.p2pBackend.MarkLivelyPeer(relayPeer, topic)
 	case types.WorkObjectShareView:
 		backend := *qbe.GetBackend(nodeLocation)
 		if backend == nil {
@@ -196,8 +200,10 @@ func (qbe *QuaiBackend) OnNewBroadcast(sourcePeer p2p.PeerID, Id string, topic s
 		}
 
 		qbe.wsPeers.Add(sourcePeer.String(), struct{}{})
+		qbe.wsPeers.Add(relayPeer.String(), struct{}{})
 		// If it was a good broadcast, mark the peer as lively
 		qbe.p2pBackend.MarkLivelyPeer(sourcePeer, topic)
+		qbe.p2pBackend.MarkLivelyPeer(relayPeer, topic)
 	default:
 		log.Global.WithFields(log.Fields{
 			"peer":     sourcePeer,

@@ -374,7 +374,7 @@ func (p *P2PNode) GetBlockByNumber(number *big.Int, location common.Location) *t
 	return p.consensus.LookupBlockByNumber(number, location)
 }
 
-func (p *P2PNode) handleBroadcast(sourcePeer peer.ID, Id string, topic string, data interface{}, nodeLocation common.Location) {
+func (p *P2PNode) handleBroadcast(sourcePeer peer.ID, relayPeer peer.ID, Id string, topic string, data interface{}, nodeLocation common.Location) {
 	if _, ok := acceptableTypes[reflect.TypeOf(data)]; !ok {
 		log.Global.WithFields(log.Fields{
 			"peer":  sourcePeer,
@@ -397,6 +397,6 @@ func (p *P2PNode) handleBroadcast(sourcePeer peer.ID, Id string, topic string, d
 
 	// If we made it here, pass the data on to the consensus backend
 	if p.consensus != nil {
-		p.consensus.OnNewBroadcast(sourcePeer, Id, topic, data, nodeLocation)
+		p.consensus.OnNewBroadcast(sourcePeer, relayPeer, Id, topic, data, nodeLocation)
 	}
 }

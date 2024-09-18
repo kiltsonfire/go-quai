@@ -39,7 +39,7 @@ type PubsubManager struct {
 	genesis       common.Hash
 
 	// Callback function to handle received data
-	onReceived func(peer.ID, string, string, interface{}, common.Location)
+	onReceived func(peer.ID, peer.ID, string, string, interface{}, common.Location)
 }
 
 // creates a new gossipsub instance
@@ -76,7 +76,7 @@ func (g *PubsubManager) SetQuaiBackend(consensus quai.ConsensusAPI) {
 
 }
 
-func (g *PubsubManager) SetReceiveHandler(receiveCb func(peer.ID, string, string, interface{}, common.Location)) {
+func (g *PubsubManager) SetReceiveHandler(receiveCb func(peer.ID, peer.ID, string, string, interface{}, common.Location)) {
 	g.onReceived = receiveCb
 }
 
@@ -163,7 +163,7 @@ func (g *PubsubManager) Subscribe(location common.Location, datatype interface{}
 
 				// handle the received data
 				if g.onReceived != nil {
-					g.onReceived(msg.GetFrom(), msg.ID, *msg.Topic, data, location)
+					g.onReceived(msg.GetFrom(), msg.ReceivedFrom, msg.ID, *msg.Topic, data, location)
 				}
 			}
 		}
