@@ -370,6 +370,12 @@ func (pm *BasicPeerManager) Provide(ctx context.Context, location common.Locatio
 	if err != nil {
 		return err
 	}
+
+	log.Global.WithFields(log.Fields{
+		"topic": t.String(),
+		"cid":   pubsubManager.TopicToCid(t),
+	}).Info("Providing topic to DHT")
+
 	return pm.dht.Provide(ctx, pubsubManager.TopicToCid(t), true)
 }
 
@@ -434,6 +440,10 @@ func (pm *BasicPeerManager) getPeersHelper(peerDB *peerdb.PeerDB, numPeers int) 
 }
 
 func (pm *BasicPeerManager) GetPeers(topic *pubsubManager.Topic) map[p2p.PeerID]struct{} {
+	log.Global.WithFields(log.Fields{
+		"topic": topic.String(),
+	}).Info("Getting peers for topic")
+
 	if pm.peerDBs[topic.String()] == nil {
 		// There have not been any peers added to this topic
 		return make(map[peer.ID]struct{})
@@ -451,6 +461,12 @@ func (pm *BasicPeerManager) GetPeers(topic *pubsubManager.Topic) map[p2p.PeerID]
 
 	// Randomly select request degree number of peers from the peerList
 	lenPeer := len(peerList)
+
+	go func() {
+		dhtContent := pm.queryDHT(topic, peerList, 10)
+		log.Global.Infof("Found %d peers from the DHT", len(dhtContent))
+	}()
+
 	// If we have more peers than the request degree, randomly select peers and
 	// return, otherwise ask the dht for the extra required peers
 	if lenPeer >= topic.GetRequestDegree() {
