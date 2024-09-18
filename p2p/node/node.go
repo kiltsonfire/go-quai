@@ -205,6 +205,10 @@ func NewNode(ctx context.Context, quitCh chan struct{}) (*P2PNode, error) {
 	// Set the DHT for the peer manager
 	peerMgr.SetDHT(dht)
 
+	// Bootstrapping the DHT (this step is essential for peer discovery)
+	if err := dht.Bootstrap(ctx); err != nil {
+		log.Global.Info("Failed to bootstrap DHT:", err)
+	}
 	// Create a gossipsub instance with helper functions
 	ps, err := pubsubManager.NewGossipSubManager(ctx, host)
 	if err != nil {
