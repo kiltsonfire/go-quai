@@ -773,7 +773,9 @@ search:
 	}
 
 	printNodeSet(nodeSet)
+	hc.oneMu.Lock()
 	hc.Add(nodeSet.Entropy(int(numRegions), int(numZones)), nodeSet)
+	hc.oneMu.Unlock()
 
 }
 
