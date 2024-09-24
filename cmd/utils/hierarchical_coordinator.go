@@ -609,7 +609,7 @@ func (hc *HierarchicalCoordinator) ChainEventLoop(chainEvent chan core.ChainEven
 		case head := <-chainEvent:
 			go hc.ReapplicationLoop(head)
 			stopChan := make(chan struct{})
-			go hc.ComputeMapPending(head, stopChan)
+			hc.ComputeMapPending(head, stopChan)
 		case <-sub.Err():
 			return
 		}
