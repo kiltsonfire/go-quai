@@ -640,7 +640,6 @@ func (hc *HierarchicalCoordinator) ComputeMapPending(head core.ChainEvent) {
 		lru, _ := lru.New[common.Hash, Node](c_recentBlockCacheSize)
 		lru.Add(head.Block.Hash(), node)
 		hc.recentBlocks[head.Block.Location().Name()] = lru
-		hc.recentBlockMu.Unlock()
 		log.Global.WithFields(log.Fields{"Hash": head.Block.Hash(), "Number": head.Block.NumberArray()}).Debug("Received a chain event and calling build pending headers")
 		hc.PendingHeadersMap()
 	} else {
@@ -652,7 +651,6 @@ func (hc *HierarchicalCoordinator) ComputeMapPending(head core.ChainEvent) {
 			if exists && oldestBlock.entropy.Cmp(node.entropy) < 0 {
 				locationCache.Add(head.Block.Hash(), node)
 				hc.recentBlocks[head.Block.Location().Name()] = locationCache
-				hc.recentBlockMu.Unlock()
 				log.Global.WithFields(log.Fields{"Hash": head.Block.Hash(), "Number": head.Block.NumberArray()}).Debug("Received a chain event and calling build pending headers")
 				hc.PendingHeadersMap()
 			}
@@ -666,7 +664,6 @@ func (hc *HierarchicalCoordinator) PendingHeadersMap() {
 	badHashes = make(map[common.Hash]bool)
 	count := 0
 	var leaders []Node
-	hc.recentBlockMu.Lock()
 search:
 	if len(leaders) > 0 {
 		circularShift(leaders)
@@ -675,7 +672,6 @@ search:
 
 	if count > 2*len(leaders) {
 		log.Global.Error("Too many iterations in the build pending headers, skipping generate")
-		hc.recentBlockMu.Unlock()
 		return
 	}
 	// Pick the leader among all the slices
@@ -717,60 +713,46 @@ search:
 		}
 	}
 
-	PrintConstraintMap(modifiedConstraintMap)
-
-	var bestPrime common.Hash
-	t, exists := modifiedConstraintMap[common.Location{}.Name()]
+	_, exists := modifiedConstraintMap[common.Location{}.Name()]
 	if !exists {
-		bestPrime = defaultGenesisHash
-	} else {
-		bestPrime = t
+		modifiedConstraintMap[common.Location{}.Name()] = defaultGenesisHash
 	}
 
 	// Check if regions have twist
-	primeTermini := hc.GetBackend(common.Location{}).GetTerminiByHash(bestPrime)
+	primeTermini := hc.GetBackend(common.Location{}).GetTerminiByHash(modifiedConstraintMap[common.Location{}.Name()])
 
 	for i := 0; i < int(numRegions); i++ {
 		regionLocation := common.Location{byte(i)}.Name()
-		var bestRegion common.Hash
-		t, exists := modifiedConstraintMap[regionLocation]
+		_, exists := modifiedConstraintMap[regionLocation]
 		if !exists {
-			bestRegion = defaultGenesisHash
-		} else {
-			bestRegion = t
+			modifiedConstraintMap[regionLocation] = defaultGenesisHash
 		}
 
-		if !hc.pcrc(bestRegion, primeTermini.SubTerminiAtIndex(i), common.Location{byte(i)}, common.REGION_CTX) {
-			badHashes[bestRegion] = true
-			log.Global.WithFields(log.Fields{"hash": bestRegion, "location": regionLocation}).Debug("Best Region doesnt satisfy pcrc")
+		if !hc.pcrc(modifiedConstraintMap[regionLocation], primeTermini.SubTerminiAtIndex(i), common.Location{byte(i)}, common.REGION_CTX) {
+			badHashes[modifiedConstraintMap[regionLocation]] = true
+			log.Global.WithFields(log.Fields{"hash": modifiedConstraintMap[regionLocation], "location": regionLocation}).Debug("Best Region doesnt satisfy pcrc")
 			count++
 			goto search
 		}
-		regionTermini := hc.GetBackend(common.Location{byte(i)}).GetTerminiByHash(bestRegion)
+		regionTermini := hc.GetBackend(common.Location{byte(i)}).GetTerminiByHash(modifiedConstraintMap[regionLocation])
 		for j := 0; j < int(numZones); j++ {
-			var bestZone common.Hash
 			zoneLocation := common.Location{byte(i), byte(j)}.Name()
-			t, exists := modifiedConstraintMap[zoneLocation]
+			_, exists := modifiedConstraintMap[zoneLocation]
 			if !exists {
-				bestZone = defaultGenesisHash
-			} else {
-				bestZone = t
+				modifiedConstraintMap[zoneLocation] = defaultGenesisHash
 			}
-			if !hc.pcrc(bestZone, regionTermini.SubTerminiAtIndex(j), common.Location{byte(i), byte(j)}, common.ZONE_CTX) {
-				badHashes[bestZone] = true
-				log.Global.WithFields(log.Fields{"hash": bestZone, "location": zoneLocation}).Debug("Best Zone doesnt satisfy pcrc")
+			if !hc.pcrc(modifiedConstraintMap[zoneLocation], regionTermini.SubTerminiAtIndex(j), common.Location{byte(i), byte(j)}, common.ZONE_CTX) {
+				badHashes[modifiedConstraintMap[zoneLocation]] = true
+				log.Global.WithFields(log.Fields{"hash": modifiedConstraintMap[zoneLocation], "location": zoneLocation}).Debug("Best Zone doesnt satisfy pcrc")
 				count++
 				goto search
 			}
 		}
 	}
-
-	// Headers have been successfully computed, compute state.
-	hc.recentBlockMu.Unlock()
-
+	PrintConstraintMap(modifiedConstraintMap)
 	// Build a node set
 	nodeSet := NodeSet{nodes: make(map[string]Node)}
-	primeNode, err := hc.NodeFromHash(bestPrime, common.Location{})
+	primeNode, err := hc.NodeFromHash(modifiedConstraintMap[common.Location{}.Name()], common.Location{})
 	if err != nil {
 		return
 	}
@@ -790,6 +772,7 @@ search:
 		}
 	}
 
+	printNodeSet(nodeSet)
 	hc.Add(nodeSet.Entropy(int(numRegions), int(numZones)), nodeSet)
 
 }
@@ -797,7 +780,7 @@ search:
 func (hc *HierarchicalCoordinator) NodeFromHash(hash common.Hash, location common.Location) (Node, error) {
 	backend := hc.GetBackend(location)
 	header := backend.GetHeaderByHash(hash)
-	if header != nil {
+	if header == nil {
 		return Node{}, errors.New("header not found")
 	}
 	return Node{
@@ -940,7 +923,6 @@ func (hc *HierarchicalCoordinator) BuildPendingHeaders(wo *types.WorkObject, ord
 	// See if it can extend the best entropy
 	startingLen := len(hc.pendingHeaders.order)
 	var entropy *big.Int
-	entropy = hc.bestEntropy
 	misses := 0
 	var threshold int
 	threshold = 30
@@ -952,7 +934,7 @@ func (hc *HierarchicalCoordinator) BuildPendingHeaders(wo *types.WorkObject, ord
 	start = time.Now()
 	log.Global.Info("PendingHeadersOrderLen:", startingLen)
 	for i := startingLen - 1; i >= 0; i-- {
-
+		entropy = hc.pendingHeaders.order[i]
 		//log.Global.Info("Entropy: ", common.BigBitsToBits(entropy))
 		nodeSet, exists := hc.Get(entropy)
 		if !exists {
@@ -972,7 +954,6 @@ func (hc *HierarchicalCoordinator) BuildPendingHeaders(wo *types.WorkObject, ord
 		} else {
 			//log.Global.Info("NodeSet not extendable for entropy", " entropy: ", common.BigBitsToBits(entropy), " order: ", order, " number: ", wo.NumberArray(), " hash: ", wo.Hash(), " location: ", wo.Location().Name(), " parentHash: ", wo.ParentHash(order))
 		}
-		entropy = hc.pendingHeaders.order[i]
 		misses++
 		if misses > threshold {
 			break
