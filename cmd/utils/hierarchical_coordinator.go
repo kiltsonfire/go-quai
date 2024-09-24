@@ -729,7 +729,7 @@ func PrintConstraintMap(constraintMap map[string]common.Hash) {
 	}
 }
 
-func (hc *HierarchicalCoordinator) BuildPendingHeaders(wo *types.WorkObject, order int) {
+func (hc *HierarchicalCoordinator) BuildPendingHeaders(wo *types.WorkObject, order int, newEntropy *big.Int) {
 	timer := time.NewTimer(c_buildPendingHeadersTimeout)
 	defer timer.Stop()
 	numRegions, numZones := common.GetHierarchySizeForExpansionNumber(hc.currentExpansionNumber)
