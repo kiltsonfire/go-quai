@@ -61,26 +61,27 @@ const (
 type environment struct {
 	signer types.Signer
 
-	state       *state.StateDB // apply state changes here
-	ancestors   mapset.Set     // ancestor set (used for checking uncle parent validity)
-	family      mapset.Set     // family set (used for checking uncle invalidity)
-	tcount      int            // tx count in cycle
-	gasPool     *types.GasPool // available gas used to pack transactions
-	coinbase    common.Address
-	etxRLimit   int // Remaining number of cross-region ETXs that can be included
-	etxPLimit   int // Remaining number of cross-prime ETXs that can be included
-	parentOrder *int
-	wo          *types.WorkObject
-	txs         []*types.Transaction
-	etxs        []*types.Transaction
-	utxoFees    *big.Int
-	quaiFees    *big.Int
-	subManifest types.BlockManifest
-	receipts    []*types.Receipt
-	uncleMu     sync.RWMutex
-	uncles      map[common.Hash]*types.WorkObjectHeader
-	utxosCreate []common.Hash
-	utxosDelete []common.Hash
+	state        *state.StateDB // apply state changes here
+	ancestors    mapset.Set     // ancestor set (used for checking uncle parent validity)
+	family       mapset.Set     // family set (used for checking uncle invalidity)
+	tcount       int            // tx count in cycle
+	gasPool      *types.GasPool // available gas used to pack transactions
+	coinbase     common.Address
+	etxRLimit    int // Remaining number of cross-region ETXs that can be included
+	etxPLimit    int // Remaining number of cross-prime ETXs that can be included
+	parentOrder  *int
+	wo           *types.WorkObject
+	txs          []*types.Transaction
+	etxs         []*types.Transaction
+	utxoFees     *big.Int
+	quaiFees     *big.Int
+	subManifest  types.BlockManifest
+	receipts     []*types.Receipt
+	uncleMu      sync.RWMutex
+	uncles       map[common.Hash]*types.WorkObjectHeader
+	utxosCreate  []common.Hash
+	utxosDelete  []common.Hash
+	deletedUtxos map[common.Hash]struct{}
 }
 
 // unclelist returns the contained uncles as the list format.
@@ -691,15 +692,16 @@ func (w *worker) makeEnv(parent *types.WorkObject, proposedWo *types.WorkObject,
 	}
 	// Note the passed coinbase may be different with header.Coinbase.
 	env := &environment{
-		signer:    types.MakeSigner(w.chainConfig, proposedWo.Number(w.hc.NodeCtx())),
-		state:     state,
-		coinbase:  coinbase,
-		ancestors: mapset.NewSet(),
-		family:    mapset.NewSet(),
-		wo:        proposedWo,
-		uncles:    make(map[common.Hash]*types.WorkObjectHeader),
-		etxRLimit: etxRLimit,
-		etxPLimit: etxPLimit,
+		signer:       types.MakeSigner(w.chainConfig, proposedWo.Number(w.hc.NodeCtx())),
+		state:        state,
+		coinbase:     coinbase,
+		ancestors:    mapset.NewSet(),
+		family:       mapset.NewSet(),
+		wo:           proposedWo,
+		uncles:       make(map[common.Hash]*types.WorkObjectHeader),
+		etxRLimit:    etxRLimit,
+		etxPLimit:    etxPLimit,
+		deletedUtxos: make(map[common.Hash]struct{}),
 	}
 	// Keep track of transactions which return errors so they can be removed
 	env.tcount = 0
@@ -1528,7 +1530,7 @@ func (w *worker) processQiTx(tx *types.Transaction, env *environment, parent *ty
 
 	addresses := make(map[common.AddressBytes]struct{})
 	totalQitIn := big.NewInt(0)
-	utxosDelete := make(map[types.OutPoint]*types.UtxoEntry)
+	utxosDeleteHashes := make([]common.Hash, 0, len(tx.TxIn()))
 	inputs := make(map[uint]uint64)
 	for _, txIn := range tx.TxIn() {
 		utxo := rawdb.GetUTXO(w.workerDb, txIn.PreviousOutPoint.TxHash, txIn.PreviousOutPoint.Index)
@@ -1554,7 +1556,12 @@ func (w *worker) processQiTx(tx *types.Transaction, env *environment, parent *ty
 		}
 		addresses[common.AddressBytes(utxo.Address)] = struct{}{}
 		totalQitIn.Add(totalQitIn, types.Denominations[denomination])
-		utxosDelete[txIn.PreviousOutPoint] = utxo
+		utxoHash := types.UTXOHash(txIn.PreviousOutPoint.TxHash, txIn.PreviousOutPoint.Index, utxo)
+		if _, exists := env.deletedUtxos[utxoHash]; exists {
+			return fmt.Errorf("tx %032x double spends UTXO %032x:%d", tx.Hash(), txIn.PreviousOutPoint.TxHash, txIn.PreviousOutPoint.Index)
+		}
+		env.deletedUtxos[utxoHash] = struct{}{}
+		utxosDeleteHashes = append(utxosDeleteHashes, utxoHash)
 		inputs[uint(denomination)]++
 	}
 	var ETXRCount int
@@ -1562,7 +1569,7 @@ func (w *worker) processQiTx(tx *types.Transaction, env *environment, parent *ty
 	etxs := make([]*types.ExternalTx, 0)
 	totalQitOut := big.NewInt(0)
 	totalConvertQitOut := big.NewInt(0)
-	utxosCreate := make(map[types.OutPoint]*types.UtxoEntry)
+	utxosCreateHashes := make([]common.Hash, 0, len(tx.TxOut()))
 	conversion := false
 	var convertAddress common.Address
 	outputs := make(map[uint]uint64)
@@ -1647,7 +1654,7 @@ func (w *worker) processQiTx(tx *types.Transaction, env *environment, parent *ty
 		} else {
 			// This output creates a normal UTXO
 			utxo := types.NewUtxoEntry(&txOut)
-			utxosCreate[types.OutPoint{TxHash: tx.Hash(), Index: uint16(txOutIdx)}] = utxo
+			utxosCreateHashes = append(utxosCreateHashes, types.UTXOHash(tx.Hash(), uint16(txOutIdx), utxo))
 		}
 	}
 	// Ensure the transaction does not spend more than its inputs.
@@ -1705,14 +1712,10 @@ func (w *worker) processQiTx(tx *types.Transaction, env *environment, parent *ty
 	}
 	env.txs = append(env.txs, tx)
 	env.utxoFees.Add(env.utxoFees, txFeeInQit)
-	for outpoint, utxo := range utxosDelete {
-		utxoHash := types.UTXOHash(outpoint.TxHash, outpoint.Index, utxo)
-		env.utxosDelete = append(env.utxosDelete, utxoHash)
-	}
-	for outPoint, utxo := range utxosCreate {
-		utxoHash := types.UTXOHash(outPoint.TxHash, outPoint.Index, utxo)
-		env.utxosCreate = append(env.utxosCreate, utxoHash)
-	}
+
+	env.utxosDelete = append(env.utxosDelete, utxosDeleteHashes...)
+	env.utxosCreate = append(env.utxosCreate, utxosCreateHashes...)
+
 	if err := CheckDenominations(inputs, outputs); err != nil {
 		return err
 	}
