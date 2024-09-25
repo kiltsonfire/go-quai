@@ -429,9 +429,6 @@ func (hc *HeaderChain) AppendBlock(block *types.WorkObject) error {
 
 // SetCurrentHeader sets the current header based on the POEM choice
 func (hc *HeaderChain) SetCurrentHeader(head *types.WorkObject) error {
-	hc.headermu.Lock()
-	defer hc.headermu.Unlock()
-
 	nodeCtx := hc.NodeCtx()
 
 	prevHeader := hc.CurrentHeader()

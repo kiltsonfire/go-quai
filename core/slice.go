@@ -1012,7 +1012,7 @@ func (sl *Slice) NewGenesisPendingHeader(domPendingHeader *types.WorkObject, dom
 	var termini types.Termini
 	sl.logger.Infof("NewGenesisPendingHeader location: %v, genesis hash %s", sl.NodeLocation(), genesisHash)
 	if sl.hc.IsGenesisHash(genesisHash) {
-		localPendingHeader, err = sl.miner.worker.GeneratePendingHeader(genesisBlock, false, nil)
+		localPendingHeader, err = sl.miner.worker.GeneratePendingHeader(genesisBlock, false)
 		if err != nil {
 			sl.logger.WithFields(log.Fields{
 				"err": err,
@@ -1060,7 +1060,9 @@ func (sl *Slice) MakeFullPendingHeader(primePendingHeader, regionPendingHeader, 
 	return combinedPendingHeader
 }
 
-func (sl *Slice) GeneratePendingHeader(block *types.WorkObject, fill bool, stopChan chan struct{}) (*types.WorkObject, error) {
+func (sl *Slice) GeneratePendingHeader(block *types.WorkObject, fill bool) (*types.WorkObject, error) {
+	sl.hc.headermu.Lock()
+
 	start := time.Now()
 	// set the current header to this block
 	switch sl.NodeCtx() {
@@ -1069,6 +1071,7 @@ func (sl *Slice) GeneratePendingHeader(block *types.WorkObject, fill bool, stopC
 		if err != nil {
 			sl.logger.WithFields(log.Fields{"hash": block.Hash(), "err": err}).Warn("Error setting current header")
 			sl.recomputeRequired = true
+			sl.hc.headermu.Unlock()
 			return nil, err
 		}
 	case common.REGION_CTX:
@@ -1076,6 +1079,7 @@ func (sl *Slice) GeneratePendingHeader(block *types.WorkObject, fill bool, stopC
 		if err != nil {
 			sl.logger.WithFields(log.Fields{"hash": block.Hash(), "err": err}).Warn("Error setting current header")
 			sl.recomputeRequired = true
+			sl.hc.headermu.Unlock()
 			return nil, err
 		}
 	case common.ZONE_CTX:
@@ -1083,28 +1087,33 @@ func (sl *Slice) GeneratePendingHeader(block *types.WorkObject, fill bool, stopC
 		if err != nil {
 			sl.logger.WithFields(log.Fields{"hash": block.Hash(), "err": err}).Warn("Error setting current header")
 			sl.recomputeRequired = true
+			sl.hc.headermu.Unlock()
 			return nil, err
 		}
 	}
 	stateProcessTime := time.Since(start)
 	if sl.ReadBestPh() == nil {
+		sl.hc.headermu.Unlock()
 		return nil, errors.New("best ph is nil")
 	}
 	bestPhCopy := types.CopyWorkObject(sl.ReadBestPh())
 	// If we are trying to recompute the pending header on the same parent block
 	// we can return what we already have
 	if !sl.recomputeRequired && bestPhCopy != nil && bestPhCopy.ParentHash(sl.NodeCtx()) == block.Hash() {
+		sl.hc.headermu.Unlock()
 		return bestPhCopy, nil
 	}
 	sl.recomputeRequired = false
 
 	phStart := time.Now()
-	pendingHeader, err := sl.miner.worker.GeneratePendingHeader(block, fill, stopChan)
+	pendingHeader, err := sl.miner.worker.GeneratePendingHeader(block, fill)
 	if err != nil {
+		sl.hc.headermu.Unlock()
 		return nil, err
 	}
 	pendingHeaderCreationTime := time.Since(phStart)
 
+	sl.hc.headermu.Unlock()
 	if sl.NodeCtx() == common.ZONE_CTX {
 		// Set the block processing times before sending the block in chain head
 		// feed
@@ -1348,7 +1357,7 @@ func (sl *Slice) GenerateRecoveryPendingHeader(pendingHeader *types.WorkObject, 
 // termini
 func (sl *Slice) ComputeRecoveryPendingHeader(hash common.Hash) types.PendingHeader {
 	block := sl.hc.GetBlockByHash(hash)
-	pendingHeader, err := sl.miner.worker.GeneratePendingHeader(block, false, nil)
+	pendingHeader, err := sl.miner.worker.GeneratePendingHeader(block, false)
 	if err != nil {
 		sl.logger.Error("Error generating pending header during the checkpoint recovery process")
 		return types.PendingHeader{}
