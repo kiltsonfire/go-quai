@@ -151,10 +151,6 @@ func (hc *HierarchicalCoordinator) Add(entropy *big.Int, node NodeSet) {
 		hc.pendingHeaders.collection.Add(entropyStr, node)
 	}
 
-	log.Global.WithFields(log.Fields{
-		"entropy": common.BigBitsToBits(entropy),
-	}).Info("Extern entropy to pending headers")
-
 	if hc.bestEntropy.Cmp(entropy) < 0 {
 		log.Global.Info("Picking the Extern entropy to build pending headers")
 		hc.bestEntropy = new(big.Int).Set(entropy)
@@ -665,12 +661,12 @@ func (hc *HierarchicalCoordinator) PendingHeadersMap() {
 	count := 0
 	var leaders []Node
 search:
-	if len(leaders) > 0 {
+	if count > 0 {
 		circularShift(leaders)
 		badHashes = make(map[common.Hash]bool)
 	}
 
-	if count > 2*len(leaders) {
+	if count > 2 {
 		log.Global.Error("Too many iterations in the build pending headers, skipping generate")
 		return
 	}
@@ -771,10 +767,11 @@ search:
 			nodeSet.nodes[common.Location{byte(i), byte(j)}.Name()] = zoneNode
 		}
 	}
-
+	entropy := nodeSet.Entropy(int(numRegions), int(numZones))
+	log.Global.Info("Map Based New Set Entropy: ", common.BigBitsToBits(entropy), " Best Entropy: ", common.BigBitsToBits(hc.bestEntropy))
 	printNodeSet(nodeSet)
 	hc.oneMu.Lock()
-	hc.Add(nodeSet.Entropy(int(numRegions), int(numZones)), nodeSet)
+	hc.Add(entropy, nodeSet)
 	hc.oneMu.Unlock()
 
 }
@@ -950,8 +947,10 @@ func (hc *HierarchicalCoordinator) BuildPendingHeaders(wo *types.WorkObject, ord
 
 			// Calculate new set entropy
 			newSetEntropy := newNodeSet.Entropy(int(numRegions), int(numZones))
-			//log.Global.Info("New Set Entropy: ", common.BigBitsToBits(newSetEntropy))
-			//printNodeSet(newNodeSet)
+			if new(big.Int).Sub(hc.bestEntropy, big.NewInt(30)).Cmp(newSetEntropy) < 0 {
+				log.Global.Info("Pending Headers Cache New Set Entropy: ", common.BigBitsToBits(newSetEntropy), " Best Entropy: ", common.BigBitsToBits(hc.bestEntropy))
+				printNodeSet(newNodeSet)
+			}
 			hc.Add(newSetEntropy, newNodeSet)
 		} else {
 			//log.Global.Info("NodeSet not extendable for entropy", " entropy: ", common.BigBitsToBits(entropy), " order: ", order, " number: ", wo.NumberArray(), " hash: ", wo.Hash(), " location: ", wo.Location().Name(), " parentHash: ", wo.ParentHash(order))
