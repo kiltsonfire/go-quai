@@ -218,7 +218,9 @@ func (ns *NodeSet) Extendable(wo *types.WorkObject, order int) bool {
 func (ns *NodeSet) Entropy(numRegions int, numZones int) *big.Int {
 	entropy := new(big.Int)
 
+	entropy.Add(entropy, ns.nodes[common.Location{}.Name()].entropy)
 	for i := 0; i < numRegions; i++ {
+		entropy.Add(entropy, ns.nodes[common.Location{byte(i)}.Name()].entropy)
 		for j := 0; j < numZones; j++ {
 			entropy.Add(entropy, ns.nodes[common.Location{byte(i), byte(j)}.Name()].entropy)
 		}
