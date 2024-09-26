@@ -91,6 +91,8 @@ type HierarchicalCoordinator struct {
 
 	oneMu                      sync.Mutex
 	generateHeaderWorkersCount int
+
+	pendingHeaderBackupCh chan struct{}
 }
 
 func NewPendingHeaders() *PendingHeaders {
@@ -281,6 +283,7 @@ func NewHierarchicalCoordinator(p2p quai.NetworkingAPI, logLevel string, nodeWg 
 		bestEntropy:                 new(big.Int).Set(common.Big0),
 		oneMu:                       sync.Mutex{},
 		generateHeaderWorkersCount:  0,
+		pendingHeaderBackupCh:       make(chan struct{}),
 	}
 
 	if startingExpansionNumber > common.MaxExpansionNumber {
@@ -318,6 +321,9 @@ func (hc *HierarchicalCoordinator) StartHierarchicalCoordinator() error {
 
 	hc.wg.Add(1)
 	go hc.expansionEventLoop()
+
+	hc.wg.Add(1)
+	go hc.MapConstructProc()
 
 	numRegions, numZones := common.GetHierarchySizeForExpansionNumber(hc.currentExpansionNumber)
 
@@ -601,13 +607,43 @@ func (hc *HierarchicalCoordinator) ChainEventLoop(chainEvent chan core.ChainEven
 	}()
 	defer hc.wg.Done()
 
+	lastUpdateTime := time.Now()
 	for {
 		select {
 		case head := <-chainEvent:
 			go hc.ReapplicationLoop(head)
-			hc.ComputeMapPending(head)
+			go hc.ComputeMapPending(head)
+
+			timeSinceLastUpdate := time.Since(lastUpdateTime)
+			if timeSinceLastUpdate > 5*time.Second {
+				hc.pendingHeaderBackupCh <- struct{}{}
+				lastUpdateTime = time.Now()
+			}
 		case <-sub.Err():
 			return
+		}
+	}
+}
+
+func (hc *HierarchicalCoordinator) MapConstructProc() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Global.WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Fatal("Go-Quai Panicked")
+		}
+	}()
+	defer hc.wg.Done()
+
+	for {
+		select {
+		case <-hc.pendingHeaderBackupCh:
+			log.Global.Error("Running the backup calculation")
+			hc.PendingHeadersMap()
+		case <-hc.quitCh:
+			return
+		default:
 		}
 	}
 }
@@ -638,7 +674,6 @@ func (hc *HierarchicalCoordinator) ComputeMapPending(head core.ChainEvent) {
 		lru.Add(head.Block.Hash(), node)
 		hc.recentBlocks[head.Block.Location().Name()] = lru
 		log.Global.WithFields(log.Fields{"Hash": head.Block.Hash(), "Number": head.Block.NumberArray()}).Debug("Received a chain event and calling build pending headers")
-		hc.PendingHeadersMap()
 	} else {
 		bestBlockHash := locationCache.Keys()[len(locationCache.Keys())-1]
 		_, exists := locationCache.Peek(bestBlockHash)
@@ -649,7 +684,6 @@ func (hc *HierarchicalCoordinator) ComputeMapPending(head core.ChainEvent) {
 				locationCache.Add(head.Block.Hash(), node)
 				hc.recentBlocks[head.Block.Location().Name()] = locationCache
 				log.Global.WithFields(log.Fields{"Hash": head.Block.Hash(), "Number": head.Block.NumberArray()}).Debug("Received a chain event and calling build pending headers")
-				hc.PendingHeadersMap()
 			}
 		}
 	}
@@ -657,6 +691,8 @@ func (hc *HierarchicalCoordinator) ComputeMapPending(head core.ChainEvent) {
 
 func (hc *HierarchicalCoordinator) PendingHeadersMap() {
 
+	hc.recentBlockMu.Lock()
+	defer hc.recentBlockMu.Unlock()
 	var badHashes map[common.Hash]bool
 	badHashes = make(map[common.Hash]bool)
 	count := 0
