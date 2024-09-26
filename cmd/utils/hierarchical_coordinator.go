@@ -31,6 +31,7 @@ const (
 	c_chainEventChSize           = 1000
 	c_buildPendingHeadersTimeout = 5 * time.Second
 	c_pendingHeaderSize          = 2000
+	c_maxHeaderWorkers           = 1
 )
 
 var (
@@ -88,7 +89,8 @@ type HierarchicalCoordinator struct {
 
 	bestEntropy *big.Int
 
-	oneMu sync.Mutex
+	oneMu                      sync.Mutex
+	generateHeaderWorkersCount int
 }
 
 func NewPendingHeaders() *PendingHeaders {
@@ -278,6 +280,7 @@ func NewHierarchicalCoordinator(p2p quai.NetworkingAPI, logLevel string, nodeWg 
 		pendingHeaders:              NewPendingHeaders(),
 		bestEntropy:                 new(big.Int).Set(common.Big0),
 		oneMu:                       sync.Mutex{},
+		generateHeaderWorkersCount:  0,
 	}
 
 	if startingExpansionNumber > common.MaxExpansionNumber {
@@ -970,8 +973,11 @@ func (hc *HierarchicalCoordinator) BuildPendingHeaders(wo *types.WorkObject, ord
 	}
 
 	bestNode, exists := hc.pendingHeaders.collection.Peek(hc.bestEntropy.String())
-	if exists {
+	if exists && hc.generateHeaderWorkersCount <= c_maxHeaderWorkers {
+		hc.generateHeaderWorkersCount++
 		go hc.ComputePendingHeaders(bestNode)
+	} else {
+		log.Global.Info("Reached the maxHeaderWorkers, skipping GeneratePending")
 	}
 	sort.Slice(hc.pendingHeaders.order, func(i, j int) bool {
 		return hc.pendingHeaders.order[i].Cmp(hc.pendingHeaders.order[j]) < 0 // Sort based on big.Int values
@@ -1002,6 +1008,7 @@ func (hc *HierarchicalCoordinator) ComputePendingHeaders(nodeSet NodeSet) {
 		}
 	}
 	wg.Wait()
+	hc.generateHeaderWorkersCount--
 }
 
 func circularShift(arr []Node) []Node {
