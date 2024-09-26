@@ -155,9 +155,6 @@ type worker struct {
 	pendingHeaderFeed event.Feed
 
 	// Subscriptions
-	chainHeadCh  chan ChainHeadEvent
-	chainHeadSub event.Subscription
-
 	chainSideCh  chan ChainSideEvent
 	chainSideSub event.Subscription
 
@@ -251,7 +248,6 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, db ethdb.Databas
 		coinbase:                       config.Etherbase,
 		isLocalBlock:                   isLocalBlock,
 		workerDb:                       db,
-		chainHeadCh:                    make(chan ChainHeadEvent, chainHeadChanSize),
 		chainSideCh:                    make(chan ChainSideEvent, chainSideChanSize),
 		taskCh:                         make(chan *task),
 		resultCh:                       make(chan *types.WorkObject, resultQueueSize),
@@ -285,7 +281,6 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, db ethdb.Databas
 
 	nodeCtx := headerchain.NodeCtx()
 	if headerchain.ProcessingState() && nodeCtx == common.ZONE_CTX {
-		worker.chainHeadSub = worker.hc.SubscribeChainHeadEvent(worker.chainHeadCh)
 		worker.chainSideSub = worker.hc.SubscribeChainSideEvent(worker.chainSideCh)
 		worker.wg.Add(1)
 		go worker.asyncStateLoop()
@@ -367,7 +362,6 @@ func (w *worker) start() {
 // stop sets the running status as 0.
 func (w *worker) stop() {
 	if w.hc.ProcessingState() && w.hc.NodeCtx() == common.ZONE_CTX {
-		w.chainHeadSub.Unsubscribe()
 		w.chainSideSub.Unsubscribe()
 	}
 	atomic.StoreInt32(&w.running, 0)
@@ -429,10 +423,12 @@ func (w *worker) asyncStateLoop() {
 	}()
 	defer w.wg.Done() // decrement the wait group after the close of the loop
 
+	ticker := time.NewTicker(2 * time.Second)
+	var prevHeader *types.WorkObject = nil
+	defer ticker.Stop()
 	for {
 		select {
-		case head := <-w.chainHeadCh:
-
+		case <-ticker.C:
 			go func() {
 				defer func() {
 					if r := recover(); r != nil {
@@ -442,10 +438,17 @@ func (w *worker) asyncStateLoop() {
 						}).Error("Go-Quai Panicked")
 					}
 				}()
+				// Dont run the proc if the current header hasnt changed
+				if prevHeader == nil {
+					prevHeader = w.hc.CurrentBlock()
+				} else {
+					if prevHeader.Hash() == w.hc.CurrentBlock().Hash() {
+						return
+					}
+				}
+				wo := w.hc.CurrentHeader()
 				w.hc.headermu.Lock()
 				defer w.hc.headermu.Unlock()
-
-				wo := head.Block
 				header, err := w.GeneratePendingHeader(wo, true)
 				if err != nil {
 					w.logger.WithField("err", err).Error("Error generating pending header")
@@ -474,8 +477,6 @@ func (w *worker) asyncStateLoop() {
 			}()
 		case <-w.exitCh:
 			return
-		case <-w.chainHeadSub.Err():
-			return
 		case <-w.chainSideSub.Err():
 			return
 		}
@@ -486,8 +487,7 @@ func (w *worker) asyncStateLoop() {
 func (w *worker) GeneratePendingHeader(block *types.WorkObject, fill bool) (*types.WorkObject, error) {
 	nodeCtx := w.hc.NodeCtx()
 
-	// if block.
-	if block.Hash() != w.hc.CurrentHeader().Hash() {
+	if block.Hash() != w.hc.CurrentHeader().Hash() && nodeCtx == common.ZONE_CTX {
 		return nil, fmt.Errorf("block hash %v is not same as the current header %v", block.Hash(), w.hc.CurrentHeader().Hash())
 	}
 

@@ -1037,18 +1037,18 @@ func (sl *Slice) NewGenesisPendingHeader(domPendingHeader *types.WorkObject, dom
 		if nodeCtx != common.ZONE_CTX {
 			for i, client := range sl.subInterface {
 				if client != nil {
-					err = client.NewGenesisPendingHeader(domPendingHeader, termini.SubTerminiAtIndex(i), genesisHash)
-					if err != nil {
-						return err
-					}
+					go func(client CoreBackend) {
+						err = client.NewGenesisPendingHeader(domPendingHeader, termini.SubTerminiAtIndex(i), genesisHash)
+						if err != nil {
+							sl.logger.Error("Error in NewGenesisPendingHeader, err", err)
+						}
+					}(client)
 				}
 			}
 		}
 
-		if sl.hc.Empty() {
-			domPendingHeader.WorkObjectHeader().SetTime(uint64(time.Now().Unix()))
-			sl.SetBestPh(domPendingHeader)
-		}
+		domPendingHeader.WorkObjectHeader().SetTime(uint64(time.Now().Unix()))
+		sl.SetBestPh(domPendingHeader)
 	}
 	return nil
 }
