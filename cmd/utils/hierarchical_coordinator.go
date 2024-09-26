@@ -925,8 +925,7 @@ func (hc *HierarchicalCoordinator) BuildPendingHeaders(wo *types.WorkObject, ord
 	var entropy *big.Int
 	misses := 0
 	var threshold int
-	threshold = 30
-	threshold = int(numRegions) * int(numZones) * 2 * threshold
+	threshold = 20
 
 	var start time.Time
 	var newPendingHeaders *PendingHeaders
