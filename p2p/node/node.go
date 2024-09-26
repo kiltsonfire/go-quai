@@ -8,7 +8,6 @@ import (
 
 	"github.com/libp2p/go-libp2p"
 	kaddht "github.com/libp2p/go-libp2p-kad-dht"
-	dual "github.com/libp2p/go-libp2p-kad-dht/dual"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/libp2p/go-libp2p/core/host"
@@ -32,7 +31,6 @@ import (
 	"github.com/dominant-strategies/go-quai/p2p/node/requestManager"
 	"github.com/dominant-strategies/go-quai/p2p/node/streamManager"
 	"github.com/dominant-strategies/go-quai/p2p/protocol"
-	"github.com/dominant-strategies/go-quai/params"
 	"github.com/dominant-strategies/go-quai/quai"
 )
 
@@ -71,7 +69,7 @@ type P2PNode struct {
 	host host.Host
 
 	// dht interface
-	dht *dual.DHT
+	dht *kaddht.IpfsDHT
 
 	// libp2p bandwidth counter
 	bandwidthCounter *libp2pmetrics.BandwidthCounter
@@ -109,8 +107,11 @@ func NewNode(ctx context.Context, quitCh chan struct{}) (*P2PNode, error) {
 	}
 	bwctr := libp2pmetrics.NewBandwidthCounter()
 
+	log.Global.Warn("listen addr strings", fmt.Sprintf("/ip4/%s/udp/%s/quic", ipAddr, port))
 	// Create the libp2p host
-	var dht *dual.DHT
+
+	peerKey := getNodeKey()
+	var dht *kaddht.IpfsDHT
 	host, err := libp2p.New(
 		// Pass in the resource manager
 		libp2p.ResourceManager(rmgr),
@@ -119,11 +120,12 @@ func NewNode(ctx context.Context, quitCh chan struct{}) (*P2PNode, error) {
 		libp2p.BandwidthReporter(bwctr),
 
 		// use a private key for persistent identity
-		libp2p.Identity(getNodeKey()),
+		libp2p.Identity(peerKey),
 
 		// pass the ip address and port to listen on
 		libp2p.ListenAddrStrings(
 			fmt.Sprintf("/ip4/%s/tcp/%s", ipAddr, port),
+			fmt.Sprintf("/ip4/%s/udp/%s/quic", ipAddr, port),
 		),
 
 		// support all transports
@@ -147,6 +149,8 @@ func NewNode(ctx context.Context, quitCh chan struct{}) (*P2PNode, error) {
 		// If publicly reachable, provide a relay service for other peers
 		libp2p.EnableRelayService(),
 
+		libp2p.EnableRelay(),
+
 		// If behind NAT, automatically advertise relay address through relay peers
 		// TODO: today the bootnodes act as static relays. In the future we should dynamically select relays from publicly reachable peers.
 		libp2p.EnableAutoRelayWithStaticRelays(peerMgr.RefreshBootpeers()),
@@ -163,15 +167,13 @@ func NewNode(ctx context.Context, quitCh chan struct{}) (*P2PNode, error) {
 
 		// Let this host use the DHT to find other hosts
 		libp2p.Routing(func(h host.Host) (routing.PeerRouting, error) {
-			dht, err = dual.New(ctx, h,
-				dual.WanDHTOption(
-					kaddht.Mode(kaddht.ModeServer),
-					kaddht.BootstrapPeersFunc(func() []peer.AddrInfo {
-						return peerMgr.RefreshBootpeers()
-					}),
-					kaddht.ProtocolPrefix("/quai"),
-					kaddht.RoutingTableRefreshPeriod(1*time.Minute),
-				),
+			dht, err = kaddht.New(ctx, h,
+				kaddht.Mode(kaddht.ModeServer),
+				kaddht.BootstrapPeersFunc(func() []peer.AddrInfo {
+					return peerMgr.RefreshBootpeers()
+				}),
+				kaddht.ProtocolPrefix("/quai"),
+				kaddht.RoutingTableRefreshPeriod(1*time.Minute),
 			)
 			return dht, err
 		}),
@@ -182,7 +184,7 @@ func NewNode(ctx context.Context, quitCh chan struct{}) (*P2PNode, error) {
 	}
 
 	idOpts := []identify.Option{
-		identify.UserAgent("go-quai " + params.VersionWithCommit("", "")),
+		identify.UserAgent("go-quai"),
 		identify.ProtocolVersion(string(protocol.ProtocolVersion)),
 	}
 
@@ -197,13 +199,56 @@ func NewNode(ctx context.Context, quitCh chan struct{}) (*P2PNode, error) {
 
 	// log the p2p node's ID
 	nodeID := host.ID()
-	log.Global.Infof("node created: %s", nodeID)
+	log.Global.Infof("node created: %s node type: %v", nodeID, reflect.TypeOf(host))
 
 	// Set peer manager's self ID
 	peerMgr.SetSelfID(nodeID)
 
 	// Set the DHT for the peer manager
 	peerMgr.SetDHT(dht)
+
+	// Connect to a few bootstrap nodes
+	// for _, addr := range peerMgr.RefreshBootpeers() {
+	// 	if err := host.Connect(ctx, addr); err != nil {
+	// 		log.Global.Warn("Error connecting to the boot peers", err)
+	// 	}
+	// }
+	// Bootstrapping the DHT (this step is essential for peer discovery)
+	if err := dht.Bootstrap(ctx); err != nil {
+		log.Global.Info("Failed to bootstrap DHT:", err)
+		return nil, err
+	}
+
+	// pubKey, err := host.ID().ExtractPublicKey()
+	// if err != nil {
+	// 	log.Global.Warn("Error extracting the public key", err)
+	// 	return nil, err
+	// }
+
+	// rawPubKey, err := pubKey.Raw()
+	// if err != nil {
+	// 	log.Global.Warn("Error extracting the raw public key", err)
+	// 	return nil, err
+	// }
+
+	// publicKey := &pb.PublicKey{Type: pb.KeyType_Ed25519.Enum(), Data: rawPubKey}
+	// marshalPublicKey, err := proto.Marshal(publicKey)
+	// if err != nil {
+	// 	log.Global.Error("error marshalling the public key", err)
+	// 	return nil, err
+	// }
+
+	// peerIdMultiHash, err := multihash.FromB58String(nodeID.String())
+	// if err != nil {
+	// 	log.Global.Error("error decoding the node id", err)
+	// 	return nil, err
+	// }
+
+	// err = dht.PutValue(ctx, "/pk/"+string(peerIdMultiHash), marshalPublicKey)
+	// if err != nil {
+	// 	log.Global.Error("Error putting peer id and multi addr info into the dht", err)
+	// 	return nil, err
+	// }
 
 	// Create a gossipsub instance with helper functions
 	ps, err := pubsubManager.NewGossipSubManager(ctx, host)

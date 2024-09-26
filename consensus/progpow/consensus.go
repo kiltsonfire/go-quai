@@ -2,7 +2,6 @@ package progpow
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"math/big"
 	"runtime"
@@ -14,10 +13,12 @@ import (
 	"github.com/dominant-strategies/go-quai/consensus"
 	"github.com/dominant-strategies/go-quai/consensus/misc"
 	"github.com/dominant-strategies/go-quai/core"
+	"github.com/dominant-strategies/go-quai/core/rawdb"
 	"github.com/dominant-strategies/go-quai/core/state"
 	"github.com/dominant-strategies/go-quai/core/types"
 	"github.com/dominant-strategies/go-quai/core/vm"
 	"github.com/dominant-strategies/go-quai/log"
+	"github.com/dominant-strategies/go-quai/multiset"
 	"github.com/dominant-strategies/go-quai/params"
 	"github.com/dominant-strategies/go-quai/trie"
 	"modernc.org/mathutil"
@@ -46,23 +47,6 @@ var (
 	big32         = big.NewInt(32)
 	bigMinus99    = big.NewInt(-99)
 	big2e256      = new(big.Int).Exp(big.NewInt(2), big.NewInt(256), big.NewInt(0)) // 2^256
-)
-
-// Various error messages to mark blocks invalid. These should be private to
-// prevent engine specific errors from being referenced in the remainder of the
-// codebase, inherently breaking if the engine is swapped out. Please put common
-// error types into the consensus package.
-var (
-	errOlderBlockTime      = errors.New("timestamp older than parent")
-	errTooManyUncles       = errors.New("too many uncles")
-	errDuplicateUncle      = errors.New("duplicate uncle")
-	errUncleIsAncestor     = errors.New("uncle is ancestor")
-	errDanglingUncle       = errors.New("uncle's parent is not ancestor")
-	errInvalidDifficulty   = errors.New("non-positive difficulty")
-	errDifficultyCrossover = errors.New("sub's difficulty exceeds dom's")
-	errInvalidMixHash      = errors.New("invalid mixHash")
-	errInvalidPoW          = errors.New("invalid proof-of-work")
-	errInvalidOrder        = errors.New("invalid order")
 )
 
 // Author implements consensus.Engine, returning the header's coinbase as the
@@ -197,7 +181,7 @@ func (progpow *Progpow) VerifyUncles(chain consensus.ChainReader, block *types.W
 	}
 	// Verify that there are at most params.MaxWorkShareCount uncles included in this block
 	if len(block.Uncles()) > params.MaxWorkShareCount {
-		return errTooManyUncles
+		return consensus.ErrTooManyUncles
 	}
 	if len(block.Uncles()) == 0 {
 		return nil
@@ -233,13 +217,13 @@ func (progpow *Progpow) VerifyUncles(chain consensus.ChainReader, block *types.W
 		// Make sure every uncle is rewarded only once
 		hash := uncle.Hash()
 		if uncles.Contains(hash) {
-			return errDuplicateUncle
+			return consensus.ErrDuplicateUncle
 		}
 		uncles.Add(hash)
 
 		// Make sure the uncle has a valid ancestry
 		if ancestors[hash] != nil {
-			return errUncleIsAncestor
+			return consensus.ErrUncleIsAncestor
 		}
 		// Siblings are not allowed to be included in the workshares list if its an
 		// uncle but can be if its a workshare
@@ -249,9 +233,14 @@ func (progpow *Progpow) VerifyUncles(chain consensus.ChainReader, block *types.W
 			workShare = true
 		}
 		if ancestors[uncle.ParentHash()] == nil || (!workShare && (uncle.ParentHash() == block.ParentHash(nodeCtx))) {
-			return errDanglingUncle
+			return consensus.ErrDanglingUncle
 		}
 		_, err = progpow.ComputePowHash(uncle)
+		if err != nil {
+			return err
+		}
+
+		_, err = chain.WorkShareDistance(block, uncle)
 		if err != nil {
 			return err
 		}
@@ -297,7 +286,7 @@ func (progpow *Progpow) verifyHeader(chain consensus.ChainHeaderReader, header, 
 		}
 	}
 	if header.Time() < parent.Time() {
-		return errOlderBlockTime
+		return consensus.ErrOlderBlockTime
 	}
 	// Verify the block's difficulty based on its timestamp and parent's difficulty
 	// difficulty adjustment can only be checked in zone
@@ -454,6 +443,15 @@ func (progpow *Progpow) verifyHeader(chain consensus.ChainHeaderReader, header, 
 			return fmt.Errorf("invalid baseFee: have %s, want %s, parentBaseFee %s, parentGasUsed %d",
 				expectedBaseFee, header.BaseFee(), parent.BaseFee(), parent.GasUsed())
 		}
+		// Verify that the stateUsed is <= stateLimit
+		if header.StateUsed() > header.StateLimit() {
+			return fmt.Errorf("invalid stateUsed: have %d, stateLimit %d", header.StateUsed(), header.StateLimit())
+		}
+		// Verify the StateLimit is correct based on the parent header.
+		expectedStateLimit := misc.CalcStateLimit(parent, params.StateCeil)
+		if header.StateLimit() != expectedStateLimit {
+			return fmt.Errorf("invalid StateLimit: have %d, want %d, parentStateLimit %d", expectedStateLimit, header.StateLimit(), parent.StateLimit())
+		}
 		var expectedPrimeTerminus common.Hash
 		var expectedPrimeTerminusNumber *big.Int
 		_, parentOrder, _ := progpow.CalcOrder(chain, parent)
@@ -562,11 +560,15 @@ func (progpow *Progpow) IsDomCoincident(chain consensus.ChainHeaderReader, heade
 }
 
 func (progpow *Progpow) ComputePowLight(header *types.WorkObjectHeader) (mixHash, powHash common.Hash) {
+	hashes, ok := progpow.hashCache.Peek(header.Hash())
+	if ok {
+		return common.Hash(hashes.mixHash), common.Hash(hashes.workHash)
+	}
 	powLight := func(size uint64, cache []uint32, hash common.Hash, nonce uint64, blockNumber uint64) ([]byte, []byte) {
 		ethashCache := progpow.cache(blockNumber)
 		if ethashCache.cDag == nil {
 			cDag := make([]uint32, progpowCacheWords)
-			generateCDag(cDag, ethashCache.cache, blockNumber/epochLength, progpow.logger)
+			generateCDag(cDag, ethashCache.cache, blockNumber/C_epochLength, progpow.logger)
 			ethashCache.cDag = cDag
 		}
 		return progpowLight(size, cache, hash.Bytes(), nonce, blockNumber, ethashCache.cDag, progpow.lookupCache)
@@ -579,6 +581,8 @@ func (progpow *Progpow) ComputePowLight(header *types.WorkObjectHeader) (mixHash
 	header.PowDigest.Store(mixHash)
 	header.PowHash.Store(powHash)
 
+	// Cache the hash
+	progpow.hashCache.Add(header.Hash(), mixHashWorkHash{mixHash: mixHash.Bytes(), workHash: powHash.Bytes()})
 	// Caches are unmapped in a finalizer. Ensure that the cache stays alive
 	// until after the call to hashimotoLight so it's not unmapped while being used.
 	runtime.KeepAlive(cache)
@@ -599,7 +603,7 @@ func (progpow *Progpow) verifySeal(header *types.WorkObjectHeader) (common.Hash,
 	if progpow.config.PowMode == ModeFake || progpow.config.PowMode == ModeFullFake {
 		time.Sleep(progpow.fakeDelay)
 		if progpow.fakeFail == header.NumberU64() {
-			return common.Hash{}, errInvalidPoW
+			return common.Hash{}, consensus.ErrInvalidPoW
 		}
 		return common.Hash{}, nil
 	}
@@ -609,23 +613,17 @@ func (progpow *Progpow) verifySeal(header *types.WorkObjectHeader) (common.Hash,
 	}
 	// Ensure that we have a valid difficulty for the block
 	if header.Difficulty().Sign() <= 0 {
-		return common.Hash{}, errInvalidDifficulty
+		return common.Hash{}, consensus.ErrInvalidDifficulty
 	}
-	// Check progpow
-	mixHash := header.PowDigest.Load()
-	powHash := header.PowHash.Load()
-	if powHash == nil || mixHash == nil {
-		mixHash, powHash = progpow.ComputePowLight(header)
-	}
-	// Verify the calculated values against the ones provided in the header
-	if !bytes.Equal(header.MixHash().Bytes(), mixHash.(common.Hash).Bytes()) {
-		return common.Hash{}, errInvalidMixHash
+	powHash, err := progpow.ComputePowHash(header)
+	if err != nil {
+		return common.Hash{}, err
 	}
 	target := new(big.Int).Div(big2e256, header.Difficulty())
-	if new(big.Int).SetBytes(powHash.(common.Hash).Bytes()).Cmp(target) > 0 {
-		return powHash.(common.Hash), errInvalidPoW
+	if new(big.Int).SetBytes(powHash.Bytes()).Cmp(target) > 0 {
+		return powHash, consensus.ErrInvalidPoW
 	}
-	return powHash.(common.Hash), nil
+	return powHash, nil
 }
 
 func (progpow *Progpow) ComputePowHash(header *types.WorkObjectHeader) (common.Hash, error) {
@@ -637,7 +635,7 @@ func (progpow *Progpow) ComputePowHash(header *types.WorkObjectHeader) (common.H
 	}
 	// Verify the calculated values against the ones provided in the header
 	if !bytes.Equal(header.MixHash().Bytes(), mixHash.(common.Hash).Bytes()) {
-		return common.Hash{}, errInvalidMixHash
+		return common.Hash{}, consensus.ErrInvalidMixHash
 	}
 	return powHash.(common.Hash), nil
 }
@@ -651,15 +649,16 @@ func (progpow *Progpow) Prepare(chain consensus.ChainHeaderReader, header *types
 
 // Finalize implements consensus.Engine, accumulating the block and uncle rewards,
 // setting the final state on the header
-func (progpow *Progpow) Finalize(chain consensus.ChainHeaderReader, header *types.WorkObject, state *state.StateDB) {
+func (progpow *Progpow) Finalize(chain consensus.ChainHeaderReader, header *types.WorkObject, state *state.StateDB, setRoots bool, utxosCreate, utxosDelete []common.Hash) (*multiset.MultiSet, error) {
 	nodeLocation := progpow.NodeLocation()
 	nodeCtx := progpow.NodeLocation().Context()
-
+	var multiSet *multiset.MultiSet
 	if nodeCtx == common.ZONE_CTX && chain.IsGenesisHash(header.ParentHash(nodeCtx)) {
+		multiSet = multiset.New()
 		// Create the lockup contract account
 		lockupContract, err := vm.LockupContractAddresses[[2]byte{nodeLocation[0], nodeLocation[1]}].InternalAndQuaiAddress()
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 		state.CreateAccount(lockupContract)
 
@@ -685,23 +684,40 @@ func (progpow *Progpow) Finalize(chain consensus.ChainHeaderReader, header *type
 			}
 		}
 		addressOutpointMap := make(map[string]map[string]*types.OutpointAndDenomination)
-		core.AddGenesisUtxos(state, nodeLocation, addressOutpointMap, progpow.logger)
+		core.AddGenesisUtxos(chain.Database(), &utxosCreate, nodeLocation, addressOutpointMap, progpow.logger)
 		if chain.Config().IndexAddressUtxos {
 			chain.WriteAddressOutpoints(addressOutpointMap)
 		}
+	} else {
+		multiSet = rawdb.ReadMultiSet(chain.Database(), header.ParentHash(nodeCtx))
 	}
-	header.Header().SetUTXORoot(state.UTXORoot())
-	header.Header().SetEVMRoot(state.IntermediateRoot(true))
-	header.Header().SetEtxSetRoot(state.ETXRoot())
+	if multiSet == nil {
+		return nil, fmt.Errorf("Multiset is nil for block %s", header.ParentHash(nodeCtx).String())
+	}
+	for _, hash := range utxosCreate {
+		multiSet.Add(hash.Bytes())
+	}
+	for _, hash := range utxosDelete {
+		multiSet.Remove(hash.Bytes())
+	}
+	if setRoots {
+		header.Header().SetUTXORoot(multiSet.Hash())
+		header.Header().SetEVMRoot(state.IntermediateRoot(true))
+		header.Header().SetEtxSetRoot(state.ETXRoot())
+		header.Header().SetQuaiStateSize(state.GetQuaiTrieSize())
+	}
+	return multiSet, nil
 }
 
 // FinalizeAndAssemble implements consensus.Engine, accumulating the block and
 // uncle rewards, setting the final state and assembling the block.
-func (progpow *Progpow) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.WorkObject, state *state.StateDB, txs []*types.Transaction, uncles []*types.WorkObjectHeader, etxs []*types.Transaction, subManifest types.BlockManifest, receipts []*types.Receipt) (*types.WorkObject, error) {
+func (progpow *Progpow) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.WorkObject, state *state.StateDB, txs []*types.Transaction, uncles []*types.WorkObjectHeader, etxs []*types.Transaction, subManifest types.BlockManifest, receipts []*types.Receipt, utxosCreate, utxosDelete []common.Hash) (*types.WorkObject, error) {
 	nodeCtx := progpow.config.NodeLocation.Context()
 	if nodeCtx == common.ZONE_CTX && chain.ProcessingState() {
 		// Finalize block
-		progpow.Finalize(chain, header, state)
+		if _, err := progpow.Finalize(chain, header, state, true, utxosCreate, utxosDelete); err != nil {
+			return nil, err
+		}
 	}
 
 	woBody, err := types.NewWorkObjectBody(header.Header(), txs, etxs, uncles, subManifest, receipts, trie.NewStackTrie(nil), nodeCtx)

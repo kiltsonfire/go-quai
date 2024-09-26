@@ -39,18 +39,23 @@ import (
 )
 
 const (
-	c_GlobalFlagPrefix  = "global."
-	c_NodeFlagPrefix    = "node."
-	c_TXPoolPrefix      = "txpool."
-	c_RPCFlagPrefix     = "rpc."
-	c_PeersFlagPrefix   = "peers."
-	c_MetricsFlagPrefix = "metrics."
+	c_GlobalFlagPrefix    = "global."
+	c_NodeFlagPrefix      = "node."
+	c_TXPoolPrefix        = "txpool."
+	c_RPCFlagPrefix       = "rpc."
+	c_WorkShareFlagPrefix = "workshare."
+	c_PeersFlagPrefix     = "peers."
+	c_MetricsFlagPrefix   = "metrics."
+
+	c_regionPortOffset = 1
+	c_zonePortOffset   = 199
 )
 
 var Flags = [][]Flag{
 	GlobalFlags,
 	NodeFlags,
 	TXPoolFlags,
+	WorkShareFlags,
 	RPCFlags,
 	PeersFlags,
 	MetricsFlags,
@@ -112,6 +117,7 @@ var NodeFlags = []Flag{
 	IndexAddressUtxos,
 	StartingExpansionNumberFlag,
 	NodeLogLevelFlag,
+	GenesisNonce,
 }
 
 var TXPoolFlags = []Flag{
@@ -128,6 +134,12 @@ var TXPoolFlags = []Flag{
 	TxPoolLifetimeFlag,
 }
 
+var WorkShareFlags = []Flag{
+	WorkShareMiningFlag,
+	WorkShareThresholdFlag,
+	WorkShareMinerEndpoints,
+}
+
 var RPCFlags = []Flag{
 	HTTPEnabledFlag,
 	HTTPListenAddrFlag,
@@ -135,11 +147,13 @@ var RPCFlags = []Flag{
 	HTTPVirtualHostsFlag,
 	HTTPApiFlag,
 	HTTPPathPrefixFlag,
+	HTTPPortStartFlag,
 	WSEnabledFlag,
 	WSListenAddrFlag,
 	WSApiFlag,
 	WSAllowedOriginsFlag,
 	WSPathPrefixFlag,
+	WSPortStartFlag,
 	PreloadJSFlag,
 	RPCGlobalTxFeeCapFlag,
 	RPCGlobalGasCapFlag,
@@ -560,6 +574,12 @@ var (
 		Value: "info",
 		Usage: "log level (trace, debug, info, warn, error, fatal, panic)" + generateEnvDoc(c_GlobalFlagPrefix+"log-level"),
 	}
+
+	GenesisNonce = Flag{
+		Name:  c_NodeFlagPrefix + "genesis-nonce",
+		Value: 0,
+		Usage: "Nonce to use for the genesis block" + generateEnvDoc(c_NodeFlagPrefix+"genesis-nonce"),
+	}
 )
 
 var (
@@ -570,7 +590,7 @@ var (
 	// ****************************************
 	HTTPEnabledFlag = Flag{
 		Name:  c_RPCFlagPrefix + "http",
-		Value: false,
+		Value: true,
 		Usage: "Enable the HTTP-RPC server" + generateEnvDoc(c_RPCFlagPrefix+"http"),
 	}
 
@@ -604,9 +624,15 @@ var (
 		Usage: "HTTP path path prefix on which JSON-RPC is served. Use '/' to serve on all paths." + generateEnvDoc(c_RPCFlagPrefix+"http-rpcprefix"),
 	}
 
+	HTTPPortStartFlag = Flag{
+		Name:  c_RPCFlagPrefix + "http-port",
+		Value: 9001,
+		Usage: "HTTP-RPC server listening port" + generateEnvDoc(c_RPCFlagPrefix+"http-port"),
+	}
+
 	WSEnabledFlag = Flag{
 		Name:  c_RPCFlagPrefix + "ws",
-		Value: false,
+		Value: true,
 		Usage: "Enable the WS-RPC server" + generateEnvDoc(c_RPCFlagPrefix+"ws"),
 	}
 
@@ -634,6 +660,12 @@ var (
 		Usage: "HTTP path prefix on which JSON-RPC is served. Use '/' to serve on all paths." + generateEnvDoc(c_RPCFlagPrefix+"ws-rpcprefix"),
 	}
 
+	WSPortStartFlag = Flag{
+		Name:  c_RPCFlagPrefix + "ws-port",
+		Value: 8001,
+		Usage: "WS-RPC server listening port" + generateEnvDoc(c_RPCFlagPrefix+"ws-port"),
+	}
+
 	PreloadJSFlag = Flag{
 		Name:  c_RPCFlagPrefix + "preload",
 		Value: "",
@@ -650,6 +682,31 @@ var (
 		Name:  c_RPCFlagPrefix + "gascap",
 		Value: quaiconfig.Defaults.RPCGasCap,
 		Usage: "Sets a cap on gas that can be used in eth_call/estimateGas (0=infinite)" + generateEnvDoc(c_RPCFlagPrefix+"gascap"),
+	}
+)
+
+var (
+	// ****************************************
+	// **                                    **
+	// **         WORKSHARE FLAGS            **
+	// **                                    **
+	// ****************************************
+	WorkShareMiningFlag = Flag{
+		Name:  c_WorkShareFlagPrefix + "mining",
+		Value: false,
+		Usage: "Enable workshare mining" + generateEnvDoc(c_WorkShareFlagPrefix+"mining"),
+	}
+
+	WorkShareThresholdFlag = Flag{
+		Name:  c_WorkShareFlagPrefix + "threshold",
+		Value: 10,
+		Usage: "Threshold for workshare" + generateEnvDoc(c_WorkShareFlagPrefix+"threshold"),
+	}
+
+	WorkShareMinerEndpoints = Flag{
+		Name:  c_WorkShareFlagPrefix + "miners",
+		Value: "",
+		Usage: "RPC endpoint to send minimally mined transactions for further working" + generateEnvDoc(c_WorkShareFlagPrefix+"miners"),
 	}
 )
 
@@ -826,13 +883,19 @@ func setHTTP(cfg *node.Config, nodeLocation common.Location) {
 }
 
 func GetHttpPort(nodeLocation common.Location) int {
+	var startPort int
+	if viper.IsSet(HTTPPortStartFlag.Name) {
+		startPort = viper.GetInt(HTTPPortStartFlag.Name)
+	} else {
+		startPort = HTTPPortStartFlag.Value.(int)
+	}
 	switch nodeLocation.Context() {
 	case common.PRIME_CTX:
-		return 9001
+		return startPort
 	case common.REGION_CTX:
-		return 9002 + nodeLocation.Region()
+		return (startPort + c_regionPortOffset) + nodeLocation.Region()
 	case common.ZONE_CTX:
-		return 9200 + 20*nodeLocation.Region() + nodeLocation.Zone()
+		return (startPort + c_zonePortOffset) + 20*nodeLocation.Region() + nodeLocation.Zone()
 	}
 	panic("node location is not valid")
 }
@@ -863,13 +926,19 @@ func setWS(cfg *node.Config, nodeLocation common.Location) {
 }
 
 func GetWSPort(nodeLocation common.Location) int {
+	var startPort int
+	if viper.IsSet(WSPortStartFlag.Name) {
+		startPort = viper.GetInt(WSPortStartFlag.Name)
+	} else {
+		startPort = WSPortStartFlag.Value.(int)
+	}
 	switch nodeLocation.Context() {
 	case common.PRIME_CTX:
-		return 8001
+		return startPort
 	case common.REGION_CTX:
-		return 8002 + nodeLocation.Region()
+		return (startPort + c_regionPortOffset) + nodeLocation.Region()
 	case common.ZONE_CTX:
-		return 8200 + 20*nodeLocation.Region() + nodeLocation.Zone()
+		return (startPort + c_zonePortOffset) + 20*nodeLocation.Region() + nodeLocation.Zone()
 	}
 	panic("node location is not valid")
 }
@@ -1335,6 +1404,15 @@ func SetQuaiConfig(stack *node.Node, cfg *quaiconfig.Config, slicesRunning []com
 	if viper.IsSet(RPCGlobalTxFeeCapFlag.Name) {
 		cfg.RPCTxFeeCap = viper.GetFloat64(RPCGlobalTxFeeCapFlag.Name)
 	}
+
+	cfg.Miner.WorkShareMining = viper.GetBool(WorkShareMiningFlag.Name)
+	cfg.Miner.WorkShareThreshold = params.WorkSharesThresholdDiff + viper.GetInt(WorkShareThresholdFlag.Name)
+	if viper.IsSet(WorkShareMinerEndpoints.Name) {
+		if viper.GetString(WorkShareMinerEndpoints.Name) != "" {
+			cfg.Miner.Endpoints = []string{viper.GetString(WorkShareMinerEndpoints.Name)}
+		}
+	}
+
 	// Override any default configs for hard coded networks.
 	switch viper.GetString(EnvironmentFlag.Name) {
 	case params.ColosseumName:
@@ -1445,12 +1523,15 @@ func MakeChainDatabase(stack *node.Node, readonly bool) ethdb.Database {
 }
 
 func MakeGenesis() *core.Genesis {
+	genesisNonce := viper.GetUint64(GenesisNonce.Name)
 	var genesis *core.Genesis
 	switch viper.GetString(EnvironmentFlag.Name) {
 	case params.ColosseumName:
 		genesis = core.DefaultColosseumGenesisBlock(viper.GetString(ConsensusEngineFlag.Name))
+		genesis.Nonce = genesisNonce
 	case params.GardenName:
 		genesis = core.DefaultGardenGenesisBlock(viper.GetString(ConsensusEngineFlag.Name))
+		genesis.Nonce = genesisNonce
 	case params.OrchardName:
 		genesis = core.DefaultOrchardGenesisBlock(viper.GetString(ConsensusEngineFlag.Name))
 	case params.LighthouseName:

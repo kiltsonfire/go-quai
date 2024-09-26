@@ -91,6 +91,7 @@ type Header struct {
 	uncleHash             common.Hash   `json:"sha3Uncles"            gencodec:"required"`
 	evmRoot               common.Hash   `json:"evmRoot"               gencodec:"required"`
 	utxoRoot              common.Hash   `json:"utxoRoot"              gencodec:"required"`
+	quaiStateSize         *big.Int      `json:"quaiStateSize"         gencodec:"required"`
 	txHash                common.Hash   `json:"transactionsRoot"      gencodec:"required"`
 	etxHash               common.Hash   `json:"extTransactionsRoot"   gencodec:"required"`
 	etxSetRoot            common.Hash   `json:"etxSetRoot"            gencodec:"required"`
@@ -102,7 +103,7 @@ type Header struct {
 	parentUncledSubDeltaS []*big.Int    `json:"parentUncledSubDeltaS" gencodec:"required"`
 	efficiencyScore       uint16        `json:"efficiencyScore"       gencodec:"required"`
 	thresholdCount        uint16        `json:"thresholdCount"        gencodec:"required"`
-	expansionNumber       uint8         `json:"expansionNumber"     	gencodec:"required"`
+	expansionNumber       uint8         `json:"expansionNumber"    	  gencodec:"required"`
 	etxEligibleSlices     common.Hash   `json:"etxEligibleSlices"     gencodec:"required"`
 	primeTerminus         common.Hash   `json:"primeTerminus"         gencodec:"required"`
 	interlinkRootHash     common.Hash   `json:"interlinkRootHash"     gencodec:"required"`
@@ -112,6 +113,8 @@ type Header struct {
 	gasUsed               uint64        `json:"gasUsed"               gencodec:"required"`
 	baseFee               *big.Int      `json:"baseFeePerGas"         gencodec:"required"`
 	extra                 []byte        `json:"extraData"             gencodec:"required"`
+	stateLimit            uint64        `json:"stateLimit" 			  gencodec:"required"`
+	stateUsed             uint64        `json:"stateUsed"             gencodec:"required"`
 
 	// caches
 	hash     atomic.Value
@@ -146,12 +149,15 @@ func EmptyHeader() *Header {
 	h.uncledS = big.NewInt(0)
 	h.evmRoot = EmptyRootHash
 	h.utxoRoot = EmptyRootHash
+	h.quaiStateSize = big.NewInt(0)
 	h.txHash = EmptyRootHash
 	h.etxHash = EmptyRootHash
 	h.etxSetRoot = EmptyRootHash
 	h.etxRollupHash = EmptyRootHash
 	h.uncleHash = EmptyUncleHash
 	h.baseFee = big.NewInt(0)
+	h.stateLimit = 0
+	h.stateUsed = 0
 	h.extra = []byte{}
 	h.efficiencyScore = 0
 	h.thresholdCount = 0
@@ -214,6 +220,8 @@ func (h *Header) ProtoEncode() (*ProtoHeader, error) {
 	interlinkRootHash := common.ProtoHash{Value: h.InterlinkRootHash().Bytes()}
 	gasLimit := h.GasLimit()
 	gasUsed := h.GasUsed()
+	stateLimit := h.StateLimit()
+	stateUsed := h.StateUsed()
 	efficiencyScore := uint64(h.EfficiencyScore())
 	thresholdCount := uint64(h.ThresholdCount())
 	expansionNumber := uint64(h.ExpansionNumber())
@@ -225,6 +233,7 @@ func (h *Header) ProtoEncode() (*ProtoHeader, error) {
 		TxHash:            &txHash,
 		EtxHash:           &etxhash,
 		EtxSetRoot:        &etxSetRoot,
+		QuaiStateSize:     h.QuaiStateSize().Bytes(),
 		EtxRollupHash:     &etxRollupHash,
 		ReceiptHash:       &receiptHash,
 		PrimeTerminus:     &primeTerminus,
@@ -237,6 +246,8 @@ func (h *Header) ProtoEncode() (*ProtoHeader, error) {
 		ThresholdCount:    &thresholdCount,
 		ExpansionNumber:   &expansionNumber,
 		BaseFee:           h.BaseFee().Bytes(),
+		StateLimit:        &stateLimit,
+		StateUsed:         &stateUsed,
 		Extra:             h.Extra(),
 	}
 
@@ -333,6 +344,9 @@ func (h *Header) ProtoDecode(protoHeader *ProtoHeader, location common.Location)
 	if protoHeader.PrimeTerminus == nil {
 		return errors.New("missing required field 'PrimeTerminus' in Header")
 	}
+	if protoHeader.QuaiStateSize == nil {
+		return errors.New("missing required field 'QuaiStateSize' in Header")
+	}
 
 	// Initialize the array fields before setting
 	h.parentHash = make([]common.Hash, common.HierarchyDepth-1)
@@ -355,6 +369,7 @@ func (h *Header) ProtoDecode(protoHeader *ProtoHeader, location common.Location)
 
 	h.SetUncleHash(common.BytesToHash(protoHeader.GetUncleHash().GetValue()))
 	h.SetEVMRoot(common.BytesToHash(protoHeader.GetEvmRoot().GetValue()))
+	h.SetQuaiStateSize(new(big.Int).SetBytes(protoHeader.GetQuaiStateSize()))
 	h.SetUTXORoot(common.BytesToHash(protoHeader.GetUtxoRoot().GetValue()))
 	h.SetTxHash(common.BytesToHash(protoHeader.GetTxHash().GetValue()))
 	h.SetReceiptHash(common.BytesToHash(protoHeader.GetReceiptHash().GetValue()))
@@ -367,6 +382,8 @@ func (h *Header) ProtoDecode(protoHeader *ProtoHeader, location common.Location)
 	h.SetGasLimit(protoHeader.GetGasLimit())
 	h.SetGasUsed(protoHeader.GetGasUsed())
 	h.SetBaseFee(new(big.Int).SetBytes(protoHeader.GetBaseFee()))
+	h.SetStateLimit((protoHeader.GetStateLimit()))
+	h.SetStateUsed((protoHeader.GetStateUsed()))
 	h.SetExtra(protoHeader.GetExtra())
 	h.SetEfficiencyScore(uint16(protoHeader.GetEfficiencyScore()))
 	h.SetThresholdCount(uint16(protoHeader.GetThresholdCount()))
@@ -389,6 +406,7 @@ func (h *Header) RPCMarshalHeader() map[string]interface{} {
 		"hash":                h.Hash(),
 		"parentHash":          h.ParentHashArray(),
 		"uncledS":             (*hexutil.Big)(h.UncledS()),
+		"quaiStateSize":       (*hexutil.Big)(h.QuaiStateSize()),
 		"sha3Uncles":          h.UncleHash(),
 		"evmRoot":             h.EVMRoot(),
 		"utxoRoot":            h.UTXORoot(),
@@ -408,6 +426,8 @@ func (h *Header) RPCMarshalHeader() map[string]interface{} {
 		"thresholdCount":      hexutil.Uint64(h.ThresholdCount()),
 		"expansionNumber":     hexutil.Uint64(h.ExpansionNumber()),
 		"etxEligibleSlices":   h.EtxEligibleSlices(),
+		"stateLimit":          hexutil.Uint64(h.StateLimit()),
+		"stateUsed":           hexutil.Uint64(h.StateUsed()),
 	}
 
 	number := make([]*hexutil.Big, common.HierarchyDepth)
@@ -449,6 +469,9 @@ func (h *Header) EVMRoot() common.Hash {
 }
 func (h *Header) UTXORoot() common.Hash {
 	return h.utxoRoot
+}
+func (h *Header) QuaiStateSize() *big.Int {
+	return h.quaiStateSize
 }
 func (h *Header) TxHash() common.Hash {
 	return h.txHash
@@ -507,6 +530,12 @@ func (h *Header) EtxEligibleSlices() common.Hash {
 func (h *Header) BaseFee() *big.Int {
 	return h.baseFee
 }
+func (h *Header) StateLimit() uint64 {
+	return h.stateLimit
+}
+func (h *Header) StateUsed() uint64 {
+	return h.stateUsed
+}
 func (h *Header) Extra() []byte                  { return common.CopyBytes(h.extra) }
 func (h *Header) PrimeTerminus() common.Hash     { return h.primeTerminus }
 func (h *Header) InterlinkRootHash() common.Hash { return h.interlinkRootHash }
@@ -525,6 +554,11 @@ func (h *Header) SetEVMRoot(val common.Hash) {
 	h.hash = atomic.Value{}     // clear hash cache
 	h.sealHash = atomic.Value{} // clear sealHash cache
 	h.evmRoot = val
+}
+func (h *Header) SetQuaiStateSize(val *big.Int) {
+	h.hash = atomic.Value{}     // clear hash cache
+	h.sealHash = atomic.Value{} // clear sealHash cache
+	h.quaiStateSize = val
 }
 func (h *Header) SetUTXORoot(val common.Hash) {
 	h.hash = atomic.Value{}     // clear hash cache
@@ -635,6 +669,16 @@ func (h *Header) SetBaseFee(val *big.Int) {
 	h.sealHash = atomic.Value{} // clear sealHash cache
 	h.baseFee = new(big.Int).Set(val)
 }
+func (h *Header) SetStateLimit(val uint64) {
+	h.hash = atomic.Value{}     // clear hash cache
+	h.sealHash = atomic.Value{} // clear sealHash cache
+	h.stateLimit = val
+}
+func (h *Header) SetStateUsed(val uint64) {
+	h.hash = atomic.Value{}     // clear hash cache
+	h.sealHash = atomic.Value{} // 	clear sealHash cache
+	h.stateUsed = val
+}
 func (h *Header) SetExtra(val []byte) {
 	h.hash = atomic.Value{}     // clear hash cache
 	h.sealHash = atomic.Value{} // clear sealHash cache
@@ -668,6 +712,8 @@ func (h *Header) SealEncode() *ProtoHeader {
 	expansionNumber := uint64(h.ExpansionNumber())
 	gasLimit := h.GasLimit()
 	gasUsed := h.GasUsed()
+	stateLimit := h.StateLimit()
+	stateUsed := h.StateUsed()
 
 	protoSealData := &ProtoHeader{
 		UncleHash:         &uncleHash,
@@ -680,7 +726,10 @@ func (h *Header) SealEncode() *ProtoHeader {
 		ReceiptHash:       &receiptHash,
 		GasLimit:          &gasLimit,
 		GasUsed:           &gasUsed,
+		QuaiStateSize:     h.QuaiStateSize().Bytes(),
 		BaseFee:           h.BaseFee().Bytes(),
+		StateLimit:        &stateLimit,
+		StateUsed:         &stateUsed,
 		UncledS:           h.UncledS().Bytes(),
 		PrimeTerminus:     &primeTerminus,
 		InterlinkRootHash: &interlinkRootHash,
@@ -849,6 +898,7 @@ func CopyHeader(h *Header) *Header {
 		cpy.SetParentHash(h.ParentHash(i), i)
 		cpy.SetNumber(h.Number(i), i)
 	}
+	cpy.SetQuaiStateSize(h.QuaiStateSize())
 	cpy.SetUncledS(h.UncledS())
 	cpy.SetUncleHash(h.UncleHash())
 	cpy.SetEVMRoot(h.EVMRoot())
@@ -870,6 +920,8 @@ func CopyHeader(h *Header) *Header {
 	cpy.SetExpansionNumber(h.ExpansionNumber())
 	cpy.SetEtxEligibleSlices(h.EtxEligibleSlices())
 	cpy.SetBaseFee(h.BaseFee())
+	cpy.SetStateLimit(h.StateLimit())
+	cpy.SetStateUsed(h.StateUsed())
 	return &cpy
 }
 

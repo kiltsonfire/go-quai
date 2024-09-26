@@ -13,10 +13,12 @@ import (
 
 	lru "github.com/hashicorp/golang-lru/v2"
 	expireLru "github.com/hashicorp/golang-lru/v2/expirable"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 
 	"github.com/dominant-strategies/go-quai/common"
 	"github.com/dominant-strategies/go-quai/common/math"
 	"github.com/dominant-strategies/go-quai/consensus"
+	"github.com/dominant-strategies/go-quai/consensus/misc"
 	"github.com/dominant-strategies/go-quai/core/rawdb"
 	"github.com/dominant-strategies/go-quai/core/state"
 	"github.com/dominant-strategies/go-quai/core/state/snapshot"
@@ -69,7 +71,10 @@ type Core struct {
 
 	procCounter int
 
-	normalListBackoff uint64 // normalListBackoff is the multiple on c_normalListProcCounter which delays the proc on normal list
+	normalListBackoff  uint64 // normalListBackoff is the multiple on c_normalListProcCounter which delays the proc on normal list
+	workShareMining    bool   // whether to mine workshare transactions
+	workShareThreshold int    // workShareThreshold is the minimum fraction of a share that this node will accept to mine a transaction
+	endpoints          []string
 
 	quit chan struct{} // core quit channel
 
@@ -83,19 +88,23 @@ func NewCore(db ethdb.Database, config *Config, isLocalBlock func(block *types.W
 	}
 
 	c := &Core{
-		sl:                slice,
-		engine:            engine,
-		quit:              make(chan struct{}),
-		procCounter:       0,
-		normalListBackoff: 1,
-		logger:            logger,
+		sl:                 slice,
+		engine:             engine,
+		quit:               make(chan struct{}),
+		procCounter:        0,
+		normalListBackoff:  1,
+		workShareMining:    config.WorkShareMining,
+		workShareThreshold: config.WorkShareThreshold,
+		endpoints:          config.Endpoints,
+		logger:             logger,
 	}
 
 	// Initialize the sync target to current header parent entropy
 	appendQueue, _ := lru.New[common.Hash, blockNumberAndRetryCounter](c_maxAppendQueue)
 	c.appendQueue = appendQueue
 
-	c.processingCache = expireLru.NewLRU[common.Hash, interface{}](c_processingCache, nil, time.Second*60)
+	processingCache := expireLru.NewLRU[common.Hash, interface{}](c_processingCache, nil, time.Second*60)
+	c.processingCache = processingCache
 
 	remoteTxQueue, _ := lru.New[common.Hash, types.Transaction](c_maxRemoteTxQueue)
 	c.remoteTxQueue = remoteTxQueue
@@ -114,6 +123,14 @@ func NewCore(db ethdb.Database, config *Config, isLocalBlock func(block *types.W
 // the number of blocks which were successfully consumed (either appended, or
 // cached), and an error.
 func (c *Core) InsertChain(blocks types.WorkObjects) (int, error) {
+	defer func() {
+		if r := recover(); r != nil {
+			c.logger.WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Error("Go-Quai Panicked")
+		}
+	}()
 	nodeCtx := c.NodeCtx()
 	for idx, block := range blocks {
 		// Only attempt to append a block, if it is not coincident with our dominant
@@ -134,7 +151,7 @@ func (c *Core) InsertChain(blocks types.WorkObjects) (int, error) {
 				}).Info("Already processing block")
 				return idx, errors.New("Already in process of appending this block")
 			}
-			newPendingEtxs, _, err := c.sl.Append(block, types.EmptyWorkObject(c.NodeCtx()), common.Hash{}, false, nil)
+			newPendingEtxs, err := c.sl.Append(block, common.Hash{}, false, nil)
 			c.processingCache.Remove(block.Hash())
 			if err == nil {
 				// If we have a dom, send the dom any pending ETXs which will become
@@ -324,6 +341,14 @@ func (c *Core) serviceBlocks(hashNumberList []types.HashAndNumber) {
 }
 
 func (c *Core) RequestDomToAppendOrFetch(hash common.Hash, entropy *big.Int, order int) {
+	defer func() {
+		if r := recover(); r != nil {
+			c.logger.WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Error("Go-Quai Panicked")
+		}
+	}()
 	// TODO: optimize to check if the block is in the appendqueue or already
 	// appended to reduce the network bandwidth utilization
 	nodeCtx := c.NodeLocation().Context()
@@ -443,8 +468,6 @@ func (c *Core) startRemoteTxQueue() {
 }
 
 func (c *Core) startStatsTimer() {
-	futureTimer := time.NewTicker(c_statsPrintPeriod * time.Second)
-	defer futureTimer.Stop()
 	defer func() {
 		if r := recover(); r != nil {
 			c.logger.WithFields(log.Fields{
@@ -453,6 +476,8 @@ func (c *Core) startStatsTimer() {
 			}).Fatal("Go-Quai Panicked")
 		}
 	}()
+	futureTimer := time.NewTicker(c_statsPrintPeriod * time.Second)
+	defer futureTimer.Stop()
 	for {
 		select {
 		case <-futureTimer.C:
@@ -528,7 +553,7 @@ func (c *Core) Engine() consensus.Engine {
 	return c.engine
 }
 
-func (c *Core) CheckIfValidWorkShare(workShare *types.WorkObjectHeader) bool {
+func (c *Core) CheckIfValidWorkShare(workShare *types.WorkObjectHeader) types.WorkShareValidity {
 	return c.engine.CheckIfValidWorkShare(workShare)
 }
 
@@ -595,11 +620,11 @@ func (c *Core) WriteBlock(block *types.WorkObject) {
 
 }
 
-func (c *Core) Append(header *types.WorkObject, manifest types.BlockManifest, domPendingHeader *types.WorkObject, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.Transactions) (types.Transactions, bool, error) {
+func (c *Core) Append(header *types.WorkObject, manifest types.BlockManifest, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.Transactions) (types.Transactions, error) {
 	nodeCtx := c.NodeCtx()
 	// Set the coinbase into the right interface before calling append in the sub
 	header.WorkObjectHeader().SetCoinbase(common.BytesToAddress(header.Coinbase().Bytes(), c.NodeLocation()))
-	newPendingEtxs, setHead, err := c.sl.Append(header, domPendingHeader, domTerminus, domOrigin, newInboundEtxs)
+	newPendingEtxs, err := c.sl.Append(header, domTerminus, domOrigin, newInboundEtxs)
 	if err != nil {
 		if err.Error() == ErrBodyNotFound.Error() || err.Error() == consensus.ErrUnknownAncestor.Error() || err.Error() == ErrSubNotSyncedToDom.Error() {
 			// Fetch the blocks for each hash in the manifest
@@ -625,7 +650,7 @@ func (c *Core) Append(header *types.WorkObject, manifest types.BlockManifest, do
 			}
 		}
 	}
-	return newPendingEtxs, setHead, err
+	return newPendingEtxs, err
 }
 
 func (c *Core) DownloadBlocksInManifest(blockHash common.Hash, manifest types.BlockManifest, entropy *big.Int) {
@@ -656,14 +681,6 @@ func (c *Core) ConstructLocalMinedBlock(woHeader *types.WorkObject) (*types.Work
 
 func (c *Core) GetPendingBlockBody(woHeader *types.WorkObjectHeader) *types.WorkObject {
 	return c.sl.GetPendingBlockBody(woHeader)
-}
-
-func (c *Core) SubRelayPendingHeader(slPendingHeader types.PendingHeader, newEntropy *big.Int, location common.Location, subReorg bool, order int, updateDomLocation common.Location) {
-	c.sl.SubRelayPendingHeader(slPendingHeader, newEntropy, location, subReorg, order, updateDomLocation)
-}
-
-func (c *Core) UpdateDom(oldDomReference common.Hash, pendingHeader *types.WorkObject, location common.Location) {
-	c.sl.UpdateDom(oldDomReference, pendingHeader, location)
 }
 
 func (c *Core) NewGenesisPendigHeader(pendingHeader *types.WorkObject, domTerminus common.Hash, genesisHash common.Hash) error {
@@ -774,6 +791,22 @@ func (c *Core) SanityCheckWorkObjectShareViewBody(wo *types.WorkObject) error {
 	return c.sl.validator.SanityCheckWorkObjectShareViewBody(wo)
 }
 
+func (c *Core) ApplyPoWFilter(wo *types.WorkObject) pubsub.ValidationResult {
+	return c.sl.validator.ApplyPoWFilter(wo)
+}
+
+func (c *Core) Database() ethdb.Database {
+	return c.sl.sliceDb
+}
+
+func (c *Core) GeneratePendingHeader(block *types.WorkObject, fill bool) (*types.WorkObject, error) {
+	return c.sl.GeneratePendingHeader(block, fill)
+}
+
+func (c *Core) MakeFullPendingHeader(primePh, regionPh, zonePh *types.WorkObject) *types.WorkObject {
+	return c.sl.MakeFullPendingHeader(primePh, regionPh, zonePh)
+}
+
 //---------------------//
 // HeaderChain methods //
 //---------------------//
@@ -862,6 +895,14 @@ func (c *Core) GetHeaderByHash(hash common.Hash) *types.WorkObject {
 	return c.sl.hc.GetHeaderByHash(hash)
 }
 
+func (c *Core) CheckInCalcOrderCache(hash common.Hash) (*big.Int, int, bool) {
+	return c.sl.hc.CheckInCalcOrderCache(hash)
+}
+
+func (c *Core) AddToCalcOrderCache(hash common.Hash, order int, intrinsicS *big.Int) {
+	c.sl.hc.AddToCalcOrderCache(hash, order, intrinsicS)
+}
+
 // GetHeaderOrCandidateByHash retrieves a block header from the database by hash, caching it if
 // found.
 func (c *Core) GetHeaderOrCandidateByHash(hash common.Hash) *types.WorkObject {
@@ -892,6 +933,12 @@ func (c *Core) GetBlockHashesFromHash(hash common.Hash, max uint64) []common.Has
 // Note: ancestor == 0 returns the same block, 1 returns its parent and so on.
 func (c *Core) GetAncestor(hash common.Hash, number, ancestor uint64, maxNonCanonical *uint64) (common.Hash, uint64) {
 	return c.sl.hc.GetAncestor(hash, number, ancestor, maxNonCanonical)
+}
+
+// WorkShareDistance calculates the geodesic distance between the
+// workshare and the workobject in which that workshare is included.
+func (c *Core) WorkShareDistance(wo *types.WorkObject, ws *types.WorkObjectHeader) (*big.Int, error) {
+	return c.sl.hc.WorkShareDistance(wo, ws)
 }
 
 // Genesis retrieves the chain's genesis block.
@@ -956,6 +1003,18 @@ func (c *Core) GetMaxTxInWorkShare() uint64 {
 	return c.sl.hc.GetMaxTxInWorkShare()
 }
 
+func (c *Core) TxMiningEnabled() bool {
+	return c.workShareMining
+}
+
+func (c *Core) GetWorkShareThreshold() int {
+	return c.workShareThreshold
+}
+
+func (c *Core) GetMinerEndpoints() []string {
+	return c.endpoints
+}
+
 //--------------------//
 // BlockChain methods //
 //--------------------//
@@ -1002,7 +1061,7 @@ func (c *Core) Snapshots() *snapshot.Tree {
 }
 
 func (c *Core) TxLookupLimit() uint64 {
-	return 0
+	return c.Processor().txLookupLimit
 }
 
 func (c *Core) SetExtra(extra []byte) error {
@@ -1123,8 +1182,8 @@ func (c *Core) State() (*state.StateDB, error) {
 }
 
 // StateAt returns a new mutable state based on a particular point in time.
-func (c *Core) StateAt(root, utxoRoot, etxRoot common.Hash) (*state.StateDB, error) {
-	return c.sl.hc.bc.processor.StateAt(root, utxoRoot, etxRoot)
+func (c *Core) StateAt(root, etxRoot common.Hash, quaiStateSize *big.Int) (*state.StateDB, error) {
+	return c.sl.hc.bc.processor.StateAt(root, etxRoot, quaiStateSize)
 }
 
 // StateCache returns the caching database underpinning the blockchain instance.
@@ -1161,7 +1220,7 @@ func (c *Core) GetUTXOsByAddressAtState(state *state.StateDB, address common.Add
 	utxos := make([]*types.UtxoEntry, 0, len(outpointsForAddress))
 
 	for _, outpoint := range outpointsForAddress {
-		entry := state.GetUTXO(outpoint.TxHash, outpoint.Index)
+		entry := rawdb.GetUTXO(c.sl.sliceDb, outpoint.TxHash, outpoint.Index)
 		if entry == nil {
 			return nil, errors.New("failed to get UTXO for address")
 		}
@@ -1223,4 +1282,12 @@ func (c *Core) ContentFrom(addr common.Address) (types.Transactions, types.Trans
 		return nil, nil
 	}
 	return c.sl.txPool.ContentFrom(internal)
+}
+
+func (c *Core) SuggestFinalityDepth(qiValue *big.Int, correlatedRisk *big.Int) *big.Int {
+	qiRewardPerBlock := misc.CalculateQiReward(c.CurrentHeader().WorkObjectHeader())
+
+	// Finality qiValue * correlatedRisk / qiRewardPerBlock
+	finalityDepth := new(big.Int).Div(new(big.Int).Mul(qiValue, correlatedRisk), qiRewardPerBlock)
+	return finalityDepth
 }

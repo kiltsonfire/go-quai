@@ -19,6 +19,7 @@ package vm
 import (
 	"fmt"
 	"math"
+	"math/big"
 
 	"github.com/dominant-strategies/go-quai/common"
 	"github.com/dominant-strategies/go-quai/core/types"
@@ -613,7 +614,7 @@ func opCreate(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]b
 		bigVal = value.ToBig()
 	}
 
-	res, addr, returnGas, suberr := interpreter.evm.Create(scope.Contract, input, gas, bigVal)
+	res, addr, returnGas, stateUsed, suberr := interpreter.evm.Create(scope.Contract, input, gas, bigVal)
 	// Push item on the stack based on the returned error.
 	if suberr != nil {
 		stackvalue.Clear()
@@ -622,6 +623,7 @@ func opCreate(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]b
 	}
 	scope.Stack.push(&stackvalue)
 	scope.Contract.Gas += returnGas
+	scope.Contract.StateGas += stateUsed
 
 	if suberr == ErrExecutionReverted {
 		return res, nil
@@ -646,7 +648,7 @@ func opCreate2(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]
 	if !endowment.IsZero() {
 		bigEndowment = endowment.ToBig()
 	}
-	res, addr, returnGas, suberr := interpreter.evm.Create2(scope.Contract, input, gas,
+	res, addr, returnGas, stateUsed, suberr := interpreter.evm.Create2(scope.Contract, input, gas,
 		bigEndowment, &salt)
 	// Push item on the stack based on the returned error.
 	if suberr != nil {
@@ -656,6 +658,7 @@ func opCreate2(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]
 	}
 	scope.Stack.push(&stackvalue)
 	scope.Contract.Gas += returnGas
+	scope.Contract.StateGas += stateUsed
 
 	if suberr == ErrExecutionReverted {
 		return res, nil
@@ -684,7 +687,7 @@ func opCall(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byt
 		bigVal = value.ToBig()
 	}
 
-	ret, returnGas, err := interpreter.evm.Call(scope.Contract, toAddr, args, gas, bigVal, nil)
+	ret, returnGas, stateGas, err := interpreter.evm.Call(scope.Contract, toAddr, args, gas, bigVal, nil)
 
 	if err != nil {
 		temp.Clear()
@@ -695,10 +698,11 @@ func opCall(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byt
 	if err == nil || err == ErrExecutionReverted {
 		ret = common.CopyBytes(ret)
 		scope.Memory.Set(retOffset.Uint64(), retSize.Uint64(), ret)
-	} else if err == common.ErrInvalidScope {
+	} else if err == common.ErrExternalAddress {
 		return nil, err
 	}
 	scope.Contract.Gas += returnGas
+	scope.Contract.StateGas += stateGas
 
 	return ret, nil
 }
@@ -732,7 +736,7 @@ func opCallCode(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([
 	if err == nil || err == ErrExecutionReverted {
 		ret = common.CopyBytes(ret)
 		scope.Memory.Set(retOffset.Uint64(), retSize.Uint64(), ret)
-	} else if err == common.ErrInvalidScope {
+	} else if err == common.ErrExternalAddress {
 		return nil, err
 	}
 	scope.Contract.Gas += returnGas
@@ -762,7 +766,7 @@ func opDelegateCall(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext
 	if err == nil || err == ErrExecutionReverted {
 		ret = common.CopyBytes(ret)
 		scope.Memory.Set(retOffset.Uint64(), retSize.Uint64(), ret)
-	} else if err == common.ErrInvalidScope {
+	} else if err == common.ErrExternalAddress {
 		return nil, err
 	}
 	scope.Contract.Gas += returnGas
@@ -792,7 +796,7 @@ func opStaticCall(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) 
 	if err == nil || err == ErrExecutionReverted {
 		ret = common.CopyBytes(ret)
 		scope.Memory.Set(retOffset.Uint64(), retSize.Uint64(), ret)
-	} else if err == common.ErrInvalidScope {
+	} else if err == common.ErrExternalAddress {
 		return nil, err
 	}
 	scope.Contract.Gas += returnGas
@@ -830,6 +834,8 @@ func opSuicide(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]
 	}
 	balance := interpreter.evm.StateDB.GetBalance(addr)
 	interpreter.evm.StateDB.AddBalance(beneficiaryAddr, balance)
+	refund := new(big.Int).Mul(interpreter.evm.Context.BaseFee, new(big.Int).SetUint64(params.CallNewAccountGas(interpreter.evm.Context.QuaiStateSize)))
+	interpreter.evm.StateDB.AddBalance(beneficiaryAddr, refund)
 	interpreter.evm.StateDB.Suicide(addr)
 	return nil, nil
 }

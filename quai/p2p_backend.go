@@ -3,9 +3,10 @@ package quai
 import (
 	"context"
 	"math/big"
+	"runtime/debug"
+	"time"
 
 	"github.com/dominant-strategies/go-quai/common"
-	"github.com/dominant-strategies/go-quai/consensus"
 	"github.com/dominant-strategies/go-quai/core"
 	"github.com/dominant-strategies/go-quai/core/types"
 	"github.com/dominant-strategies/go-quai/internal/quaiapi"
@@ -14,18 +15,15 @@ import (
 	"github.com/dominant-strategies/go-quai/p2p"
 	"github.com/dominant-strategies/go-quai/rpc"
 	"github.com/dominant-strategies/go-quai/trie"
-	pubsub "github.com/libp2p/go-libp2p-pubsub"
-	"github.com/libp2p/go-libp2p/core/peer"
-)
-
-const (
-	c_maxAllowableEntropyDist = 3500 // Maximum multiple of zone intrinsic S distance allowed from the current Entropy
+	lru "github.com/hashicorp/golang-lru/v2"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
 	// TxPool propagation metrics
-	txPropagationMetrics = metrics_config.NewCounterVec("TxPropagation", "Transaction propagation counter")
-	txIngressCounter     = txPropagationMetrics.WithLabelValues("ingress")
+	txPropagationMetrics = metrics_config.NewCounterVec("TxCount", "Transaction counter")
+	txTotalCounter       = txPropagationMetrics.WithLabelValues("total txs")
+	txCountersBySlice    = make(map[string]prometheus.Counter)
 
 	workObjectMetrics = metrics_config.NewCounterVec("WorkObjectCounters", "Tracks block statistics")
 	// Block propagation metrics
@@ -50,6 +48,10 @@ type QuaiBackend struct {
 	primeApiBackend   *quaiapi.Backend
 	regionApiBackends []*quaiapi.Backend
 	zoneApiBackends   [][]*quaiapi.Backend
+
+	woPeers *lru.Cache[string, struct{}]
+	whPeers *lru.Cache[string, struct{}]
+	wsPeers *lru.Cache[string, struct{}]
 }
 
 // Create a new instance of the QuaiBackend consensus service
@@ -58,7 +60,39 @@ func NewQuaiBackend() (*QuaiBackend, error) {
 	for i := 0; i < common.MaxRegions; i++ {
 		zoneBackends[i] = make([]*quaiapi.Backend, common.MaxZones)
 	}
-	return &QuaiBackend{regionApiBackends: make([]*quaiapi.Backend, common.MaxZones), zoneApiBackends: zoneBackends}, nil
+	woPeers, _ := lru.New[string, struct{}](1000)
+	whPeers, _ := lru.New[string, struct{}](1000)
+	wsPeers, _ := lru.New[string, struct{}](1000)
+	backend := &QuaiBackend{regionApiBackends: make([]*quaiapi.Backend, common.MaxZones), zoneApiBackends: zoneBackends}
+
+	// peers cache
+	backend.woPeers = woPeers
+	backend.whPeers = whPeers
+	backend.wsPeers = wsPeers
+
+	go backend.peerStats()
+
+	return backend, nil
+}
+
+func (qbe *QuaiBackend) peerStats() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Global.WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Fatal("Go-Quai Panicked")
+		}
+	}()
+	futureTimer := time.NewTicker(60 * time.Second)
+	defer futureTimer.Stop()
+	for {
+		select {
+		case <-futureTimer.C:
+			log.Global.WithFields(log.Fields{"work object": qbe.woPeers.Len(),
+				"wo header": qbe.whPeers.Len(), "ws header": qbe.wsPeers.Len()}).Info("Unique peers per topic")
+		}
+	}
 }
 
 // Adds the p2pBackend into the given QuaiBackend
@@ -105,7 +139,7 @@ func (qbe *QuaiBackend) GetBackend(location common.Location) *quaiapi.Backend {
 }
 
 // Handle consensus data propagated to us from our peers
-func (qbe *QuaiBackend) OnNewBroadcast(sourcePeer p2p.PeerID, Id string, topic string, data interface{}, nodeLocation common.Location) bool {
+func (qbe *QuaiBackend) OnNewBroadcast(sourcePeer p2p.PeerID, relayPeer p2p.PeerID, Id string, topic string, data interface{}, nodeLocation common.Location) bool {
 	defer types.ObjectPool.Put(data)
 	switch data := data.(type) {
 	case types.WorkObjectBlockView:
@@ -117,8 +151,10 @@ func (qbe *QuaiBackend) OnNewBroadcast(sourcePeer p2p.PeerID, Id string, topic s
 
 		backend.WriteBlock(data.WorkObject)
 		blockIngressCounter.Inc()
+		qbe.woPeers.Add(relayPeer.String(), struct{}{})
 		// If it was a good broadcast, mark the peer as lively
 		qbe.p2pBackend.MarkLivelyPeer(sourcePeer, topic)
+		qbe.p2pBackend.MarkLivelyPeer(relayPeer, topic)
 	case types.WorkObjectHeaderView:
 		backend := *qbe.GetBackend(nodeLocation)
 		if backend == nil {
@@ -132,7 +168,9 @@ func (qbe *QuaiBackend) OnNewBroadcast(sourcePeer p2p.PeerID, Id string, topic s
 
 		headerIngressCounter.Inc()
 		// If it was a good broadcast, mark the peer as lively
+		qbe.whPeers.Add(relayPeer.String(), struct{}{})
 		qbe.p2pBackend.MarkLivelyPeer(sourcePeer, topic)
+		qbe.p2pBackend.MarkLivelyPeer(relayPeer, topic)
 	case types.WorkObjectShareView:
 		backend := *qbe.GetBackend(nodeLocation)
 		if backend == nil {
@@ -147,10 +185,22 @@ func (qbe *QuaiBackend) OnNewBroadcast(sourcePeer p2p.PeerID, Id string, topic s
 			backend.SendRemoteTxs(data.WorkObject.Transactions())
 
 			workShareIngressCounter.Inc()
-			txIngressCounter.Add(float64(len(data.WorkObject.Transactions())))
+			sliceName := data.Location().Name()
+			txCount := float64(len(data.WorkObject.Transactions()))
+			txTotalCounter.Add(txCount)
+			if counter, exists := txCountersBySlice[sliceName]; exists {
+				counter.Add(txCount)
+			} else {
+				newCounter := txPropagationMetrics.WithLabelValues(sliceName + " txs")
+				newCounter.Add(txCount)
+				txCountersBySlice[sliceName] = newCounter
+			}
 		}
+
+		qbe.wsPeers.Add(relayPeer.String(), struct{}{})
 		// If it was a good broadcast, mark the peer as lively
 		qbe.p2pBackend.MarkLivelyPeer(sourcePeer, topic)
+		qbe.p2pBackend.MarkLivelyPeer(relayPeer, topic)
 	default:
 		log.Global.WithFields(log.Fields{
 			"peer":     sourcePeer,
@@ -173,137 +223,6 @@ func (qbe *QuaiBackend) GetTrieNode(hash common.Hash, location common.Location) 
 func (qbe *QuaiBackend) GetHeight(location common.Location) uint64 {
 	// Example/mock implementation
 	panic("todo")
-}
-
-func (qbe *QuaiBackend) ValidatorFunc() func(ctx context.Context, id p2p.PeerID, msg *pubsub.Message, nodeLocation common.Location) pubsub.ValidationResult {
-	return func(ctx context.Context, id peer.ID, msg *pubsub.Message, nodeLocation common.Location) pubsub.ValidationResult {
-		var data interface{}
-		data = msg.Message.GetData()
-		switch data := data.(type) {
-		case types.WorkObjectBlockView:
-			backend := *qbe.GetBackend(data.WorkObject.Location())
-			if backend == nil {
-				log.Global.WithFields(log.Fields{
-					"peer":     id,
-					"hash":     data.Hash(),
-					"location": data.Location(),
-				}).Error("no backend found for this location")
-			}
-			err := backend.SanityCheckWorkObjectBlockViewBody(data.WorkObject)
-			if err != nil {
-				backend.Logger().WithField("err", err).Warn("Sanity check of work object failed")
-				return pubsub.ValidationReject
-			}
-			if backend.BadHashExistsInChain() {
-				backend.Logger().Warn("Bad Hashes still exist on chain, cannot handle block broadcast yet")
-				return pubsub.ValidationIgnore
-			}
-
-			// If Block broadcasted by the peer exists in the bad block list drop the peer
-			if backend.IsBlockHashABadHash(data.WorkObject.WorkObjectHeader().Hash()) {
-				return pubsub.ValidationReject
-			}
-			return ApplyPoWFilter(backend, data.WorkObject)
-
-		case types.WorkObjectHeaderView:
-			backend := *qbe.GetBackend(data.WorkObject.Location())
-			if backend == nil {
-				log.Global.WithFields(log.Fields{
-					"peer":     id,
-					"hash":     data.Hash(),
-					"location": data.Location(),
-				}).Error("no backend found for this location")
-			}
-			err := backend.SanityCheckWorkObjectHeaderViewBody(data.WorkObject)
-			if err != nil {
-				backend.Logger().WithField("err", err).Warn("Sanity check of work object header view failed")
-				return pubsub.ValidationReject
-			}
-			if backend.BadHashExistsInChain() {
-				backend.Logger().Warn("Bad Hashes still exist on chain, cannot handle block broadcast yet")
-				return pubsub.ValidationIgnore
-			}
-
-			// If Block broadcasted by the peer exists in the bad block list drop the peer
-			if backend.IsBlockHashABadHash(data.WorkObject.WorkObjectHeader().Hash()) {
-				return pubsub.ValidationReject
-			}
-			return ApplyPoWFilter(backend, data.WorkObject)
-
-		case types.WorkObjectShareView:
-			backend := *qbe.GetBackend(data.Location())
-			if backend == nil {
-				log.Global.WithFields(log.Fields{
-					"peer":     id,
-					"hash":     data.Hash(),
-					"location": data.Location(),
-				}).Error("no backend found for this location")
-			}
-			// check if the work share is valid before accepting the transactions
-			// from the peer
-			err := backend.SanityCheckWorkObjectShareViewBody(data.WorkObject)
-			if err != nil {
-				backend.Logger().WithField("err", err).Warn("Sanity check of work object share view failed")
-				return pubsub.ValidationReject
-			}
-			if ok := backend.CheckIfValidWorkShare(data.WorkObject.WorkObjectHeader()); !ok {
-				backend.Logger().Error("work share received from peer is not valid")
-				return pubsub.ValidationReject
-			}
-
-			if len(data.WorkObject.Transactions()) > int(backend.GetMaxTxInWorkShare()) {
-				backend.Logger().Error("workshare contains more transactions than allowed")
-				return pubsub.ValidationReject
-			}
-			_, err = backend.Engine().ComputePowHash(data.WorkObject.WorkObjectHeader())
-			if err != nil {
-				backend.Logger().Error("Error computing the powHash of the work object header received from peer")
-				return pubsub.ValidationReject
-			}
-		}
-		return pubsub.ValidationAccept
-	}
-}
-
-func ApplyPoWFilter(backend quaiapi.Backend, wo *types.WorkObject) pubsub.ValidationResult {
-
-	powhash, err := backend.Engine().VerifySeal(wo.WorkObjectHeader())
-	if err != nil {
-		return pubsub.ValidationReject
-	}
-	// Check if the Block is atleast half the current difficulty in Zone Context,
-	// this makes sure that the nodes don't listen to the forks with the PowHash
-	//	with less than 50% of current difficulty
-	if backend.NodeCtx() == common.ZONE_CTX && new(big.Int).SetBytes(powhash.Bytes()).Cmp(new(big.Int).Div(backend.Engine().IntrinsicLogS(backend.CurrentHeader().Hash()), big.NewInt(2))) < 0 {
-		return pubsub.ValidationIgnore
-	}
-
-	currentIntrinsicS := backend.Engine().IntrinsicLogS(backend.CurrentHeader().Hash())
-	currentS := backend.CurrentHeader().ParentEntropy(backend.NodeCtx())
-	MaxAllowableEntropyDist := new(big.Int).Mul(currentIntrinsicS, big.NewInt(c_maxAllowableEntropyDist))
-
-	broadCastEntropy := wo.ParentEntropy(common.ZONE_CTX)
-
-	// If someone is mining not within MaxAllowableEntropyDist*currentIntrinsicS dont broadcast
-	if currentS.Cmp(new(big.Int).Add(broadCastEntropy, MaxAllowableEntropyDist)) > 0 {
-		return pubsub.ValidationIgnore
-	}
-
-	// Quickly validate the header and propagate the block if it passes
-	err = backend.Engine().VerifyHeader(backend, wo)
-
-	// Including the ErrUnknownAncestor as well because a filter has already
-	// been applied for all the blocks that come until here. Since there
-	// exists a timedCache where the blocks expire, it is okay to let this
-	// block through and broadcast the block.
-	if err == nil || err.Error() == consensus.ErrUnknownAncestor.Error() {
-		return pubsub.ValidationAccept
-	} else if err.Error() == consensus.ErrFutureBlock.Error() {
-		// Weird future block, don't fail, but neither propagate
-		return pubsub.ValidationIgnore
-	} else {
-		return pubsub.ValidationReject
-	}
 }
 
 // SetCurrentExpansionNumber sets the expansion number into the slice object on all the backends
@@ -385,6 +304,22 @@ func (qbe *QuaiBackend) LookupBlock(hash common.Hash, location common.Location) 
 		return nil
 	}
 	return backend.BlockOrCandidateByHash(hash)
+}
+
+func (qbe *QuaiBackend) LookupBlockByNumber(number *big.Int, location common.Location) *types.WorkObject {
+	if qbe == nil {
+		return nil
+	}
+	backend := *qbe.GetBackend(location)
+	if backend == nil {
+		log.Global.Error("no backend found")
+		return nil
+	}
+	block, err := backend.BlockByNumber(context.Background(), rpc.BlockNumber(number.Int64()))
+	if err != nil {
+		return nil
+	}
+	return block
 }
 
 func (qbe *QuaiBackend) LookupBlockHashByNumber(number *big.Int, location common.Location) *common.Hash {

@@ -32,7 +32,14 @@ const (
 	numberCacheLimit      = 2048
 	c_subRollupCacheSize  = 50
 	primeHorizonThreshold = 20
+	c_powCacheLimit       = 1000
+	c_calcOrderCacheLimit = 10000
 )
+
+type calcOrderResponse struct {
+	intrinsicS *big.Int
+	order      int
+}
 
 // getPendingEtxsRollup gets the pendingEtxsRollup rollup from appropriate Region
 type getPendingEtxsRollup func(blockHash common.Hash, hash common.Hash, location common.Location) (types.PendingEtxsRollup, error)
@@ -77,21 +84,22 @@ type HeaderChain struct {
 	slicesRunning   []common.Location
 	processingState bool
 
+	powHashCache *lru.Cache[common.Hash, common.Hash]
+
+	calcOrderCache *lru.Cache[common.Hash, calcOrderResponse]
+
 	logger *log.Logger
 }
 
 // NewHeaderChain creates a new HeaderChain structure. ProcInterrupt points
 // to the parent's interrupt semaphore.
 func NewHeaderChain(db ethdb.Database, engine consensus.Engine, pEtxsRollupFetcher getPendingEtxsRollup, pEtxsFetcher getPendingEtxs, chainConfig *params.ChainConfig, cacheConfig *CacheConfig, txLookupLimit *uint64, vmConfig vm.Config, slicesRunning []common.Location, currentExpansionNumber uint8, logger *log.Logger) (*HeaderChain, error) {
-	headerCache, _ := lru.New[common.Hash, types.WorkObject](headerCacheLimit)
-	numberCache, _ := lru.New[common.Hash, uint64](numberCacheLimit)
+
 	nodeCtx := chainConfig.Location.Context()
 
 	hc := &HeaderChain{
 		config:                 chainConfig,
 		headerDb:               db,
-		headerCache:            headerCache,
-		numberCache:            numberCache,
 		engine:                 engine,
 		slicesRunning:          slicesRunning,
 		fetchPEtxRollup:        pEtxsRollupFetcher,
@@ -100,8 +108,24 @@ func NewHeaderChain(db ethdb.Database, engine consensus.Engine, pEtxsRollupFetch
 		currentExpansionNumber: currentExpansionNumber,
 	}
 
+	headerCache, _ := lru.New[common.Hash, types.WorkObject](headerCacheLimit)
+	hc.headerCache = headerCache
+
+	numberCache, _ := lru.New[common.Hash, uint64](numberCacheLimit)
+	hc.numberCache = numberCache
+
+	powHashCache, _ := lru.New[common.Hash, common.Hash](c_powCacheLimit)
+	hc.powHashCache = powHashCache
+
+	calcOrderCache, _ := lru.New[common.Hash, calcOrderResponse](c_calcOrderCacheLimit)
+	hc.calcOrderCache = calcOrderCache
+
 	genesisHash := hc.GetGenesisHashes()[0]
-	hc.genesisHeader = rawdb.ReadWorkObject(db, genesisHash, types.BlockObject)
+	genesisNumber := rawdb.ReadHeaderNumber(db, genesisHash)
+	if genesisNumber == nil {
+		return nil, ErrNoGenesis
+	}
+	hc.genesisHeader = rawdb.ReadWorkObject(db, *genesisNumber, genesisHash, types.BlockObject)
 	if bytes.Equal(chainConfig.Location, common.Location{0, 0}) {
 		if hc.genesisHeader == nil {
 			return nil, ErrNoGenesis
@@ -128,10 +152,13 @@ func NewHeaderChain(db ethdb.Database, engine consensus.Engine, pEtxsRollupFetch
 	pendingEtxsRollup, _ := lru.New[common.Hash, types.PendingEtxsRollup](c_maxPendingEtxsRollup)
 	hc.pendingEtxsRollup = pendingEtxsRollup
 
+	var pendingEtxs *lru.Cache[common.Hash, types.PendingEtxs]
 	if nodeCtx == common.PRIME_CTX {
-		hc.pendingEtxs, _ = lru.New[common.Hash, types.PendingEtxs](c_maxPendingEtxBatchesPrime)
+		pendingEtxs, _ = lru.New[common.Hash, types.PendingEtxs](c_maxPendingEtxBatchesPrime)
+		hc.pendingEtxs = pendingEtxs
 	} else {
-		hc.pendingEtxs, _ = lru.New[common.Hash, types.PendingEtxs](c_maxPendingEtxBatchesRegion)
+		pendingEtxs, _ = lru.New[common.Hash, types.PendingEtxs](c_maxPendingEtxBatchesRegion)
+		hc.pendingEtxs = pendingEtxs
 	}
 
 	blooms, _ := lru.New[common.Hash, types.Bloom](c_maxBloomFilters)
@@ -304,6 +331,62 @@ func (hc *HeaderChain) AppendHeader(header *types.WorkObject) error {
 
 	return nil
 }
+
+func (hc *HeaderChain) CalculateInterlink(block *types.WorkObject) (common.Hashes, error) {
+	header := types.CopyWorkObject(block)
+	var interlinkHashes common.Hashes
+	if hc.IsGenesisHash(header.Hash()) {
+		// On genesis, the interlink hashes are all the same and should start with genesis hash
+		interlinkHashes = common.Hashes{header.Hash(), header.Hash(), header.Hash(), header.Hash()}
+	} else {
+		// check if parent belongs to any interlink level
+		rank, err := hc.engine.CalcRank(hc, header)
+		if err != nil {
+			return nil, err
+		}
+		parentInterlinkHashes := rawdb.ReadInterlinkHashes(hc.headerDb, header.ParentHash(common.PRIME_CTX))
+		if parentInterlinkHashes == nil {
+			return nil, ErrSubNotSyncedToDom
+		}
+		if rank == 0 { // No change in the interlink hashes, so carry
+			interlinkHashes = parentInterlinkHashes
+		} else if rank > 0 && rank <= common.InterlinkDepth {
+			interlinkHashes = parentInterlinkHashes
+			// update the interlink hashes for each level below the rank
+			for i := 0; i < rank; i++ {
+				interlinkHashes[i] = header.Hash()
+			}
+		} else {
+			hc.logger.Error("Not possible to find rank greater than the max interlink levels")
+			return nil, errors.New("not possible to find rank greater than the max interlink levels")
+		}
+	}
+	// Store the interlink hashes in the database
+	rawdb.WriteInterlinkHashes(hc.headerDb, header.Hash(), interlinkHashes)
+	return interlinkHashes, nil
+}
+
+func (hc *HeaderChain) CalculateManifest(header *types.WorkObject) types.BlockManifest {
+	manifest := rawdb.ReadManifest(hc.headerDb, header.Hash())
+	if manifest == nil {
+		nodeCtx := hc.NodeCtx()
+		// Compute and set manifest hash
+		var manifest types.BlockManifest
+		if nodeCtx == common.PRIME_CTX {
+			// Nothing to do for prime chain
+			manifest = types.BlockManifest{}
+		} else if hc.engine.IsDomCoincident(hc, header) {
+			manifest = types.BlockManifest{header.Hash()}
+		} else {
+			parentManifest := rawdb.ReadManifest(hc.headerDb, header.ParentHash(nodeCtx))
+			manifest = append(parentManifest, header.Hash())
+		}
+		// write the manifest into the disk
+		rawdb.WriteManifest(hc.headerDb, header.Hash(), manifest)
+	}
+	return manifest
+}
+
 func (hc *HeaderChain) ProcessingState() bool {
 	return hc.processingState
 }
@@ -337,7 +420,6 @@ func (hc *HeaderChain) AppendBlock(block *types.WorkObject) error {
 	}
 	hc.logger.WithField("append block", common.PrettyDuration(time.Since(blockappend))).Debug("Time taken to")
 
-	hc.bc.chainFeed.Send(ChainEvent{Block: block, Hash: block.Hash(), Logs: logs})
 	if len(logs) > 0 {
 		hc.bc.logsFeed.Send(logs)
 	}
@@ -347,8 +429,7 @@ func (hc *HeaderChain) AppendBlock(block *types.WorkObject) error {
 
 // SetCurrentHeader sets the current header based on the POEM choice
 func (hc *HeaderChain) SetCurrentHeader(head *types.WorkObject) error {
-	hc.headermu.Lock()
-	defer hc.headermu.Unlock()
+	nodeCtx := hc.NodeCtx()
 
 	prevHeader := hc.CurrentHeader()
 	// if trying to set the same header, escape
@@ -356,17 +437,21 @@ func (hc *HeaderChain) SetCurrentHeader(head *types.WorkObject) error {
 		return nil
 	}
 
-	// write the head block hash to the db
-	rawdb.WriteHeadBlockHash(hc.headerDb, head.Hash())
-	hc.logger.WithFields(log.Fields{
-		"Hash":   head.Hash(),
-		"Number": head.NumberArray(),
-	}).Info("Setting the current header")
-	hc.currentHeader.Store(head)
-
 	// If head is the normal extension of canonical head, we can return by just wiring the canonical hash.
 	if prevHeader.Hash() == head.ParentHash(hc.NodeCtx()) {
 		rawdb.WriteCanonicalHash(hc.headerDb, head.Hash(), head.NumberU64(hc.NodeCtx()))
+		err := hc.AppendBlock(head)
+		if err != nil {
+			rawdb.DeleteCanonicalHash(hc.headerDb, head.NumberU64(hc.NodeCtx()))
+			return err
+		}
+		// write the head block hash to the db
+		rawdb.WriteHeadBlockHash(hc.headerDb, head.Hash())
+		hc.logger.WithFields(log.Fields{
+			"Hash":   head.Hash(),
+			"Number": head.NumberArray(),
+		}).Info("Setting the current header")
+		hc.currentHeader.Store(head)
 		return nil
 	}
 
@@ -398,6 +483,23 @@ func (hc *HeaderChain) SetCurrentHeader(head *types.WorkObject) error {
 		}
 		prevHashStack = append(prevHashStack, prevHeader)
 		rawdb.DeleteCanonicalHash(hc.headerDb, prevHeader.NumberU64(hc.NodeCtx()))
+		// UTXO Rollback logic: Recreate deleted UTXOs and delete created UTXOs
+		if nodeCtx == common.ZONE_CTX && hc.ProcessingState() {
+			sutxos, err := rawdb.ReadSpentUTXOs(hc.headerDb, prevHeader.Hash())
+			if err != nil {
+				return err
+			}
+			for _, sutxo := range sutxos {
+				rawdb.CreateUTXO(hc.headerDb, sutxo.TxHash, sutxo.Index, sutxo.UtxoEntry)
+			}
+			utxoKeys, err := rawdb.ReadCreatedUTXOKeys(hc.headerDb, prevHeader.Hash())
+			if err != nil {
+				return err
+			}
+			for _, key := range utxoKeys {
+				hc.headerDb.Delete(key)
+			}
+		}
 		prevHeader = hc.GetHeaderByHash(prevHeader.ParentHash(hc.NodeCtx()))
 		if prevHeader == nil {
 			return errors.New("Could not find previously canonical header during reorg")
@@ -408,10 +510,85 @@ func (hc *HeaderChain) SetCurrentHeader(head *types.WorkObject) error {
 		}
 	}
 
+	hc.logger.WithFields(log.Fields{
+		"number":    newHeader.NumberArray(),
+		"newHeader": newHeader.Hash(),
+	}).Info("New Header")
+	hc.logger.WithFields(log.Fields{
+		"number":     prevHeader.NumberArray(),
+		"prevHeader": prevHeader.Hash(),
+	}).Info("Prev Header")
+	hc.logger.WithFields(log.Fields{
+		"number": commonHeader.NumberArray(),
+		"hash":   commonHeader.Hash(),
+	}).Info("Common Header")
+
 	// Run through the hash stack to update canonicalHash and forward state processor
 	for i := len(hashStack) - 1; i >= 0; i-- {
+		hc.logger.Info("Reverting header: ", " Number Array: ", hashStack[i].NumberArray(), " Hash: ", hashStack[i].Hash())
 		rawdb.WriteCanonicalHash(hc.headerDb, hashStack[i].Hash(), hashStack[i].NumberU64(hc.NodeCtx()))
+		if nodeCtx == common.ZONE_CTX {
+			block := hc.GetBlockOrCandidate(hashStack[i].Hash(), hashStack[i].NumberU64(nodeCtx))
+			if block == nil {
+				return errors.New("could not find block during SetCurrentState: " + hashStack[i].Hash().String())
+			}
+			err := hc.AppendBlock(block)
+			if err != nil {
+				hc.logger.WithFields(log.Fields{
+					"error": err,
+					"block": block.Hash(),
+				}).Error("Error appending block during reorg")
+				rawdb.DeleteCanonicalHash(hc.headerDb, hashStack[i].NumberU64(hc.NodeCtx()))
+				// Append failed, rollback the UTXO set to the common header
+				for j := i + 1; j < len(hashStack); j++ {
+					hc.logger.Info("Append failed reverting header: ", " Number Array: ", hashStack[j].NumberArray(), " Hash: ", hashStack[j].Hash())
+					rawdb.DeleteCanonicalHash(hc.headerDb, hashStack[j].NumberU64(hc.NodeCtx()))
+					if nodeCtx == common.ZONE_CTX && hc.ProcessingState() {
+						sutxos, err := rawdb.ReadSpentUTXOs(hc.headerDb, hashStack[j].Hash())
+						if err != nil {
+							return err
+						}
+						for _, sutxo := range sutxos {
+							rawdb.CreateUTXO(hc.headerDb, sutxo.TxHash, sutxo.Index, sutxo.UtxoEntry)
+						}
+						utxoKeys, err := rawdb.ReadCreatedUTXOKeys(hc.headerDb, hashStack[j].Hash())
+						if err != nil {
+							return err
+						}
+						for _, key := range utxoKeys {
+							hc.headerDb.Delete(key)
+						}
+					}
+				}
+				for k := len(prevHashStack) - 1; k >= 0; k-- {
+					hc.logger.Info("Append failed reapplying header: ", " Number Array: ", prevHashStack[k].NumberArray(), " Hash: ", prevHashStack[k].Hash())
+					rawdb.WriteCanonicalHash(hc.headerDb, prevHashStack[k].Hash(), prevHashStack[k].NumberU64(hc.NodeCtx()))
+					if nodeCtx == common.ZONE_CTX {
+						block := hc.GetBlockOrCandidate(prevHashStack[k].Hash(), prevHashStack[k].NumberU64(nodeCtx))
+						if block == nil {
+							return errors.New("could not find block during SetCurrentState: " + prevHashStack[k].Hash().String())
+						}
+						err := hc.AppendBlock(block)
+						if err != nil {
+							hc.logger.WithFields(log.Fields{
+								"error": err,
+								"block": block.Hash(),
+							}).Error("Error appending block during reorg")
+							return err
+						}
+					}
+				}
+				return err
+			}
+		}
 	}
+	// write the head block hash to the db
+	rawdb.WriteHeadBlockHash(hc.headerDb, head.Hash())
+	hc.logger.WithFields(log.Fields{
+		"Hash":   head.Hash(),
+		"Number": head.NumberArray(),
+	}).Info("Setting the current header")
+	hc.currentHeader.Store(head)
 
 	if hc.NodeCtx() == common.ZONE_CTX && hc.ProcessingState() {
 		// Every Block that got removed from the canonical hash db is sent in the side feed to be
@@ -439,50 +616,6 @@ func (hc *HeaderChain) SetCurrentHeader(head *types.WorkObject) error {
 	return nil
 }
 
-// SetCurrentState updates the current Quai state and Qi UTXO set upon which the current pending block is built
-func (hc *HeaderChain) SetCurrentState(head *types.WorkObject) error {
-	hc.headermu.Lock()
-	defer hc.headermu.Unlock()
-
-	nodeCtx := hc.NodeCtx()
-	if nodeCtx != common.ZONE_CTX || !hc.ProcessingState() {
-		return nil
-	}
-
-	current := types.CopyWorkObject(head)
-	var headersWithoutState []*types.WorkObject
-	for {
-		headersWithoutState = append(headersWithoutState, current)
-		header := hc.GetHeaderByHash(current.ParentHash(nodeCtx))
-		if header == nil {
-			return ErrSubNotSyncedToDom
-		}
-		if hc.IsGenesisHash(header.Hash()) {
-			break
-		}
-
-		// Check if the state has been processed for this block
-		processedState := rawdb.ReadProcessedState(hc.headerDb, header.Hash())
-		if processedState {
-			break
-		}
-		current = types.CopyWorkObject(header)
-	}
-
-	// Run through the hash stack to update canonicalHash and forward state processor
-	for i := len(headersWithoutState) - 1; i >= 0; i-- {
-		block := hc.GetBlockOrCandidate(headersWithoutState[i].Hash(), headersWithoutState[i].NumberU64(nodeCtx))
-		if block == nil {
-			return errors.New("could not find block during SetCurrentState: " + headersWithoutState[i].Hash().String())
-		}
-		err := hc.AppendBlock(block)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // findCommonAncestor
 func (hc *HeaderChain) findCommonAncestor(header *types.WorkObject) *types.WorkObject {
 	current := types.CopyWorkObject(header)
@@ -500,6 +633,47 @@ func (hc *HeaderChain) findCommonAncestor(header *types.WorkObject) *types.WorkO
 		current = hc.GetHeaderByHash(current.ParentHash(hc.NodeCtx()))
 	}
 
+}
+func (hc *HeaderChain) WorkShareDistance(wo *types.WorkObject, ws *types.WorkObjectHeader) (*big.Int, error) {
+	current := wo
+	// Create a list of ancestor blocks to the work object
+	ancestors := make(map[common.Hash]struct{})
+	for i := 0; i < params.WorkSharesInclusionDepth; i++ {
+		parent := hc.GetBlockByHash(current.ParentHash(common.ZONE_CTX))
+		if parent == nil {
+			return big.NewInt(0), errors.New("error finding the parent")
+		}
+		ancestors[parent.Hash()] = struct{}{}
+		current = parent
+	}
+
+	var distance int64 = 0
+	// trace back from the workshare and check if any of the parents exist in
+	// the ancestors list
+	parentHash := ws.ParentHash()
+	for {
+		parent := hc.GetBlockByHash(parentHash)
+		if parent == nil {
+			return big.NewInt(0), errors.New("error finding the parent")
+		}
+		if _, exists := ancestors[parent.Hash()]; exists {
+			distance += int64(wo.NumberU64(common.ZONE_CTX) - parent.NumberU64(common.ZONE_CTX) - 1)
+			break
+		}
+		distance++
+		// If distance is greater than the WorkSharesInclusionDepth, exit the for loop
+		if distance > int64(params.WorkSharesInclusionDepth) {
+			break
+		}
+		parentHash = parent.ParentHash(common.ZONE_CTX)
+	}
+
+	// If distance is greater than the WorkSharesInclusionDepth, reject the workshare
+	if distance > int64(params.WorkSharesInclusionDepth) {
+		return big.NewInt(0), errors.New("workshare is at distance more than WorkSharesInclusionDepth")
+	}
+
+	return big.NewInt(distance), nil
 }
 
 func (hc *HeaderChain) AddPendingEtxs(pEtxs types.PendingEtxs) error {
@@ -586,6 +760,22 @@ func (hc *HeaderChain) Stop() {
 		hc.bc.processor.Stop()
 	}
 	hc.logger.Info("headerchain stopped")
+}
+
+// CheckInCalcOrderCache checks if the hash exists in the calc order cache
+// and if if the hash exists it returns the order value
+func (hc *HeaderChain) CheckInCalcOrderCache(hash common.Hash) (*big.Int, int, bool) {
+	calcOrderResponse, exists := hc.calcOrderCache.Peek(hash)
+	if !exists {
+		return common.Big0, -1, false
+	} else {
+		return calcOrderResponse.intrinsicS, calcOrderResponse.order, true
+	}
+}
+
+// AddToCalcOrderCache adds the hash and the order pair to the calcorder cache
+func (hc *HeaderChain) AddToCalcOrderCache(hash common.Hash, order int, intrinsicS *big.Int) {
+	hc.calcOrderCache.Add(hash, calcOrderResponse{intrinsicS: intrinsicS, order: order})
 }
 
 // Empty checks if the headerchain is empty.
@@ -695,7 +885,11 @@ func (hc *HeaderChain) GetHeaderByHash(hash common.Hash) *types.WorkObject {
 	if header, ok := hc.headerCache.Get(hash); ok {
 		return &header
 	}
-	header := rawdb.ReadHeader(hc.headerDb, hash)
+	number := hc.GetBlockNumber(hash)
+	if number == nil {
+		return nil
+	}
+	header := rawdb.ReadHeader(hc.headerDb, *number, hash)
 	if header == nil {
 		return nil
 	}
@@ -711,7 +905,11 @@ func (hc *HeaderChain) GetHeaderOrCandidateByHash(hash common.Hash) *types.WorkO
 	if header, ok := hc.headerCache.Get(hash); ok {
 		return &header
 	}
-	header := rawdb.ReadHeader(hc.headerDb, hash)
+	number := hc.GetBlockNumber(hash)
+	if number == nil {
+		return nil
+	}
+	header := rawdb.ReadHeader(hc.headerDb, *number, hash)
 	if header == nil {
 		return nil
 	}
@@ -907,7 +1105,7 @@ func (hc *HeaderChain) GetBody(hash common.Hash) *types.WorkObject {
 	if number == nil {
 		return nil
 	}
-	body := rawdb.ReadWorkObject(hc.headerDb, hash, types.BlockObject)
+	body := rawdb.ReadWorkObject(hc.headerDb, *number, hash, types.BlockObject)
 	if body == nil {
 		return nil
 	}
@@ -958,8 +1156,8 @@ func (hc *HeaderChain) SubscribeChainSideEvent(ch chan<- ChainSideEvent) event.S
 	return hc.scope.Track(hc.chainSideFeed.Subscribe(ch))
 }
 
-func (hc *HeaderChain) StateAt(root, utxoRoot, etxRoot common.Hash) (*state.StateDB, error) {
-	return hc.bc.processor.StateAt(root, utxoRoot, etxRoot)
+func (hc *HeaderChain) StateAt(root, etxRoot common.Hash, quaiStateSize *big.Int) (*state.StateDB, error) {
+	return hc.bc.processor.StateAt(root, etxRoot, quaiStateSize)
 }
 
 func (hc *HeaderChain) SlicesRunning() []common.Location {
@@ -1011,13 +1209,7 @@ func (hc *HeaderChain) CheckIfEtxIsEligible(etxEligibleSlices common.Hash, to co
 
 // IsGenesisHash checks if a hash is a genesis hash
 func (hc *HeaderChain) IsGenesisHash(hash common.Hash) bool {
-	genesisHashes := rawdb.ReadGenesisHashes(hc.headerDb)
-	for _, genesisHash := range genesisHashes {
-		if hash == genesisHash {
-			return true
-		}
-	}
-	return false
+	return rawdb.IsGenesisHash(hc.headerDb, hash)
 }
 
 // AddGenesisHash appends the given hash to the genesis hash list
@@ -1055,4 +1247,8 @@ func (hc *HeaderChain) GetMaxTxInWorkShare() uint64 {
 	maxEoaInBlock := currentGasLimit / params.TxGas
 	// (maxEoaInBlock*2)/(2^bits)
 	return (maxEoaInBlock * 2) / uint64(math.Pow(2, float64(params.WorkSharesThresholdDiff)))
+}
+
+func (hc *HeaderChain) Database() ethdb.Database {
+	return hc.headerDb
 }

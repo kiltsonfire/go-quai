@@ -18,6 +18,7 @@ package core
 
 import (
 	"fmt"
+	"math/big"
 	"time"
 
 	"github.com/dominant-strategies/go-quai/common"
@@ -25,8 +26,14 @@ import (
 	"github.com/dominant-strategies/go-quai/core/state"
 	"github.com/dominant-strategies/go-quai/core/types"
 	"github.com/dominant-strategies/go-quai/log"
+	"github.com/dominant-strategies/go-quai/multiset"
 	"github.com/dominant-strategies/go-quai/params"
 	"github.com/dominant-strategies/go-quai/trie"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
+)
+
+const (
+	c_maxAllowableEntropyDist = 3500 // Maximum multiple of zone intrinsic S distance allowed from the current Entropy
 )
 
 // BlockValidator is responsible for validating block headers, uncles and
@@ -94,9 +101,6 @@ func (v *BlockValidator) ValidateBody(block *types.WorkObject) error {
 			return fmt.Errorf("uncle root hash mismatch: have %x, want %x", hash, header.UncleHash())
 		}
 		if v.hc.ProcessingState() {
-			if len(block.Transactions()) == 0 {
-				v.hc.logger.Error("zone body has zero transactions")
-			}
 			if hash := types.DeriveSha(block.Transactions(), trie.NewStackTrie(nil)); hash != header.TxHash() {
 				return fmt.Errorf("transaction root hash mismatch: have %x, want %x", hash, header.TxHash())
 			}
@@ -163,6 +167,67 @@ func (v *BlockValidator) SanityCheckWorkObjectBlockViewBody(wo *types.WorkObject
 		}
 	}
 	return nil
+}
+
+func (v *BlockValidator) ApplyPoWFilter(wo *types.WorkObject) pubsub.ValidationResult {
+	var err error
+	powhash, exists := v.hc.powHashCache.Peek(wo.Hash())
+	if !exists {
+		powhash, err = v.engine.VerifySeal(wo.WorkObjectHeader())
+		if err != nil {
+			return pubsub.ValidationReject
+		}
+		v.hc.powHashCache.Add(wo.Hash(), powhash)
+	}
+	newBlockIntrinsic := v.engine.IntrinsicLogS(powhash)
+
+	// cannot have a pow filter when the current header is genesis
+	if v.hc.IsGenesisHash(v.hc.CurrentHeader().Hash()) {
+		return pubsub.ValidationAccept
+	}
+
+	currentHeaderPowHash, exists := v.hc.powHashCache.Peek(v.hc.CurrentHeader().Hash())
+	if !exists {
+		currentHeaderPowHash, err = v.engine.VerifySeal(v.hc.CurrentHeader().WorkObjectHeader())
+		if err != nil {
+			return pubsub.ValidationReject
+		}
+		v.hc.powHashCache.Add(v.hc.CurrentHeader().Hash(), currentHeaderPowHash)
+	}
+	currentHeaderIntrinsic := v.engine.IntrinsicLogS(currentHeaderPowHash)
+
+	// Check if the Block is atleast half the current difficulty in Zone Context,
+	// this makes sure that the nodes don't listen to the forks with the PowHash
+	//	with less than 50% of current difficulty
+	if v.hc.NodeCtx() == common.ZONE_CTX && newBlockIntrinsic.Cmp(new(big.Int).Div(currentHeaderIntrinsic, big.NewInt(2))) < 0 {
+		return pubsub.ValidationIgnore
+	}
+
+	currentS := v.hc.CurrentHeader().ParentEntropy(v.hc.NodeCtx())
+	MaxAllowableEntropyDist := new(big.Int).Mul(currentHeaderIntrinsic, big.NewInt(c_maxAllowableEntropyDist))
+
+	broadCastEntropy := wo.ParentEntropy(common.ZONE_CTX)
+
+	// If someone is mining not within MaxAllowableEntropyDist*currentIntrinsicS dont broadcast
+	if currentS.Cmp(new(big.Int).Add(broadCastEntropy, MaxAllowableEntropyDist)) > 0 {
+		return pubsub.ValidationIgnore
+	}
+
+	// Quickly validate the header and propagate the block if it passes
+	err = v.engine.VerifyHeader(v.hc, wo)
+
+	// Including the ErrUnknownAncestor as well because a filter has already
+	// been applied for all the blocks that come until here. Since there
+	// exists a timedCache where the blocks expire, it is okay to let this
+	// block through and broadcast the block.
+	if err == nil || err.Error() == consensus.ErrUnknownAncestor.Error() {
+		return pubsub.ValidationAccept
+	} else if err.Error() == consensus.ErrFutureBlock.Error() {
+		// Weird future block, don't fail, but neither propagate
+		return pubsub.ValidationIgnore
+	} else {
+		return pubsub.ValidationReject
+	}
 }
 
 // SanityCheckWorkObjectHeaderViewBody is used in the case of gossipsub validation, it quickly checks if any of the fields
@@ -261,12 +326,15 @@ func (v *BlockValidator) SanityCheckWorkObjectShareViewBody(wo *types.WorkObject
 // transition, such as amount of used gas, the receipt roots and the state root
 // itself. ValidateState returns a database batch if the validation was a success
 // otherwise nil and an error is returned.
-func (v *BlockValidator) ValidateState(block *types.WorkObject, statedb *state.StateDB, receipts types.Receipts, etxs types.Transactions, usedGas uint64) error {
+func (v *BlockValidator) ValidateState(block *types.WorkObject, statedb *state.StateDB, receipts types.Receipts, etxs types.Transactions, multiSet *multiset.MultiSet, usedGas uint64, usedState uint64) error {
 	start := time.Now()
 	header := types.CopyHeader(block.Header())
 	time1 := common.PrettyDuration(time.Since(start))
 	if block.GasUsed() != usedGas {
 		return fmt.Errorf("invalid gas used (remote: %d local: %d)", block.GasUsed(), usedGas)
+	}
+	if block.StateUsed() != usedState {
+		return fmt.Errorf("invalid state used (remote: %d local: %d)", block.StateUsed(), usedState)
 	}
 	time2 := common.PrettyDuration(time.Since(start))
 	time3 := common.PrettyDuration(time.Since(start))
@@ -281,7 +349,10 @@ func (v *BlockValidator) ValidateState(block *types.WorkObject, statedb *state.S
 	if root := statedb.IntermediateRoot(true); header.EVMRoot() != root {
 		return fmt.Errorf("invalid merkle root (remote: %x local: %x)", header.EVMRoot(), root)
 	}
-	if root := statedb.UTXORoot(); header.UTXORoot() != root {
+	if stateSize := statedb.GetQuaiTrieSize(); header.QuaiStateSize().Cmp(stateSize) != 0 {
+		return fmt.Errorf("invalid quai trie size (remote: %x local: %x)", header.QuaiStateSize(), stateSize)
+	}
+	if root := multiSet.Hash(); header.UTXORoot() != root {
 		return fmt.Errorf("invalid utxo root (remote: %x local: %x)", header.UTXORoot(), root)
 	}
 	if root := statedb.ETXRoot(); header.EtxSetRoot() != root {

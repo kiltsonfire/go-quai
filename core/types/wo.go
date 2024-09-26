@@ -27,7 +27,9 @@ type WorkObject struct {
 	tx       *Transaction
 
 	// caches
-	appendTime atomic.Value
+	appendTime                atomic.Value
+	stateProcessTime          atomic.Value
+	pendingHeaderCreationTime atomic.Value
 
 	// These fields are used to track
 	// inter-peer block relay.
@@ -59,12 +61,19 @@ type WorkObjectView int
 // Work object types
 const (
 	BlockObject WorkObjectView = iota
-	TxObject
+	BlockObjects
 	PEtxObject
 	HeaderObject
-	PhObject
 	WorkShareObject
 	WorkShareTxObject
+)
+
+type WorkShareValidity int
+
+const (
+	Valid WorkShareValidity = iota
+	Sub
+	Invalid
 )
 
 func (wo *WorkObject) Hash() common.Hash {
@@ -119,6 +128,14 @@ func (wo *WorkObject) SetAppendTime(appendTime time.Duration) {
 	wo.appendTime.Store(appendTime)
 }
 
+func (wo *WorkObject) SetStateProcessTime(stateProcessTimes time.Duration) {
+	wo.stateProcessTime.Store(stateProcessTimes)
+}
+
+func (wo *WorkObject) SetPendingHeaderCreationTime(pendingHeaderCreationTime time.Duration) {
+	wo.pendingHeaderCreationTime.Store(pendingHeaderCreationTime)
+}
+
 ////////////////////////////////////////////////////////////
 /////////////////// Work Object Generic Getters ///////////////
 ////////////////////////////////////////////////////////////
@@ -128,6 +145,28 @@ func (wo *WorkObject) SetAppendTime(appendTime time.Duration) {
 func (wo *WorkObject) GetAppendTime() time.Duration {
 	if appendTime := wo.appendTime.Load(); appendTime != nil {
 		if val, ok := appendTime.(time.Duration); ok {
+			return val
+		}
+	}
+	return -1
+}
+
+// GetStateProcessTime returns the stateProcessTIme of the block
+// The stateProcessTime is computed on the first call and cached thereafter.
+func (wo *WorkObject) GetStateProcessTime() time.Duration {
+	if stateProcessTime := wo.stateProcessTime.Load(); stateProcessTime != nil {
+		if val, ok := stateProcessTime.(time.Duration); ok {
+			return val
+		}
+	}
+	return -1
+}
+
+// GetPendingHeaderCreationTime returns the pendingHeaderTime of the block
+// The pendingHeaderTime is computed on the first call and cached thereafter.
+func (wo *WorkObject) GetPendingHeaderCreationTime() time.Duration {
+	if pendingHeaderCreationTime := wo.appendTime.Load(); pendingHeaderCreationTime != nil {
+		if val, ok := pendingHeaderCreationTime.(time.Duration); ok {
 			return val
 		}
 	}
@@ -216,6 +255,10 @@ func (wo *WorkObject) NonceU64() uint64 {
 	return wo.WorkObjectHeader().Nonce().Uint64()
 }
 
+func (wo *WorkObject) QuaiStateSize() *big.Int {
+	return wo.Header().QuaiStateSize()
+}
+
 func (wo *WorkObject) UncledS() *big.Int {
 	return wo.Header().UncledS()
 }
@@ -238,6 +281,14 @@ func (wo *WorkObject) EtxSetRoot() common.Hash {
 
 func (wo *WorkObject) BaseFee() *big.Int {
 	return wo.Header().BaseFee()
+}
+
+func (wo *WorkObject) StateLimit() uint64 {
+	return wo.Header().StateLimit()
+}
+
+func (wo *WorkObject) StateUsed() uint64 {
+	return wo.Header().StateUsed()
 }
 
 func (wo *WorkObject) GasUsed() uint64 {
@@ -400,6 +451,14 @@ func (wo *WorkObject) TransactionsInfo() map[string]interface{} {
 	txInfo["conversionEtxOutbound"] = conversionOutboundEtx
 	txInfo["conversionEtxInbound"] = conversionInboundEtx
 	return txInfo
+}
+
+func (wo *WorkObject) ParentHashArray() []common.Hash {
+	parentHashArray := make([]common.Hash, common.HierarchyDepth)
+	for i := 0; i < common.HierarchyDepth; i++ {
+		parentHashArray[i] = wo.ParentHash(i)
+	}
+	return parentHashArray
 }
 
 func (wo *WorkObject) NumberArray() []*big.Int {
@@ -772,7 +831,7 @@ func (wo *WorkObject) ProtoEncode(woType WorkObjectView) (*ProtoWorkObject, erro
 		if err != nil {
 			return nil, err
 		}
-		if wo.tx == nil {
+		if wo.tx == nil || wo.tx.inner == nil {
 			return &ProtoWorkObject{
 				WoHeader: header,
 				WoBody:   body,

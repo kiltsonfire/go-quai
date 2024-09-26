@@ -59,9 +59,6 @@ var (
 	// snapshotSyncStatusKey tracks the snapshot sync status across restarts.
 	snapshotSyncStatusKey = []byte("SnapshotSyncStatus")
 
-	// badWorkObjectKey tracks the list of bad blocks seen by local
-	badWorkObjectKey = []byte("InvalidWorkObject")
-
 	// uncleanShutdownKey tracks the list of local crashes
 	uncleanShutdownKey = []byte("unclean-shutdown") // config prefix for the db
 
@@ -74,28 +71,26 @@ var (
 	headerHashSuffix   = []byte("n") // headerPrefix + num (uint64 big endian) + headerHashSuffix -> hash
 	headerNumberPrefix = []byte("H") // headerNumberPrefix + hash -> num (uint64 big endian)
 
-	pendingHeaderPrefix         = []byte("ph")    // pendingHeaderPrefix + hash -> header
-	pbBodyPrefix                = []byte("pb")    // pbBodyPrefix + hash -> *types.Body
-	pbBodyHashPrefix            = []byte("pbKey") // pbBodyPrefix -> []common.Hash
-	terminiPrefix               = []byte("tk")    //terminiPrefix + hash -> []common.Hash
-	blockWorkObjectHeaderPrefix = []byte("bw")    //blockWObjectHeaderPrefix + hash -> []common.Hash
-	txWorkObjectHeaderPrefix    = []byte("tw")    //txWorkObjectHeaderPrefix + hash -> []common.Hash
-	phWorkObjectHeaderPrefix    = []byte("pw")    //phWorkObjectHeaderPrefix + hash -> []common.Hash
-	workObjectBodyPrefix        = []byte("wb")    //workObjectBodyPrefix + hash -> []common.Hash
-	badHashesListPrefix         = []byte("bh")
-	inboundEtxsPrefix           = []byte("ie")    // inboundEtxsPrefix + hash -> types.Transactions
-	UtxoPrefix                  = []byte("ut")    // outpointPrefix + hash -> types.Outpoint
-	spentUTXOsPrefix            = []byte("sutxo") // spentUTXOsPrefix + hash -> []types.SpentTxOut
-	AddressUtxosPrefix          = []byte("au")    // addressUtxosPrefix + hash -> []types.UtxoEntry
-	processedStatePrefix        = []byte("ps")    // processedStatePrefix + hash -> boolean
-
-	blockBodyPrefix         = []byte("b")  // blockBodyPrefix + num (uint64 big endian) + hash -> block body
-	blockReceiptsPrefix     = []byte("r")  // blockReceiptsPrefix + num (uint64 big endian) + hash -> block receipts
-	pendingEtxsPrefix       = []byte("pe") // pendingEtxsPrefix + hash -> PendingEtxs at block
-	pendingEtxsRollupPrefix = []byte("pr") // pendingEtxsRollupPrefix + hash -> PendingEtxsRollup at block
-	manifestPrefix          = []byte("ma") // manifestPrefix + hash -> Manifest at block
-	interlinkPrefix         = []byte("il") // interlinkPrefix + hash -> Interlink at block
-	bloomPrefix             = []byte("bl") // bloomPrefix + hash -> bloom at block
+	pendingHeaderPrefix     = []byte("ph")    // pendingHeaderPrefix + hash -> header
+	pbBodyPrefix            = []byte("pb")    // pbBodyPrefix + hash -> *types.Body
+	pbBodyHashPrefix        = []byte("pbKey") // pbBodyPrefix -> []common.Hash
+	terminiPrefix           = []byte("tk")    //terminiPrefix + hash -> []common.Hash
+	workObjectBodyPrefix    = []byte("wb")    //workObjectBodyPrefix + hash -> []common.Hash
+	badHashesListPrefix     = []byte("bh")
+	inboundEtxsPrefix       = []byte("ie")    // inboundEtxsPrefix + hash -> types.Transactions
+	AddressUtxosPrefix      = []byte("au")    // addressUtxosPrefix + hash -> []types.UtxoEntry
+	processedStatePrefix    = []byte("ps")    // processedStatePrefix + hash -> boolean
+	multiSetPrefix          = []byte("ms")    // multiSetPrefix + hash -> multiset
+	utxoPrefix              = []byte("ut")    // outpointPrefix + hash -> types.Outpoint
+	spentUTXOsPrefix        = []byte("sutxo") // spentUTXOsPrefix + hash -> []types.SpentTxOut
+	createdUTXOsPrefix      = []byte("cutxo") // createdUTXOsPrefix + hash -> []common.Hash
+	blockBodyPrefix         = []byte("b")     // blockBodyPrefix + num (uint64 big endian) + hash -> block body
+	blockReceiptsPrefix     = []byte("r")     // blockReceiptsPrefix + num (uint64 big endian) + hash -> block receipts
+	pendingEtxsPrefix       = []byte("pe")    // pendingEtxsPrefix + hash -> PendingEtxs at block
+	pendingEtxsRollupPrefix = []byte("pr")    // pendingEtxsRollupPrefix + hash -> PendingEtxsRollup at block
+	manifestPrefix          = []byte("ma")    // manifestPrefix + hash -> Manifest at block
+	interlinkPrefix         = []byte("il")    // interlinkPrefix + hash -> Interlink at block
+	bloomPrefix             = []byte("bl")    // bloomPrefix + hash -> bloom at block
 
 	txLookupPrefix        = []byte("l") // txLookupPrefix + hash -> transaction/receipt lookup metadata
 	bloomBitsPrefix       = []byte("B") // bloomBitsPrefix + bit (uint16 big endian) + section (uint64 big endian) + hash -> bloom bits
@@ -180,29 +175,9 @@ func terminiKey(hash common.Hash) []byte {
 	return append(terminiPrefix, hash.Bytes()...)
 }
 
-// blockWorkObjectHeaderKey = workObjectHeaderPrefix + hash
-func blockWorkObjectHeaderKey(hash common.Hash) []byte {
-	return append(blockWorkObjectHeaderPrefix, hash.Bytes()...)
-}
-
-// txObjectHeaderKey = workObjectHeaderPrefix + hash
-func txWorkObjectHeaderKey(hash common.Hash) []byte {
-	return append(txWorkObjectHeaderPrefix, hash.Bytes()...)
-}
-
-// phObjectHeaderKey = workObjectHeaderPrefix + hash
-func phWorkObjectHeaderKey(hash common.Hash) []byte {
-	return append(phWorkObjectHeaderPrefix, hash.Bytes()...)
-}
-
 // workObjectBodyKey = workObjectBodyPrefix + hash
 func workObjectBodyKey(hash common.Hash) []byte {
 	return append(workObjectBodyPrefix, hash.Bytes()...)
-}
-
-// pendingHeaderKey = pendingHeaderPrefix + hash
-func pendingHeaderKey(hash common.Hash) []byte {
-	return append(pendingHeaderPrefix, hash.Bytes()...)
 }
 
 // pbBodyKey = pbBodyPrefix + hash
@@ -318,4 +293,24 @@ func inboundEtxsKey(hash common.Hash) []byte {
 
 func addressUtxosKey(address string) []byte {
 	return append(AddressUtxosPrefix, address[:]...)
+}
+
+// This can be optimized via VLQ encoding as btcd has done
+// this key is 36 bytes long and can probably be reduced to 32 bytes
+func UtxoKey(hash common.Hash, index uint16) []byte {
+	indexBytes := make([]byte, 2)
+	binary.BigEndian.PutUint16(indexBytes, index)
+	return append(utxoPrefix, append(hash.Bytes(), indexBytes...)...)
+}
+
+func spentUTXOsKey(blockHash common.Hash) []byte {
+	return append(spentUTXOsPrefix, blockHash[:]...)
+}
+
+func createdUTXOsKey(blockHash common.Hash) []byte {
+	return append(createdUTXOsPrefix, blockHash[:]...)
+}
+
+func multiSetKey(hash common.Hash) []byte {
+	return append(multiSetPrefix, hash.Bytes()...)
 }

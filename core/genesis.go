@@ -185,8 +185,8 @@ func SetupGenesisBlockWithOverride(db ethdb.Database, genesis *Genesis, nodeLoca
 	}
 	// We have the genesis block in database(perhaps in ancient database)
 	// but the corresponding state is missing.
-	header := rawdb.ReadHeader(db, stored)
-	if _, err := state.New(header.EVMRoot(), header.UTXORoot(), header.EtxSetRoot(), state.NewDatabaseWithConfig(db, nil), state.NewDatabaseWithConfig(db, nil), state.NewDatabaseWithConfig(db, nil), nil, nodeLocation, logger); err != nil {
+	header := rawdb.ReadHeader(db, 0, stored)
+	if _, err := state.New(header.EVMRoot(), header.EtxSetRoot(), header.QuaiStateSize(), state.NewDatabaseWithConfig(db, nil), state.NewDatabaseWithConfig(db, nil), nil, nodeLocation, logger); err != nil {
 		if genesis == nil {
 			genesis = DefaultGenesisBlock()
 		}
@@ -288,6 +288,8 @@ func (g *Genesis) ToBlock(startingExpansionNumber uint64) *types.WorkObject {
 		wo.Header().SetEtxEligibleSlices(common.Hash{})
 	}
 	wo.Header().SetBaseFee(new(big.Int).SetUint64(params.InitialBaseFee))
+	wo.Header().SetStateLimit(params.InitialStateLimit)
+	wo.Header().SetStateUsed(0)
 	wo.Header().SetEtxSetRoot(types.EmptyRootHash)
 	if g.GasLimit == 0 {
 		wo.Header().SetGasLimit(params.GenesisGasLimit)
@@ -374,7 +376,7 @@ func DefaultGardenGenesisBlock(consensusEngine string) *Genesis {
 			Nonce:      66,
 			ExtraData:  hexutil.MustDecode("0x11bbe8db4e347b4e8c937c1c8370e4b5ed33adb3db69cbdb7a38e1e50b1b82fa"),
 			GasLimit:   160000000,
-			Difficulty: big.NewInt(1000000),
+			Difficulty: big.NewInt(500000),
 		}
 	}
 	return &Genesis{
@@ -394,7 +396,7 @@ func DefaultOrchardGenesisBlock(consensusEngine string) *Genesis {
 			Nonce:      66,
 			ExtraData:  hexutil.MustDecode("0x11bbe8db4e347b4e8c937c1c8370e4b5ed33adb3db69cbdb7a38e1e50b1b82fc"),
 			GasLimit:   5000000,
-			Difficulty: big.NewInt(900000),
+			Difficulty: big.NewInt(200000),
 		}
 	}
 	return &Genesis{
@@ -414,7 +416,7 @@ func DefaultLighthouseGenesisBlock(consensusEngine string) *Genesis {
 			Nonce:      66,
 			ExtraData:  hexutil.MustDecode("0x11bbe8db4e347b4e8c937c1c8370e4b5ed33adb3db69cbdb7a38e1e50b1b82fb"),
 			GasLimit:   40000000,
-			Difficulty: big.NewInt(4000000),
+			Difficulty: big.NewInt(200000),
 		}
 	}
 	return &Genesis{
@@ -422,7 +424,7 @@ func DefaultLighthouseGenesisBlock(consensusEngine string) *Genesis {
 		Nonce:      0,
 		ExtraData:  hexutil.MustDecode("0x3535353535353535353535353535353535353535353535353535353535353537"),
 		GasLimit:   5000000,
-		Difficulty: big.NewInt(300000000),
+		Difficulty: big.NewInt(200000),
 	}
 }
 
@@ -513,7 +515,7 @@ func ReadGenesisQiAlloc(filename string, logger *log.Logger) map[string]GenesisU
 }
 
 // WriteGenesisUtxoSet writes the genesis utxo set to the database
-func AddGenesisUtxos(state *state.StateDB, nodeLocation common.Location, addressOutpointMap map[string]map[string]*types.OutpointAndDenomination, logger *log.Logger) {
+func AddGenesisUtxos(db ethdb.Database, utxosCreate *[]common.Hash, nodeLocation common.Location, addressOutpointMap map[string]map[string]*types.OutpointAndDenomination, logger *log.Logger) {
 	qiAlloc := ReadGenesisQiAlloc("genallocs/gen_alloc_qi_"+nodeLocation.Name()+".json", logger)
 	// logger.WithField("alloc", len(qiAlloc)).Info("Allocating genesis accounts")
 	for addressString, utxo := range qiAlloc {
@@ -535,9 +537,10 @@ func AddGenesisUtxos(state *state.StateDB, nodeLocation common.Location, address
 			Denomination: uint8(utxo.Denomination),
 		}
 
-		if err := state.CreateUTXO(hash, uint16(utxo.Index), newUtxo); err != nil {
+		if err := rawdb.CreateUTXO(db, hash, uint16(utxo.Index), newUtxo); err != nil {
 			panic(fmt.Sprintf("Failed to create genesis UTXO: %v", err))
 		}
+		*utxosCreate = append(*utxosCreate, hash) // this is not exactly a proper UTXO hash but it is unique
 
 		outpointAndDenomination := &types.OutpointAndDenomination{
 			TxHash:       hash,

@@ -158,6 +158,8 @@ type Config struct {
 
 	NodeLocation common.Location
 
+	WorkShareThreshold int
+
 	// When set, notifications sent by the remote sealer will
 	// be block header JSON objects instead of work package arrays.
 	NotifyFull bool
@@ -166,6 +168,10 @@ type Config struct {
 	// Number of threads to mine on if mining
 	NumThreads int
 }
+type mixHashWorkHash struct {
+	mixHash  []byte
+	workHash []byte
+}
 
 // Progpow is a proof-of-work consensus engine using the blake3 hash algorithm
 type Progpow struct {
@@ -173,6 +179,7 @@ type Progpow struct {
 
 	caches      *lru                         // In memory caches to avoid regenerating too often
 	lookupCache *goLRU.Cache[uint32, []byte] // Cache to store the last few block hashes
+	hashCache   *goLRU.Cache[common.Hash, mixHashWorkHash]
 
 	// Mining related fields
 	rand    *rand.Rand    // Properly seeded random source for nonces
@@ -210,12 +217,19 @@ func New(config Config, notify []string, noverify bool, logger *log.Logger) *Pro
 		logger.WithField("err", err).Fatal("Failed to create ethash lookup cache")
 	}
 
+	hashCache, err := goLRU.New[common.Hash, mixHashWorkHash](c_dagItemsInCache)
+	if err != nil {
+		logger.WithField("err", err).Fatal("Failed to create ethash hash cache")
+	}
+
 	progpow := &Progpow{
 		config:      config,
 		caches:      newlru("cache", config.CachesInMem, newCache, logger),
 		lookupCache: lookupCache,
+		hashCache:   hashCache,
 		update:      make(chan struct{}),
 		logger:      logger,
+		rand:        rand.New(rand.NewSource(time.Now().UnixNano())),
 		threads:     config.NumThreads,
 	}
 	if config.PowMode == ModeShared {
@@ -362,8 +376,8 @@ func (c *cache) generate(dir string, limit int, lock bool, test bool, logger *lo
 		}
 	}()
 	c.once.Do(func() {
-		size := cacheSize(c.epoch*epochLength + 1)
-		seed := seedHash(c.epoch*epochLength + 1)
+		size := cacheSize(c.epoch*C_epochLength + 1)
+		seed := seedHash(c.epoch*C_epochLength + 1)
 		if test {
 			size = 1024
 		}
@@ -409,7 +423,7 @@ func (c *cache) generate(dir string, limit int, lock bool, test bool, logger *lo
 		generateCDag(c.cDag, c.cache, c.epoch, logger)
 		// Iterate over all previous instances and delete old ones
 		for ep := int(c.epoch) - limit; ep >= 0; ep-- {
-			seed := seedHash(uint64(ep)*epochLength + 1)
+			seed := seedHash(uint64(ep)*C_epochLength + 1)
 			path := filepath.Join(dir, fmt.Sprintf("cache-R%d-%x%s", algorithmRevision, seed[:8], endian))
 			os.Remove(path)
 		}
@@ -429,7 +443,7 @@ func (c *cache) finalizer() {
 // by first checking against a list of in-memory caches, then against caches
 // stored on disk, and finally generating one if none can be found.
 func (progpow *Progpow) cache(block uint64) *cache {
-	epoch := block / epochLength
+	epoch := block / C_epochLength
 	currentI, futureI := progpow.caches.get(epoch)
 	current := currentI.(*cache)
 

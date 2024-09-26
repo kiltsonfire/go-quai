@@ -35,6 +35,9 @@ message ProtoHeader {
   optional common.ProtoHash etx_eligible_slices = 27;
   optional common.ProtoHash prime_terminus = 28;
   optional common.ProtoHash interlink_root_hash = 29;
+  optional uint64 state_limit = 30;
+  optional uint64 state_used = 31;
+  optional bytes quai_state_size = 32;
 }
 
 message ProtoTransaction {
@@ -110,6 +113,10 @@ message ProtoWorkObjectBlockView {
     optional ProtoWorkObject work_object = 1;
 }
 
+message ProtoWorkObjectBlocksView {
+  repeated ProtoWorkObjectBlockView work_objects = 1;
+}
+
 message ProtoWorkObjectHeaderView {
     optional ProtoWorkObject work_object = 1;
 }
@@ -126,11 +133,11 @@ message ProtoAccessTuple {
 message ProtoReceiptForStorage {
   bytes post_state_or_status = 1;
   uint64 cumulative_gas_used = 2;
-  common.ProtoHash tx_hash = 3;
-  common.ProtoAddress contract_address = 4;
-  ProtoLogsForStorage logs = 5;
-  ProtoTransactions etxs = 6;
-  uint64 gas_used = 7;
+  ProtoLogsForStorage logs = 3;
+  common.ProtoHash tx_hash = 4;
+  common.ProtoAddress contract_address = 5;
+  uint64 gas_used = 6;
+  ProtoTransactions etxs = 7;
 }
 
 message ProtoReceiptsForStorage {
@@ -199,4 +206,16 @@ message ProtoAddressOutPoints {
 
 message ProtoOutPointsMap {
   map<string, ProtoAddressOutPoints> entries = 1;
+}
+
+message ProtoSpentUTXO {
+  optional ProtoOutPoint outpoint = 1;
+  optional ProtoTxOut sutxo = 2;
+}
+
+message ProtoSpentUTXOs {
+  repeated ProtoSpentUTXO sutxos = 1;
+}
+message ProtoKeys {
+  repeated bytes keys = 1;
 }

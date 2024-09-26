@@ -15,16 +15,17 @@ import (
 
 // CalcOrder returns the order of the block within the hierarchy of chains
 func (blake3pow *Blake3pow) CalcOrder(chain consensus.BlockReader, header *types.WorkObject) (*big.Int, int, error) {
+	// check if the order for this block has already been computed
+	intrinsicS, order, exists := chain.CheckInCalcOrderCache(header.Hash())
+	if exists {
+		return intrinsicS, order, nil
+	}
 	nodeCtx := blake3pow.config.NodeLocation.Context()
 	if header.NumberU64(nodeCtx) == 0 {
 		return big0, common.PRIME_CTX, nil
 	}
-	// Need to use the prime terminus expansion number
-	primeTerminus := chain.GetBlockByHash(header.PrimeTerminus())
-	if primeTerminus == nil {
-		return big0, -1, errors.New("prime terminus cannot be found during the calc order")
-	}
-	expansionNum := primeTerminus.ExpansionNumber()
+
+	expansionNum := header.ExpansionNumber()
 
 	// Verify the seal and get the powHash for the given header
 	err := blake3pow.verifySeal(header.WorkObjectHeader())
@@ -33,7 +34,7 @@ func (blake3pow *Blake3pow) CalcOrder(chain consensus.BlockReader, header *types
 	}
 
 	// Get entropy reduction of this header
-	intrinsicS := blake3pow.IntrinsicLogS(header.Hash())
+	intrinsicS = blake3pow.IntrinsicLogS(header.Hash())
 	target := new(big.Int).Div(common.Big2e256, header.Difficulty())
 	zoneThresholdS := blake3pow.IntrinsicLogS(common.BytesToHash(target.Bytes()))
 
@@ -47,6 +48,7 @@ func (blake3pow *Blake3pow) CalcOrder(chain consensus.BlockReader, header *types
 
 	primeBlockEntropyThreshold := new(big.Int).Add(zoneThresholdS, common.BitsToBigBits(params.PrimeEntropyTarget(expansionNum)))
 	if intrinsicS.Cmp(primeBlockEntropyThreshold) > 0 && totalDeltaSPrime.Cmp(primeDeltaSTarget) > 0 {
+		chain.AddToCalcOrderCache(header.Hash(), common.PRIME_CTX, intrinsicS)
 		return intrinsicS, common.PRIME_CTX, nil
 	}
 
@@ -57,10 +59,12 @@ func (blake3pow *Blake3pow) CalcOrder(chain consensus.BlockReader, header *types
 	regionDeltaSTarget = new(big.Int).Mul(zoneThresholdS, regionDeltaSTarget)
 	regionBlockEntropyThreshold := new(big.Int).Add(zoneThresholdS, common.BitsToBigBits(params.RegionEntropyTarget(expansionNum)))
 	if intrinsicS.Cmp(regionBlockEntropyThreshold) > 0 && totalDeltaSRegion.Cmp(regionDeltaSTarget) > 0 {
+		chain.AddToCalcOrderCache(header.Hash(), common.REGION_CTX, intrinsicS)
 		return intrinsicS, common.REGION_CTX, nil
 	}
 
 	// Zone case
+	chain.AddToCalcOrderCache(header.Hash(), common.ZONE_CTX, intrinsicS)
 	return intrinsicS, common.ZONE_CTX, nil
 }
 
@@ -68,8 +72,8 @@ func (blake3pow *Blake3pow) CalcOrder(chain consensus.BlockReader, header *types
 func (blake3pow *Blake3pow) IntrinsicLogS(powHash common.Hash) *big.Int {
 	x := new(big.Int).SetBytes(powHash.Bytes())
 	d := new(big.Int).Div(big2e256, x)
-	c, m := mathutil.BinaryLog(d, mantBits)
-	bigBits := new(big.Int).Mul(big.NewInt(int64(c)), new(big.Int).Exp(big.NewInt(2), big.NewInt(mantBits), nil))
+	c, m := mathutil.BinaryLog(d, consensus.MantBits)
+	bigBits := new(big.Int).Mul(big.NewInt(int64(c)), new(big.Int).Exp(big.NewInt(2), big.NewInt(consensus.MantBits), nil))
 	bigBits = new(big.Int).Add(bigBits, m)
 	return bigBits
 }
@@ -85,7 +89,7 @@ func (blake3pow *Blake3pow) TotalLogS(chain consensus.ChainHeaderReader, header 
 		return big.NewInt(0)
 	}
 	if blake3pow.NodeLocation().Context() == common.ZONE_CTX {
-		workShareS, err := blake3pow.WorkShareLogS(header)
+		workShareS, err := blake3pow.WorkShareLogS(chain, header)
 		if err != nil {
 			return big.NewInt(0)
 		}
@@ -118,7 +122,7 @@ func (blake3pow *Blake3pow) DeltaLogS(chain consensus.ChainHeaderReader, header 
 		return big.NewInt(0)
 	}
 	if blake3pow.NodeLocation().Context() == common.ZONE_CTX {
-		workShareS, err := blake3pow.WorkShareLogS(header)
+		workShareS, err := blake3pow.WorkShareLogS(chain, header)
 		if err != nil {
 			return big.NewInt(0)
 		}
@@ -154,7 +158,7 @@ func (blake3pow *Blake3pow) UncledLogS(block *types.WorkObject) *big.Int {
 	return totalUncledLogS
 }
 
-func (blake3pow *Blake3pow) WorkShareLogS(wo *types.WorkObject) (*big.Int, error) {
+func (blake3pow *Blake3pow) WorkShareLogS(chain consensus.ChainHeaderReader, wo *types.WorkObject) (*big.Int, error) {
 	workShares := wo.Uncles()
 	totalWsEntropy := big.NewInt(0)
 	for _, ws := range workShares {
@@ -194,10 +198,20 @@ func (blake3pow *Blake3pow) WorkShareLogS(wo *types.WorkObject) (*big.Int, error
 			wsEntropyAdj := new(big.Float).Quo(new(big.Float).SetInt(common.Big2e64), bigMath.TwoToTheX(extraBits))
 			wsEntropy, _ = wsEntropyAdj.Int(wsEntropy)
 		} else {
-			wsEntropy = new(big.Int).Set(blake3pow.IntrinsicLogS(powHash))
+			cBigBits := blake3pow.IntrinsicLogS(powHash)
+			thresholdBigBits := blake3pow.IntrinsicLogS(common.BytesToHash(target.Bytes()))
+			wsEntropy = new(big.Int).Sub(cBigBits, thresholdBigBits)
 		}
 		// Discount 2) applies to all shares regardless of the weight
-		wsEntropy = new(big.Int).Div(wsEntropy, new(big.Int).Exp(big.NewInt(2), big.NewInt(int64(wo.NumberU64(common.ZONE_CTX)-ws.NumberU64())), nil))
+		// a workshare cannot reference another workshare, it has to be either a block or an uncle
+		// check that the parent hash referenced by the workshare is an uncle or a canonical block
+		// then if its an uncle, traverse back until we hit a canonical block, other wise, use that
+		// as a reference to calculate the distance
+		distance, err := chain.WorkShareDistance(wo, ws)
+		if err != nil {
+			return big.NewInt(0), err
+		}
+		wsEntropy = new(big.Int).Div(wsEntropy, new(big.Int).Exp(big.NewInt(2), distance, nil))
 		// Add the entropy into the total entropy once the discount calculation is done
 		totalWsEntropy.Add(totalWsEntropy, wsEntropy)
 
@@ -260,19 +274,24 @@ func (blake3pow *Blake3pow) CalcRank(chain consensus.ChainHeaderReader, header *
 	return 0, nil
 }
 
-func (blake3pow *Blake3pow) CheckIfValidWorkShare(workShare *types.WorkObjectHeader) bool {
-	// Extract some data from the header
-	diff := new(big.Int).Set(workShare.Difficulty())
-	c, _ := mathutil.BinaryLog(diff, mantBits)
-	if c <= params.WorkSharesThresholdDiff {
+func (blake3pow *Blake3pow) CheckIfValidWorkShare(workShare *types.WorkObjectHeader) types.WorkShareValidity {
+	if blake3pow.CheckWorkThreshold(workShare, params.WorkSharesThresholdDiff) {
+		return types.Valid
+	} else if blake3pow.CheckWorkThreshold(workShare, blake3pow.config.WorkShareThreshold) {
+		return types.Sub
+	} else {
+		return types.Invalid
+	}
+}
+
+func (blake3pow *Blake3pow) CheckWorkThreshold(workShare *types.WorkObjectHeader, workShareThresholdDiff int) bool {
+	workShareMinTarget, err := consensus.CalcWorkShareThreshold(workShare, workShareThresholdDiff)
+	if err != nil {
 		return false
 	}
-	workShareThreshold := c - params.WorkSharesThresholdDiff
-	workShareDiff := new(big.Int).Exp(big.NewInt(2), big.NewInt(int64(workShareThreshold)), nil)
-	workShareMintarget := new(big.Int).Div(big2e256, workShareDiff)
 	powHash, err := blake3pow.ComputePowHash(workShare)
 	if err != nil {
 		return false
 	}
-	return new(big.Int).SetBytes(powHash.Bytes()).Cmp(workShareMintarget) <= 0
+	return new(big.Int).SetBytes(powHash.Bytes()).Cmp(workShareMinTarget) <= 0
 }

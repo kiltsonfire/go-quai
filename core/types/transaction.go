@@ -595,6 +595,10 @@ func (tx *Transaction) From(nodeLocation common.Location) *common.Address {
 	}
 }
 
+func (tx *Transaction) SetFrom(from common.Address, signer Signer) {
+	tx.from.Store(sigCache{signer, from.Bytes20()})
+}
+
 // To returns the recipient address of the transaction.
 // For contract-creation transactions, To returns nil.
 func (tx *Transaction) To() *common.Address {
@@ -822,6 +826,7 @@ func (s Transactions) ProtoEncode() (*ProtoTransactions, error) {
 
 // ProtoDecode decodes the ProtoTransactions into the Transactions format
 func (s *Transactions) ProtoDecode(transactions *ProtoTransactions, location common.Location) error {
+	*s = make(Transactions, 0, len(transactions.Transactions))
 	for _, protoTx := range transactions.Transactions {
 		tx := &Transaction{}
 		err := tx.ProtoDecode(protoTx, location)
@@ -997,7 +1002,7 @@ type TransactionsByPriceAndNonce struct {
 //
 // Note, the input map is reowned so the caller should not interact any more with
 // if after providing it to the constructor.
-func NewTransactionsByPriceAndNonce(signer Signer, qiTxs map[common.Hash]*TxWithMinerFee, txs map[common.AddressBytes]Transactions, baseFee *big.Int, sort bool) *TransactionsByPriceAndNonce {
+func NewTransactionsByPriceAndNonce(signer Signer, qiTxs []*TxWithMinerFee, txs map[common.AddressBytes]Transactions, baseFee *big.Int, sort bool) *TransactionsByPriceAndNonce {
 	// Initialize a price and received time based heap with the head transactions
 	heads := make(TxByPriceAndTime, 0, len(txs))
 

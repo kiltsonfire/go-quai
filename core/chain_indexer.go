@@ -19,7 +19,9 @@ package core
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"math/big"
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
@@ -35,6 +37,8 @@ import (
 	"github.com/dominant-strategies/go-quai/log"
 	"github.com/dominant-strategies/go-quai/params"
 )
+
+var PruneDepth = uint64(1000000) // Number of blocks behind in which we begin pruning old block data
 
 // ChainIndexerBackend defines the methods needed to process chain segments in
 // the background and write the segment results into the database. These can be
@@ -66,7 +70,7 @@ type ChainIndexerChain interface {
 	// NodeCtx returns the context of the chain
 	NodeCtx() int
 	// StateAt returns the state for a state trie root and utxo root
-	StateAt(root common.Hash, utxoRoot common.Hash, etxRoot common.Hash) (*state.StateDB, error)
+	StateAt(root common.Hash, etxRoot common.Hash, quaiStateSize *big.Int) (*state.StateDB, error)
 }
 
 // ChainIndexer does a post-processing job for equally sized sections of the
@@ -84,7 +88,7 @@ type ChainIndexer struct {
 	backend   ChainIndexerBackend // Background processor generating the index data content
 	children  []*ChainIndexer     // Child indexers to cascade chain updates to
 	GetBloom  func(common.Hash) (*types.Bloom, error)
-	StateAt   func(common.Hash, common.Hash, common.Hash) (*state.StateDB, error)
+	StateAt   func(common.Hash, common.Hash, *big.Int) (*state.StateDB, error)
 	active    uint32          // Flag whether the event loop was started
 	update    chan struct{}   // Notification channel that headers should be processed
 	quit      chan chan error // Quit channel to tear down running goroutines
@@ -226,6 +230,14 @@ func (c *ChainIndexer) eventLoop(currentHeader *types.WorkObject, events chan Ch
 }
 
 func (c *ChainIndexer) indexerLoop(currentHeader *types.WorkObject, qiIndexerCh chan *types.WorkObject, nodeCtx int, config params.ChainConfig) {
+	defer func() {
+		if r := recover(); r != nil {
+			c.logger.WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Error("Go-Quai Panicked")
+		}
+	}()
 	var (
 		prevHeader = currentHeader
 		prevHash   = currentHeader.Hash()
@@ -237,13 +249,27 @@ func (c *ChainIndexer) indexerLoop(currentHeader *types.WorkObject, qiIndexerCh 
 			errc <- nil
 			return
 		case block := <-qiIndexerCh:
+			start := time.Now()
+			if block.NumberU64(nodeCtx) > PruneDepth {
+				// Ensure block is canonical before pruning
+				if rawdb.ReadCanonicalHash(c.chainDb, block.NumberU64(nodeCtx)) != block.Hash() {
+					if rawdb.ReadCanonicalHash(c.chainDb, block.NumberU64(nodeCtx)-1) != block.ParentHash(nodeCtx) {
+						c.logger.Errorf("Block %d sent to ChainIndexer is not canonical, skipping hash %s", block.NumberU64(nodeCtx), block.Hash())
+						return
+					}
+				}
+				c.PruneOldBlockData(block.NumberU64(nodeCtx) - PruneDepth)
+			}
+			time1 := time.Since(start)
 			var validUtxoIndex bool
 			var addressOutpoints map[string]map[string]*types.OutpointAndDenomination
 			if c.indexAddressUtxos {
 				validUtxoIndex = true
 				addressOutpoints = make(map[string]map[string]*types.OutpointAndDenomination)
 			}
+			time2 := time.Since(start)
 
+			var time3, time4, time5 time.Duration
 			if block.ParentHash(nodeCtx) != prevHash {
 				// Reorg to the common ancestor if needed (might not exist in light sync mode, skip reorg then)
 				// TODO: This seems a bit brittle, can we detect this case explicitly?
@@ -255,9 +281,18 @@ func (c *ChainIndexer) indexerLoop(currentHeader *types.WorkObject, qiIndexerCh 
 						// TODO: Need to be able to turn on/off indexer and fix corrupted state
 						if c.indexAddressUtxos {
 							reorgHeaders := make([]*types.WorkObject, 0)
-							for prev := prevHeader; prev.Hash() != h.Hash(); prev = rawdb.ReadHeader(c.chainDb, prev.ParentHash(nodeCtx)) {
+							for prev := prevHeader; prev.Hash() != h.Hash(); {
+								prevNumber := rawdb.ReadHeaderNumber(c.chainDb, prev.ParentHash(nodeCtx))
+								if prevNumber == nil {
+									break
+								}
+								prev = rawdb.ReadHeader(c.chainDb, *prevNumber, prev.ParentHash(nodeCtx))
 								reorgHeaders = append(reorgHeaders, h)
 							}
+
+							c.logger.Warn("ChainIndexer: Reorging the utxo indexer of len", len(reorgHeaders))
+
+							time3 = time.Since(start)
 
 							// Reorg out all outpoints of the reorg headers
 							err := c.reorgUtxoIndexer(reorgHeaders, addressOutpoints, nodeCtx, config)
@@ -266,23 +301,38 @@ func (c *ChainIndexer) indexerLoop(currentHeader *types.WorkObject, qiIndexerCh 
 								validUtxoIndex = false
 							}
 
+							time4 = time.Since(start)
+
 							// Add new blocks from current hash back to common ancestor
-							for curr := block; curr.Hash() != h.Hash(); curr = rawdb.ReadHeader(c.chainDb, curr.ParentHash(nodeCtx)) {
-								block := rawdb.ReadWorkObject(c.chainDb, curr.Hash(), types.BlockObject)
+							for curr := block; curr.Hash() != h.Hash(); {
+								prevNumber := rawdb.ReadHeaderNumber(c.chainDb, curr.ParentHash(nodeCtx))
+								if prevNumber == nil {
+									break
+								}
+								curr = rawdb.ReadHeader(c.chainDb, *prevNumber, curr.ParentHash(nodeCtx))
+								block := rawdb.ReadWorkObject(c.chainDb, *prevNumber, curr.Hash(), types.BlockObject)
 								c.addOutpointsToIndexer(addressOutpoints, nodeCtx, config, block)
 							}
 						}
+
+						time5 = time.Since(start)
 
 						c.newHead(h.NumberU64(nodeCtx), true)
 					}
 				}
 			}
 
+			time6 := time.Since(start)
+
 			if c.indexAddressUtxos {
 				c.addOutpointsToIndexer(addressOutpoints, nodeCtx, config, block)
 			}
 
+			time7 := time.Since(start)
+
 			c.newHead(block.NumberU64(nodeCtx), false)
+
+			time8 := time.Since(start)
 
 			if c.indexAddressUtxos && validUtxoIndex {
 				err := rawdb.WriteAddressOutpoints(c.chainDb, addressOutpoints)
@@ -291,9 +341,43 @@ func (c *ChainIndexer) indexerLoop(currentHeader *types.WorkObject, qiIndexerCh 
 				}
 			}
 
+			time9 := time.Since(start)
+
+			for key, _ := range addressOutpoints {
+				addressOutpoints[key] = nil
+			}
+			addressOutpoints = nil
+
+			time10 := time.Since(start)
 			prevHeader, prevHash = block, block.Hash()
+
+			c.logger.Info("ChainIndexer: setting the prevHeader and prevHash", prevHeader.NumberArray(), prevHash)
+			c.logger.WithFields(log.Fields{
+				"time1":  common.PrettyDuration(time1),
+				"time2":  common.PrettyDuration(time2),
+				"time3":  common.PrettyDuration(time3),
+				"time4":  common.PrettyDuration(time4),
+				"time5":  common.PrettyDuration(time5),
+				"time6":  common.PrettyDuration(time6),
+				"time7":  common.PrettyDuration(time7),
+				"time8":  common.PrettyDuration(time8),
+				"time9":  common.PrettyDuration(time9),
+				"time10": common.PrettyDuration(time10),
+			}).Info("Times in indexerLoop")
 		}
+
 	}
+}
+
+func (c *ChainIndexer) PruneOldBlockData(blockHeight uint64) {
+	blockHash := rawdb.ReadCanonicalHash(c.chainDb, blockHeight)
+	rawdb.DeleteInboundEtxs(c.chainDb, blockHash)
+	rawdb.DeletePendingEtxs(c.chainDb, blockHash)
+	rawdb.DeletePendingEtxsRollup(c.chainDb, blockHash)
+	rawdb.DeleteManifest(c.chainDb, blockHash)
+	rawdb.DeletePbCacheBody(c.chainDb, blockHash)
+	rawdb.DeleteSpentUTXOs(c.chainDb, blockHash)
+	rawdb.DeleteCreatedUTXOKeys(c.chainDb, blockHash)
 }
 
 // newHead notifies the indexer about new chain heads and/or reorgs.
@@ -449,7 +533,7 @@ func (c *ChainIndexer) processSection(section uint64, lastHead common.Hash, node
 		if hash == (common.Hash{}) {
 			return common.Hash{}, fmt.Errorf("canonical block #%d unknown", number)
 		}
-		header := rawdb.ReadHeader(c.chainDb, hash)
+		header := rawdb.ReadHeader(c.chainDb, number, hash)
 		if header == nil {
 			return common.Hash{}, fmt.Errorf("block #%d [%x..] not found", number, hash[:4])
 		} else if header.ParentHash(nodeCtx) != lastHead {
@@ -611,7 +695,7 @@ func (c *ChainIndexer) addOutpointsToIndexer(addressOutpoints map[string]map[str
 // This is done in reverse order from the old header to the common ancestor.
 func (c *ChainIndexer) reorgUtxoIndexer(headers []*types.WorkObject, addressOutpoints map[string]map[string]*types.OutpointAndDenomination, nodeCtx int, config params.ChainConfig) error {
 	for _, header := range headers {
-		block := rawdb.ReadWorkObject(c.chainDb, header.Hash(), types.BlockObject)
+		block := rawdb.ReadWorkObject(c.chainDb, header.NumberU64(nodeCtx), header.Hash(), types.BlockObject)
 
 		for _, tx := range block.QiTransactions() {
 			for i, out := range tx.TxOut() {
@@ -641,15 +725,12 @@ func (c *ChainIndexer) reorgUtxoIndexer(headers []*types.WorkObject, addressOutp
 			for _, in := range tx.TxIn() {
 				outpoint := in.PreviousOutPoint
 				address := crypto.PubkeyBytesToAddress(in.PubKey, config.Location).Hex()
-
-				parent := rawdb.ReadHeader(c.chainDb, block.ParentHash(nodeCtx))
-
-				state, err := c.StateAt(parent.EVMRoot(), parent.UTXORoot(), parent.EtxSetRoot())
-				if err != nil {
-					return err
+				parentNumber := rawdb.ReadHeaderNumber(c.chainDb, block.ParentHash(nodeCtx))
+				if parentNumber == nil {
+					return errors.New("parent number cannot be found")
 				}
 
-				entry := state.GetUTXO(outpoint.TxHash, outpoint.Index)
+				entry := rawdb.GetUTXO(c.chainDb, outpoint.TxHash, outpoint.Index)
 				if entry == nil {
 					// missing entry while tryig to add back outpoint
 					continue

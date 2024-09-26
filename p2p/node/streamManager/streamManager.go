@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -36,7 +37,9 @@ const (
 )
 
 var (
-	ErrStreamNotFound = errors.New("stream not found")
+	ErrStreamNotFound           = errors.New("stream not found")
+	ErrStreamMismatch           = errors.New("stream mismatch")
+	ErrorTooManyPendingRequests = errors.New("too many pending requests")
 )
 
 type StreamManager interface {
@@ -110,13 +113,24 @@ func (sm *basicStreamManager) Start() {
 }
 
 func (sm *basicStreamManager) listenForNewStreamRequest() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Global.WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Fatal("Go-Quai Panicked")
+		}
+	}()
 	for {
 		select {
 		case peerID := <-sm.newStreamRequestChan:
-			err := sm.OpenStream(peerID)
-			if err != nil {
-				log.Global.WithFields(log.Fields{"peerId": peerID, "err": err}).Warn("Error opening new strean into peer")
-			}
+			go func(peerID peer.ID) {
+				err := sm.OpenStream(peerID)
+				if err != nil {
+					log.Global.WithFields(log.Fields{"peerId": peerID, "err": err}).Warn("Error opening new strean into peer")
+				}
+			}(peerID)
+
 		case <-sm.ctx.Done():
 			return
 		}
@@ -128,23 +142,30 @@ func (sm *basicStreamManager) OpenStream(peerID p2p.PeerID) error {
 	if _, ok := sm.streamCache.Get(peerID); ok {
 		return nil
 	}
-	// Create a new stream to the peer and register it in the cache
-	stream, err := sm.host.NewStream(sm.ctx, peerID, quaiprotocol.ProtocolVersion)
-	if err != nil {
-		return fmt.Errorf("error opening new stream with peer %s", peerID)
+	timer := time.NewTimer(c_stream_timeout)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return errors.New("stream creation timeout")
+	default:
+		// Create a new stream to the peer and register it in the cache
+		stream, err := sm.host.NewStream(sm.ctx, peerID, quaiprotocol.ProtocolVersion)
+		if err != nil {
+			return fmt.Errorf("error opening new stream with peer %s err: %s", peerID, err)
+		}
+		wrappedStream := streamWrapper{
+			stream:    stream,
+			semaphore: make(chan struct{}, c_maxPendingRequests),
+			errCount:  0,
+		}
+		sm.streamCache.Add(peerID, wrappedStream)
+		go quaiprotocol.QuaiProtocolHandler(stream, sm.p2pBackend)
+		log.Global.WithField("PeerID", peerID).Info("Had to create new stream")
+		if streamMetrics != nil {
+			streamMetrics.WithLabelValues("NumStreams").Inc()
+		}
+		return nil
 	}
-	wrappedStream := streamWrapper{
-		stream:    stream,
-		semaphore: make(chan struct{}, c_maxPendingRequests),
-		errCount:  0,
-	}
-	sm.streamCache.Add(peerID, wrappedStream)
-	go quaiprotocol.QuaiProtocolHandler(stream, sm.p2pBackend)
-	log.Global.WithField("PeerID", peerID).Info("Had to create new stream")
-	if streamMetrics != nil {
-		streamMetrics.WithLabelValues("NumStreams").Inc()
-	}
-	return nil
 }
 
 func (sm *basicStreamManager) CloseStream(peerID p2p.PeerID) error {
@@ -193,11 +214,11 @@ func (sm *basicStreamManager) GetHost() host.Host {
 func (sm *basicStreamManager) WriteMessageToStream(peerID p2p.PeerID, stream network.Stream, msg []byte, protoversion protocol.ID, reporter libp2pmetrics.Reporter) error {
 	wrappedStream, found := sm.streamCache.Get(peerID)
 	if !found {
-		return errors.New("stream not found")
+		return ErrStreamNotFound
 	}
 	if stream != wrappedStream.stream {
 		// Indicate an unexpected case where the stream we stored and the stream we are requested to write to are not the same.
-		return errors.New("stream mismatch")
+		return ErrStreamMismatch
 	}
 
 	// Attempt to acquire semaphore before proceeding
@@ -213,9 +234,9 @@ func (sm *basicStreamManager) WriteMessageToStream(peerID p2p.PeerID, stream net
 			}).Warn("Had to close malfunctioning stream")
 			// If c_maxPendingRequests have been dropped, the stream is likely in a bad state
 			sm.CloseStream(peerID)
-			return errors.New("too many pending requests")
+			return ErrorTooManyPendingRequests
 		}
-		return errors.New("too many pending requests")
+		return ErrorTooManyPendingRequests
 	}
 	defer func() {
 		<-wrappedStream.semaphore

@@ -17,6 +17,7 @@
 package core
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"math/big"
@@ -31,6 +32,7 @@ import (
 )
 
 var emptyCodeHash = crypto.Keccak256Hash(nil)
+var suicide = []byte("Suicide")
 
 /*
 The State Transitioning Model
@@ -90,6 +92,7 @@ type Message interface {
 // message no matter the execution itself is successful or not.
 type ExecutionResult struct {
 	UsedGas      uint64               // Total used gas but include the refunded gas
+	UsedState    uint64               // Total used state
 	Err          error                // Any error encountered during the execution(listed in core/vm/errors.go)
 	ReturnData   []byte               // Returned data from evm(function result or data supplied with revert opcode)
 	Etxs         []*types.Transaction // External transactions generated from opETX
@@ -317,6 +320,7 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 		if strings.Contains(err.Error(), ErrEtxGasLimitReached.Error()) {
 			return &ExecutionResult{
 				UsedGas:      params.TxGas,
+				UsedState:    params.EtxStateUsed,
 				Err:          err,
 				ReturnData:   []byte{},
 				Etxs:         nil,
@@ -354,14 +358,42 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 	rules := st.evm.ChainConfig().Rules(st.evm.Context.BlockNumber)
 	st.state.PrepareAccessList(msg.From(), msg.To(), vm.ActivePrecompiles(rules, st.evm.ChainConfig().Location), msg.AccessList())
 
+	if !st.msg.IsETX() && !contractCreation && len(st.data) == 27 && bytes.Equal(st.data[:7], suicide) && st.to().Equal(st.msg.From()) {
+		// Caller requests self-destruct
+		beneficiary, err := common.BytesToAddress(st.data[7:27], st.evm.ChainConfig().Location).InternalAndQuaiAddress()
+		if err != nil {
+			return nil, fmt.Errorf("Unable to self-destruct: %v", err)
+		}
+		fromInternal, err := msg.From().InternalAndQuaiAddress()
+		if err != nil {
+			return nil, fmt.Errorf("Unable to self-destruct: %v", err)
+		}
+		balance := st.evm.StateDB.GetBalance(fromInternal)
+		st.evm.StateDB.Suicide(fromInternal)
+		refund := new(big.Int).Mul(st.evm.Context.BaseFee, new(big.Int).SetUint64(params.CallNewAccountGas(st.evm.Context.QuaiStateSize)))
+		balance.Add(balance, refund)
+		st.evm.StateDB.AddBalance(beneficiary, balance)
+
+		effectiveTip := cmath.BigMin(st.gasTipCap, new(big.Int).Sub(st.gasFeeCap, st.evm.Context.BaseFee))
+		return &ExecutionResult{
+			UsedGas:      st.gasUsed(),
+			UsedState:    0,
+			Err:          nil,
+			ReturnData:   []byte{},
+			Etxs:         nil,
+			QuaiFees:     new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), effectiveTip),
+			ContractAddr: nil,
+		}, nil
+	}
 	var (
 		ret          []byte
 		vmerr        error // vm errors do not effect consensus and are therefore not assigned to err
 		contractAddr *common.Address
 	)
+	var stateUsed uint64
 	if contractCreation {
 		var contract common.Address
-		ret, contract, st.gas, vmerr = st.evm.Create(sender, st.data, st.gas, st.value)
+		ret, contract, st.gas, stateUsed, vmerr = st.evm.Create(sender, st.data, st.gas, st.value)
 		contractAddr = &contract
 	} else {
 		// Increment the nonce for the next transaction
@@ -374,7 +406,7 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 			return nil, err
 		}
 		st.state.SetNonce(from, st.state.GetNonce(addr)+1)
-		ret, st.gas, vmerr = st.evm.Call(sender, st.to(), st.data, st.gas, st.value, st.msg.Lock())
+		ret, st.gas, stateUsed, vmerr = st.evm.Call(sender, st.to(), st.data, st.gas, st.value, st.msg.Lock())
 	}
 
 	// At this point, the execution completed, so the ETX cache can be dumped and reset
@@ -400,6 +432,7 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 
 	return &ExecutionResult{
 		UsedGas:      st.gasUsed(),
+		UsedState:    stateUsed,
 		Err:          vmerr,
 		ReturnData:   ret,
 		Etxs:         etxs,

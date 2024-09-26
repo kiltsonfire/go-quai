@@ -29,7 +29,7 @@ import (
 	"github.com/ipfs/go-datastore"
 	"github.com/ipfs/go-datastore/query"
 
-	"github.com/libp2p/go-libp2p-kad-dht/dual"
+	kaddht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/connmgr"
 	"github.com/libp2p/go-libp2p/core/host"
 	libp2pmetrics "github.com/libp2p/go-libp2p/core/metrics"
@@ -90,7 +90,7 @@ type PeerManager interface {
 	GetSelfID() p2p.PeerID
 
 	// Sets the DHT provided from the Host interface
-	SetDHT(*dual.DHT)
+	SetDHT(*kaddht.IpfsDHT)
 
 	// Sets the streamManager interface
 	SetStreamManager(streamManager.StreamManager)
@@ -143,7 +143,7 @@ type BasicPeerManager struct {
 	bootpeers []peer.AddrInfo
 
 	// DHT instance
-	dht *dual.DHT
+	dht *kaddht.IpfsDHT
 
 	// This peer's ID to distinguish self-broadcasts
 	selfID p2p.PeerID
@@ -274,6 +274,10 @@ func loadPeerDBs() (map[string][]*peerdb.PeerDB, error) {
 		for _, domLoc := range domLocations {
 			for _, dataType := range dataTypes {
 				topic, err := pubsubManager.NewTopic(utils.MakeGenesis().ToBlock(0).Hash(), domLoc, dataType)
+				log.Global.WithFields(log.Fields{
+					"topic": topic.String(),
+					"cid":   pubsubManager.TopicToCid(topic),
+				}).Info("Creating topic")
 				if err != nil {
 					return nil, err
 				}
@@ -361,7 +365,7 @@ func (pm *BasicPeerManager) RefreshBootpeers() []peer.AddrInfo {
 	return bootpeers
 }
 
-func (pm *BasicPeerManager) SetDHT(dht *dual.DHT) {
+func (pm *BasicPeerManager) SetDHT(dht *kaddht.IpfsDHT) {
 	pm.dht = dht
 }
 
@@ -370,6 +374,12 @@ func (pm *BasicPeerManager) Provide(ctx context.Context, location common.Locatio
 	if err != nil {
 		return err
 	}
+
+	log.Global.WithFields(log.Fields{
+		"topic": t.String(),
+		"cid":   pubsubManager.TopicToCid(t),
+	}).Debug("Providing topic to DHT")
+
 	return pm.dht.Provide(ctx, pubsubManager.TopicToCid(t), true)
 }
 
@@ -434,6 +444,10 @@ func (pm *BasicPeerManager) getPeersHelper(peerDB *peerdb.PeerDB, numPeers int) 
 }
 
 func (pm *BasicPeerManager) GetPeers(topic *pubsubManager.Topic) map[p2p.PeerID]struct{} {
+	log.Global.WithFields(log.Fields{
+		"topic": topic.String(),
+	}).Info("Getting peers for topic")
+
 	if pm.peerDBs[topic.String()] == nil {
 		// There have not been any peers added to this topic
 		return make(map[peer.ID]struct{})
@@ -451,6 +465,12 @@ func (pm *BasicPeerManager) GetPeers(topic *pubsubManager.Topic) map[p2p.PeerID]
 
 	// Randomly select request degree number of peers from the peerList
 	lenPeer := len(peerList)
+
+	// go func() {
+	// 	dhtContent := pm.queryDHT(topic, peerList, 10)
+	// 	log.Global.Infof("Found %d peers from the DHT", len(dhtContent))
+	// }()
+
 	// If we have more peers than the request degree, randomly select peers and
 	// return, otherwise ask the dht for the extra required peers
 	if lenPeer >= topic.GetRequestDegree() {
@@ -509,7 +529,14 @@ func (pm *BasicPeerManager) MarkLivelyPeer(peer p2p.PeerID, topic *pubsubManager
 		return
 	}
 	pm.TagPeer(peer, "liveness_reports", 1)
-	pm.recategorizePeer(peer, topic)
+	err := pm.recategorizePeer(peer, topic)
+	if err != nil {
+		log.Global.WithFields(log.Fields{
+			"peer":  peer,
+			"topic": topic.String(),
+			"err":   err,
+		}).Debug("Error marking lively peer")
+	}
 }
 
 func (pm *BasicPeerManager) MarkLatentPeer(peer p2p.PeerID, topic *pubsubManager.Topic) {
@@ -604,6 +631,21 @@ func (pm *BasicPeerManager) recategorizePeer(peerID p2p.PeerID, topic *pubsubMan
 			return errors.Wrap(err, "error putting peer in allPeersDB")
 		}
 	}
+	// q := query.Query{
+	// 	Limit: 3,
+	// }
+	// results, err := pm.peerDBs[topic.String()][LastResort].Query(context.Background(), q)
+	// if err != nil {
+	// 	return err
+	// }
+	// for result := range results.Next() {
+	// 	peerID, err := peer.Decode(strings.TrimPrefix(result.Key, "/"))
+	// 	if err != nil {
+	// 		// If there is an error, move to the next peer
+	// 		continue
+	// 	}
+	// 	log.Global.Info("Peer ID found in the database", result, peerID)
+	// }
 
 	return nil
 }
@@ -634,7 +676,6 @@ func (pm *BasicPeerManager) Stop() error {
 
 	for _, closeFunc := range closeFuncs {
 		go func(cf func() error) {
-			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
 					log.Global.WithFields(log.Fields{
@@ -643,6 +684,7 @@ func (pm *BasicPeerManager) Stop() error {
 					}).Fatal("Go-Quai Panicked")
 				}
 			}()
+			defer wg.Done()
 			if err := cf(); err != nil {
 				mu.Lock()
 				closeErrors = append(closeErrors, err.Error())
@@ -655,7 +697,6 @@ func (pm *BasicPeerManager) Stop() error {
 		for _, peerDB := range db {
 			wg.Add(1)
 			go func(db *peerdb.PeerDB) {
-				defer wg.Done()
 				defer func() {
 					if r := recover(); r != nil {
 						log.Global.WithFields(log.Fields{
@@ -664,6 +705,7 @@ func (pm *BasicPeerManager) Stop() error {
 						}).Fatal("Go-Quai Panicked")
 					}
 				}()
+				defer wg.Done()
 				if err := db.Close(); err != nil {
 					mu.Lock()
 					closeErrors = append(closeErrors, err.Error())

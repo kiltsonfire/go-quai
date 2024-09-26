@@ -9,11 +9,13 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/dominant-strategies/go-quai/cmd/utils"
 	"github.com/dominant-strategies/go-quai/common"
 	"github.com/dominant-strategies/go-quai/core/types"
 	"github.com/dominant-strategies/go-quai/log"
+	p2p "github.com/dominant-strategies/go-quai/p2p"
 	"github.com/dominant-strategies/go-quai/p2p/pb"
 	"github.com/dominant-strategies/go-quai/quai"
 )
@@ -22,7 +24,10 @@ const numWorkers = 20   // Number of workers per stream
 const msgChanSize = 500 // 500 requests per subscription
 
 var (
-	ErrUnsupportedType = errors.New("data type not supported")
+	ErrConsensusNotSet     = errors.New("consensus backend not set")
+	ErrValidatorFuncNotSet = errors.New("validator function cannot be initialized")
+	ErrNoTopic             = errors.New("no topic for requested data")
+	ErrUnsupportedType     = errors.New("data type not supported")
 )
 
 type PubsubManager struct {
@@ -34,7 +39,7 @@ type PubsubManager struct {
 	genesis       common.Hash
 
 	// Callback function to handle received data
-	onReceived func(peer.ID, string, string, interface{}, common.Location)
+	onReceived func(peer.ID, peer.ID, string, string, interface{}, common.Location)
 }
 
 // creates a new gossipsub instance
@@ -46,7 +51,11 @@ func NewGossipSubManager(ctx context.Context, h host.Host) (*PubsubManager, erro
 	cfg.Dlo = 6
 	cfg.Dhi = 45
 	cfg.Dout = 20
-	ps, err := pubsub.NewGossipSub(ctx, h, pubsub.WithGossipSubParams(cfg))
+	tracer, err := pubsub.NewJSONTracer("nodelogs/gossiptracer.log") // Outputs events in JSON format to stdout
+	if err != nil {
+		return nil, err
+	}
+	ps, err := pubsub.NewGossipSub(ctx, h, pubsub.WithGossipSubParams(cfg), pubsub.WithEventTracer(tracer))
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +80,7 @@ func (g *PubsubManager) SetQuaiBackend(consensus quai.ConsensusAPI) {
 
 }
 
-func (g *PubsubManager) SetReceiveHandler(receiveCb func(peer.ID, string, string, interface{}, common.Location)) {
+func (g *PubsubManager) SetReceiveHandler(receiveCb func(peer.ID, peer.ID, string, string, interface{}, common.Location)) {
 	g.onReceived = receiveCb
 }
 
@@ -107,14 +116,16 @@ func (g *PubsubManager) Subscribe(location common.Location, datatype interface{}
 		return err
 	}
 	g.topics.Store(topicSub.String(), topic)
-	g.PubSub.RegisterTopicValidator(topic.String(), g.consensus.ValidatorFunc())
+	if g.consensus == nil {
+		return ErrConsensusNotSet
+	}
 
 	// subscribe to the topic
 	subscription, err := topic.Subscribe()
 	if err != nil {
 		return err
 	}
-	g.subscriptions.Store(topic, subscription)
+	g.subscriptions.Store(topicSub.String(), subscription)
 
 	go func(location common.Location, sub *pubsub.Subscription) {
 		defer func() {
@@ -156,7 +167,7 @@ func (g *PubsubManager) Subscribe(location common.Location, datatype interface{}
 
 				// handle the received data
 				if g.onReceived != nil {
-					g.onReceived(msg.ReceivedFrom, msg.ID, *msg.Topic, data, location)
+					g.onReceived(msg.GetFrom(), msg.ReceivedFrom, msg.ID, *msg.Topic, data, location)
 				}
 			}
 		}
@@ -167,8 +178,8 @@ func (g *PubsubManager) Subscribe(location common.Location, datatype interface{}
 		for {
 			msg, err := sub.Next(g.ctx)
 			if err != nil || msg == nil {
-				// if context was cancelled, then we are shutting down
-				if g.ctx.Err() != nil {
+				// if context or subscription was cancelled, then we are shutting down
+				if g.ctx.Err() != nil || err == pubsub.ErrSubscriptionCancelled {
 					return
 				}
 				log.Global.Errorf("error getting next message from subscription: %s", err)
@@ -191,16 +202,168 @@ func (g *PubsubManager) Subscribe(location common.Location, datatype interface{}
 	return nil
 }
 
+func (g *PubsubManager) ValidatorFunc() func(ctx context.Context, id p2p.PeerID, msg *pubsub.Message) pubsub.ValidationResult {
+	return func(ctx context.Context, id peer.ID, msg *pubsub.Message) pubsub.ValidationResult {
+		var data interface{}
+		topicString := msg.Topic
+		if topicString == nil {
+			return pubsub.ValidationReject
+		}
+		topic, err := TopicFromString(*topicString)
+		if err != nil {
+			log.Global.WithField("topic", *topicString).Errorf("glodserror parsing topic: %s", err)
+			return pubsub.ValidationReject
+		}
+		// get the proto encoded data
+		protoData := msg.GetData()
+
+		// get the topic data to be used to decode the proto data
+		data = topic.data
+
+		switch data.(type) {
+		case *types.WorkObjectBlockView:
+
+			protoWo := new(types.ProtoWorkObjectBlockView)
+			err := proto.Unmarshal(protoData, protoWo)
+			if err != nil {
+				log.Global.WithField("err", err).Error("validator: error unmarshalling proto data")
+				return pubsub.ValidationReject
+			}
+
+			block := &types.WorkObjectBlockView{
+				WorkObject: &types.WorkObject{},
+			}
+			err = block.ProtoDecode(protoWo, protoWo.GetWorkObject().GetWoHeader().GetLocation().Value)
+			if err != nil {
+				log.Global.WithField("err", err).Error("validator: error decoding proto data")
+				return pubsub.ValidationReject
+			}
+
+			backend := *g.consensus.GetBackend(topic.location)
+			if backend == nil {
+				log.Global.WithFields(log.Fields{
+					"peer":     id,
+					"hash":     block.Hash(),
+					"location": block.Location(),
+				}).Error("no backend found for this location")
+			}
+			err = backend.SanityCheckWorkObjectBlockViewBody(block.WorkObject)
+			if err != nil {
+				backend.Logger().WithField("err", err).Warn("sanity check of work object failed")
+				return pubsub.ValidationReject
+			}
+			if backend.BadHashExistsInChain() {
+				backend.Logger().Warn("bad Hashes still exist on chain, cannot handle block broadcast yet")
+				return pubsub.ValidationIgnore
+			}
+
+			// If Block broadcasted by the peer exists in the bad block list drop the peer
+			if backend.IsBlockHashABadHash(block.WorkObjectHeader().Hash()) {
+				return pubsub.ValidationReject
+			}
+			return backend.ApplyPoWFilter(block.WorkObject)
+
+		case *types.WorkObjectHeaderView:
+
+			protoWo := new(types.ProtoWorkObjectHeaderView)
+			err := proto.Unmarshal(protoData, protoWo)
+			if err != nil {
+				return pubsub.ValidationReject
+			}
+
+			block := &types.WorkObjectHeaderView{
+				WorkObject: &types.WorkObject{},
+			}
+			err = block.ProtoDecode(protoWo, protoWo.GetWorkObject().GetWoHeader().GetLocation().Value)
+			if err != nil {
+				return pubsub.ValidationReject
+			}
+
+			backend := *g.consensus.GetBackend(topic.location)
+			if backend == nil {
+				log.Global.WithFields(log.Fields{
+					"peer":     id,
+					"hash":     block.Hash(),
+					"location": block.Location(),
+				}).Error("no backend found for this location")
+			}
+			err = backend.SanityCheckWorkObjectHeaderViewBody(block.WorkObject)
+			if err != nil {
+				backend.Logger().WithField("err", err).Warn("Sanity check of work object header view failed")
+				return pubsub.ValidationReject
+			}
+			if backend.BadHashExistsInChain() {
+				backend.Logger().Warn("Bad Hashes still exist on chain, cannot handle block broadcast yet")
+				return pubsub.ValidationIgnore
+			}
+
+			// If Block broadcasted by the peer exists in the bad block list drop the peer
+			if backend.IsBlockHashABadHash(block.WorkObject.WorkObjectHeader().Hash()) {
+				return pubsub.ValidationReject
+			}
+			return backend.ApplyPoWFilter(block.WorkObject)
+
+		case *types.WorkObjectShareView:
+
+			protoWo := new(types.ProtoWorkObjectShareView)
+			err := proto.Unmarshal(protoData, protoWo)
+			if err != nil {
+				return pubsub.ValidationReject
+			}
+
+			block := &types.WorkObjectShareView{
+				WorkObject: &types.WorkObject{},
+			}
+
+			err = block.ProtoDecode(protoWo, protoWo.GetWorkObject().GetWoHeader().GetLocation().Value)
+			if err != nil {
+				return pubsub.ValidationReject
+			}
+
+			backend := *g.consensus.GetBackend(topic.location)
+			if backend == nil {
+				log.Global.WithFields(log.Fields{
+					"peer":     id,
+					"hash":     block.Hash(),
+					"location": block.Location(),
+				}).Error("no backend found for this location")
+			}
+			// check if the work share is valid before accepting the transactions
+			// from the peer
+			err = backend.SanityCheckWorkObjectShareViewBody(block.WorkObject)
+			if err != nil {
+				backend.Logger().WithField("err", err).Warn("Sanity check of work object share view failed")
+				return pubsub.ValidationReject
+			}
+			if valid := backend.CheckIfValidWorkShare(block.WorkObjectHeader()); valid != types.Valid {
+				backend.Logger().Error("work share received from peer is not valid")
+				return pubsub.ValidationReject
+			}
+
+			if len(block.WorkObject.Transactions()) > int(backend.GetMaxTxInWorkShare()) {
+				backend.Logger().Error("workshare contains more transactions than allowed")
+				return pubsub.ValidationReject
+			}
+			_, err = backend.Engine().ComputePowHash(block.WorkObject.WorkObjectHeader())
+			if err != nil {
+				backend.Logger().Error("Error computing the powHash of the work object header received from peer")
+				return pubsub.ValidationReject
+			}
+		}
+		return pubsub.ValidationAccept
+	}
+}
+
 // unsubscribe from broadcasts of the given type of data
 func (g *PubsubManager) Unsubscribe(location common.Location, datatype interface{}) error {
-	if topic, err := NewTopic(g.genesis, location, datatype); err != nil {
-		if value, ok := g.subscriptions.Load(topic); ok {
+	if topic, err := NewTopic(g.genesis, location, datatype); err == nil {
+		if value, ok := g.subscriptions.Load(topic.String()); ok {
 			value.(*pubsub.Subscription).Cancel()
-			g.subscriptions.Delete(topic)
+			g.subscriptions.Delete(topic.String())
 		}
-		if value, ok := g.topics.Load(topic); ok {
+		if value, ok := g.topics.Load(topic.String()); ok {
 			value.(*pubsub.Topic).Close()
-			g.topics.Delete(topic)
+			g.topics.Delete(topic.String())
 		}
 		return nil
 	} else {
@@ -221,5 +384,5 @@ func (g *PubsubManager) Broadcast(location common.Location, datatype interface{}
 	if value, ok := g.topics.Load(topicName.String()); ok {
 		return value.(*pubsub.Topic).Publish(g.ctx, protoData)
 	}
-	return errors.New("no topic for requested data")
+	return ErrNoTopic
 }

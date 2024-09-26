@@ -43,9 +43,6 @@ const (
 	// any newly arrived transactions.
 	minRecommitInterval = 1 * time.Second
 
-	// staleThreshold is the maximum depth of the acceptable stale block.
-	staleThreshold = 7
-
 	// pendingBlockBodyLimit is maximum number of pending block bodies to be kept in cache.
 	pendingBlockBodyLimit = 100
 
@@ -56,7 +53,7 @@ const (
 	// c_chainSideChanSize is the size of the channel listening to uncle events
 	chainSideChanSize = 10
 
-	c_uncleCacheSize = 32
+	c_uncleCacheSize = 100
 )
 
 // environment is the worker's current environment and holds all
@@ -64,64 +61,27 @@ const (
 type environment struct {
 	signer types.Signer
 
-	state     *state.StateDB // apply state changes here
-	ancestors mapset.Set     // ancestor set (used for checking uncle parent validity)
-	family    mapset.Set     // family set (used for checking uncle invalidity)
-	tcount    int            // tx count in cycle
-	gasPool   *types.GasPool // available gas used to pack transactions
-	coinbase  common.Address
-	etxRLimit int // Remaining number of cross-region ETXs that can be included
-	etxPLimit int // Remaining number of cross-prime ETXs that can be included
-
-	wo          *types.WorkObject
-	txs         []*types.Transaction
-	etxs        []*types.Transaction
-	utxoFees    *big.Int
-	quaiFees    *big.Int
-	subManifest types.BlockManifest
-	receipts    []*types.Receipt
-	uncleMu     sync.RWMutex
-	uncles      map[common.Hash]*types.WorkObjectHeader
-}
-
-// copy creates a deep copy of environment.
-func (env *environment) copy(processingState bool, nodeCtx int) *environment {
-	if nodeCtx == common.ZONE_CTX && processingState {
-		cpy := &environment{
-			signer:    env.signer,
-			state:     env.state.Copy(),
-			ancestors: env.ancestors.Clone(),
-			family:    env.family.Clone(),
-			tcount:    env.tcount,
-			coinbase:  env.coinbase,
-			etxRLimit: env.etxRLimit,
-			etxPLimit: env.etxPLimit,
-			wo:        types.CopyWorkObject(env.wo),
-			receipts:  copyReceipts(env.receipts),
-			utxoFees:  new(big.Int).Set(env.utxoFees),
-			quaiFees:  new(big.Int).Set(env.quaiFees),
-		}
-		if env.gasPool != nil {
-			gasPool := *env.gasPool
-			cpy.gasPool = &gasPool
-		}
-		// The content of txs and uncles are immutable, unnecessary
-		// to do the expensive deep copy for them.
-		cpy.txs = make([]*types.Transaction, len(env.txs))
-		copy(cpy.txs, env.txs)
-		cpy.etxs = make([]*types.Transaction, len(env.etxs))
-		copy(cpy.etxs, env.etxs)
-
-		env.uncleMu.Lock()
-		cpy.uncles = make(map[common.Hash]*types.WorkObjectHeader)
-		for hash, uncle := range env.uncles {
-			cpy.uncles[hash] = uncle
-		}
-		env.uncleMu.Unlock()
-		return cpy
-	} else {
-		return &environment{wo: types.CopyWorkObject(env.wo)}
-	}
+	state        *state.StateDB // apply state changes here
+	ancestors    mapset.Set     // ancestor set (used for checking uncle parent validity)
+	family       mapset.Set     // family set (used for checking uncle invalidity)
+	tcount       int            // tx count in cycle
+	gasPool      *types.GasPool // available gas used to pack transactions
+	coinbase     common.Address
+	etxRLimit    int // Remaining number of cross-region ETXs that can be included
+	etxPLimit    int // Remaining number of cross-prime ETXs that can be included
+	parentOrder  *int
+	wo           *types.WorkObject
+	txs          []*types.Transaction
+	etxs         []*types.Transaction
+	utxoFees     *big.Int
+	quaiFees     *big.Int
+	subManifest  types.BlockManifest
+	receipts     []*types.Receipt
+	uncleMu      sync.RWMutex
+	uncles       map[common.Hash]*types.WorkObjectHeader
+	utxosCreate  []common.Hash
+	utxosDelete  []common.Hash
+	deletedUtxos map[common.Hash]struct{}
 }
 
 // unclelist returns the contained uncles as the list format.
@@ -167,15 +127,18 @@ type intervalAdjust struct {
 
 // Config is the configuration parameters of mining.
 type Config struct {
-	Etherbase  common.Address `toml:",omitempty"` // Public address for block mining rewards (default = first account)
-	Notify     []string       `toml:",omitempty"` // HTTP URL list to be notified of new work packages (only useful in ethash).
-	NotifyFull bool           `toml:",omitempty"` // Notify with pending block headers instead of work packages
-	ExtraData  hexutil.Bytes  `toml:",omitempty"` // Block extra data set by the miner
-	GasFloor   uint64         // Target gas floor for mined blocks.
-	GasCeil    uint64         // Target gas ceiling for mined blocks.
-	GasPrice   *big.Int       // Minimum gas price for mining a transaction
-	Recommit   time.Duration  // The time interval for miner to re-create mining work.
-	Noverify   bool           // Disable remote mining solution verification(only useful in ethash).
+	Etherbase          common.Address `toml:",omitempty"` // Public address for block mining rewards (default = first account)
+	Notify             []string       `toml:",omitempty"` // HTTP URL list to be notified of new work packages (only useful in ethash).
+	NotifyFull         bool           `toml:",omitempty"` // Notify with pending block headers instead of work packages
+	ExtraData          hexutil.Bytes  `toml:",omitempty"` // Block extra data set by the miner
+	GasFloor           uint64         // Target gas floor for mined blocks.
+	GasCeil            uint64         // Target gas ceiling for mined blocks.
+	GasPrice           *big.Int       // Minimum gas price for mining a transaction
+	Recommit           time.Duration  // The time interval for miner to re-create mining work.
+	Noverify           bool           // Disable remote mining solution verification(only useful in ethash).
+	WorkShareMining    bool           // Whether to mine work shares from raw transactions.
+	WorkShareThreshold int            // WorkShareThreshold is the minimum fraction of a share that this node will accept to mine a transaction.
+	Endpoints          []string       // Holds RPC endpoints to send minimally mined transactions to for further mining/propagation.
 }
 
 // worker is the main object which takes care of submitting new work to consensus engine
@@ -192,9 +155,6 @@ type worker struct {
 	pendingHeaderFeed event.Feed
 
 	// Subscriptions
-	chainHeadCh  chan ChainHeadEvent
-	chainHeadSub event.Subscription
-
 	chainSideCh  chan ChainSideEvent
 	chainSideSub event.Subscription
 
@@ -206,13 +166,12 @@ type worker struct {
 	resubmitAdjustCh               chan *intervalAdjust
 	fillTransactionsRollingAverage *RollingAverage
 
-	interrupt   chan struct{}
 	asyncPhFeed event.Feed // asyncPhFeed sends an event after each state root update
 	scope       event.SubscriptionScope
 
 	wg sync.WaitGroup
 
-	Uncles  *lru.Cache[common.Hash, types.WorkObjectHeader]
+	uncles  *lru.Cache[common.Hash, types.WorkObjectHeader]
 	uncleMu sync.RWMutex
 
 	mu       sync.RWMutex // The lock used to protect the coinbase and extra fields
@@ -250,12 +209,16 @@ type worker struct {
 }
 
 type RollingAverage struct {
-	windowSize int
 	durations  []time.Duration
 	sum        time.Duration
+	windowSize int
+	mu         sync.Mutex
 }
 
 func (ra *RollingAverage) Add(d time.Duration) {
+	ra.mu.Lock()
+	defer ra.mu.Unlock()
+
 	if len(ra.durations) == ra.windowSize {
 		// Remove the oldest duration from the sum
 		ra.sum -= ra.durations[0]
@@ -264,7 +227,11 @@ func (ra *RollingAverage) Add(d time.Duration) {
 	ra.durations = append(ra.durations, d)
 	ra.sum += d
 }
+
 func (ra *RollingAverage) Average() time.Duration {
+	ra.mu.Lock()
+	defer ra.mu.Unlock()
+
 	if len(ra.durations) == 0 {
 		return 0
 	}
@@ -281,19 +248,18 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, db ethdb.Databas
 		coinbase:                       config.Etherbase,
 		isLocalBlock:                   isLocalBlock,
 		workerDb:                       db,
-		chainHeadCh:                    make(chan ChainHeadEvent, chainHeadChanSize),
 		chainSideCh:                    make(chan ChainSideEvent, chainSideChanSize),
 		taskCh:                         make(chan *task),
 		resultCh:                       make(chan *types.WorkObject, resultQueueSize),
 		exitCh:                         make(chan struct{}),
-		interrupt:                      make(chan struct{}),
 		resubmitIntervalCh:             make(chan time.Duration),
 		resubmitAdjustCh:               make(chan *intervalAdjust, resubmitAdjustChanSize),
 		fillTransactionsRollingAverage: &RollingAverage{windowSize: 100},
 		logger:                         logger,
 	}
 	// initialize a uncle cache
-	worker.Uncles, _ = lru.New[common.Hash, types.WorkObjectHeader](c_uncleCacheSize)
+	uncles, _ := lru.New[common.Hash, types.WorkObjectHeader](c_uncleCacheSize)
+	worker.uncles = uncles
 	// Set the GasFloor of the worker to the minGasLimit
 	worker.config.GasFloor = params.MinGasLimit
 
@@ -315,7 +281,6 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, db ethdb.Databas
 
 	nodeCtx := headerchain.NodeCtx()
 	if headerchain.ProcessingState() && nodeCtx == common.ZONE_CTX {
-		worker.chainHeadSub = worker.hc.SubscribeChainHeadEvent(worker.chainHeadCh)
 		worker.chainSideSub = worker.hc.SubscribeChainSideEvent(worker.chainSideCh)
 		worker.wg.Add(1)
 		go worker.asyncStateLoop()
@@ -397,7 +362,6 @@ func (w *worker) start() {
 // stop sets the running status as 0.
 func (w *worker) stop() {
 	if w.hc.ProcessingState() && w.hc.NodeCtx() == common.ZONE_CTX {
-		w.chainHeadSub.Unsubscribe()
 		w.chainSideSub.Unsubscribe()
 	}
 	atomic.StoreInt32(&w.running, 0)
@@ -459,12 +423,12 @@ func (w *worker) asyncStateLoop() {
 	}()
 	defer w.wg.Done() // decrement the wait group after the close of the loop
 
+	ticker := time.NewTicker(2 * time.Second)
+	var prevHeader *types.WorkObject = nil
+	defer ticker.Stop()
 	for {
 		select {
-		case head := <-w.chainHeadCh:
-
-			w.interruptAsyncPhGen()
-
+		case <-ticker.C:
 			go func() {
 				defer func() {
 					if r := recover(); r != nil {
@@ -474,21 +438,24 @@ func (w *worker) asyncStateLoop() {
 						}).Error("Go-Quai Panicked")
 					}
 				}()
-				select {
-				case <-w.interrupt:
-					w.interrupt = make(chan struct{})
-					return
-				default:
-					wo := head.Block
-					header, err := w.GeneratePendingHeader(wo, true)
-					if err != nil {
-						w.logger.WithField("err", err).Error("Error generating pending header")
+				// Dont run the proc if the current header hasnt changed
+				if prevHeader == nil {
+					prevHeader = w.hc.CurrentBlock()
+				} else {
+					if prevHeader.Hash() == w.hc.CurrentBlock().Hash() {
 						return
 					}
-					// Send the updated pendingHeader in the asyncPhFeed
-					w.asyncPhFeed.Send(header)
+				}
+				wo := w.hc.CurrentHeader()
+				w.hc.headermu.Lock()
+				defer w.hc.headermu.Unlock()
+				header, err := w.GeneratePendingHeader(wo, true)
+				if err != nil {
+					w.logger.WithField("err", err).Error("Error generating pending header")
 					return
 				}
+				// Send the updated pendingHeader in the asyncPhFeed
+				w.asyncPhFeed.Send(header)
 			}()
 		case side := <-w.chainSideCh:
 			go func() {
@@ -502,15 +469,13 @@ func (w *worker) asyncStateLoop() {
 				}()
 				for _, wo := range side.Blocks {
 					// Short circuit for duplicate side blocks
-					if exists := w.Uncles.Contains(wo.Hash()); exists {
+					if exists := w.uncles.Contains(wo.Hash()); exists {
 						continue
 					}
-					w.Uncles.Add(wo.Hash(), *wo.WorkObjectHeader())
+					w.uncles.Add(wo.Hash(), *wo.WorkObjectHeader())
 				}
 			}()
 		case <-w.exitCh:
-			return
-		case <-w.chainHeadSub.Err():
 			return
 		case <-w.chainSideSub.Err():
 			return
@@ -522,7 +487,9 @@ func (w *worker) asyncStateLoop() {
 func (w *worker) GeneratePendingHeader(block *types.WorkObject, fill bool) (*types.WorkObject, error) {
 	nodeCtx := w.hc.NodeCtx()
 
-	w.interruptAsyncPhGen()
+	if block.Hash() != w.hc.CurrentHeader().Hash() && nodeCtx == common.ZONE_CTX {
+		return nil, fmt.Errorf("block hash %v is not same as the current header %v", block.Hash(), w.hc.CurrentHeader().Hash())
+	}
 
 	var (
 		interrupt *int32
@@ -594,13 +561,11 @@ func (w *worker) GeneratePendingHeader(block *types.WorkObject, fill bool) (*typ
 			}).Info("Filled and sorted pending transactions")
 		}
 
-		// If the current block is a prime block, its a prime terminus
-		_, order, err := w.CalcOrder(block)
-		if err != nil {
-			return nil, err
+		if work.parentOrder == nil {
+			return nil, fmt.Errorf("parent order not set")
 		}
 		var primeTerminus *types.WorkObject
-		if order == common.PRIME_CTX {
+		if *work.parentOrder == common.PRIME_CTX {
 			primeTerminus = block
 		} else {
 			// convert the Quai reward into Qi and add it to the utxoFees
@@ -625,7 +590,7 @@ func (w *worker) GeneratePendingHeader(block *types.WorkObject, fill bool) (*typ
 	}
 
 	// Create a local environment copy, avoid the data race with snapshot state.
-	newWo, err := w.FinalizeAssemble(w.hc, work.wo, block, work.state, work.txs, uncles, work.etxs, work.subManifest, work.receipts)
+	newWo, err := w.FinalizeAssemble(w.hc, work.wo, block, work.state, work.txs, uncles, work.etxs, work.subManifest, work.receipts, work.utxosCreate, work.utxosDelete)
 	if err != nil {
 		return nil, err
 	}
@@ -633,7 +598,8 @@ func (w *worker) GeneratePendingHeader(block *types.WorkObject, fill bool) (*typ
 	work.wo = newWo
 
 	w.printPendingHeaderInfo(work, newWo, start)
-
+	work.utxosCreate = nil
+	work.utxosDelete = nil
 	return newWo, nil
 }
 
@@ -672,14 +638,6 @@ func (w *worker) printPendingHeaderInfo(work *environment, block *types.WorkObje
 	work.uncleMu.RUnlock()
 }
 
-// interruptAsyncPhGen kills any async ph generation running
-func (w *worker) interruptAsyncPhGen() {
-	if w.interrupt != nil {
-		close(w.interrupt)
-		w.interrupt = nil
-	}
-}
-
 func (w *worker) eventExitLoop() {
 	for {
 		select {
@@ -694,14 +652,14 @@ func (w *worker) makeEnv(parent *types.WorkObject, proposedWo *types.WorkObject,
 	// Retrieve the parent state to execute on top and start a prefetcher for
 	// the miner to speed block sealing up a bit.
 	evmRoot := parent.EVMRoot()
-	utxoRoot := parent.UTXORoot()
 	etxRoot := parent.EtxSetRoot()
+	quaiStateSize := parent.QuaiStateSize()
 	if w.hc.IsGenesisHash(parent.Hash()) {
 		evmRoot = types.EmptyRootHash
-		utxoRoot = types.EmptyRootHash
 		etxRoot = types.EmptyRootHash
+		quaiStateSize = big.NewInt(0)
 	}
-	state, err := w.hc.bc.processor.StateAt(evmRoot, utxoRoot, etxRoot)
+	state, err := w.hc.bc.processor.StateAt(evmRoot, etxRoot, quaiStateSize)
 	if err != nil {
 		return nil, err
 	}
@@ -716,15 +674,16 @@ func (w *worker) makeEnv(parent *types.WorkObject, proposedWo *types.WorkObject,
 	}
 	// Note the passed coinbase may be different with header.Coinbase.
 	env := &environment{
-		signer:    types.MakeSigner(w.chainConfig, proposedWo.Number(w.hc.NodeCtx())),
-		state:     state,
-		coinbase:  coinbase,
-		ancestors: mapset.NewSet(),
-		family:    mapset.NewSet(),
-		wo:        proposedWo,
-		uncles:    make(map[common.Hash]*types.WorkObjectHeader),
-		etxRLimit: etxRLimit,
-		etxPLimit: etxPLimit,
+		signer:       types.MakeSigner(w.chainConfig, proposedWo.Number(w.hc.NodeCtx())),
+		state:        state,
+		coinbase:     coinbase,
+		ancestors:    mapset.NewSet(),
+		family:       mapset.NewSet(),
+		wo:           proposedWo,
+		uncles:       make(map[common.Hash]*types.WorkObjectHeader),
+		etxRLimit:    etxRLimit,
+		etxPLimit:    etxPLimit,
+		deletedUtxos: make(map[common.Hash]struct{}),
 	}
 	// Keep track of transactions which return errors so they can be removed
 	env.tcount = 0
@@ -753,6 +712,10 @@ func (w *worker) commitUncle(env *environment, uncle *types.WorkObjectHeader) er
 	_, err := w.engine.VerifySeal(uncle)
 	if err != nil {
 		workShare = true
+	}
+	_, err = w.hc.WorkShareDistance(env.wo, uncle)
+	if err != nil {
+		return err
 	}
 	if !workShare && (env.wo.ParentHash(w.hc.NodeCtx()) == uncle.ParentHash()) {
 		return errors.New("uncle is sibling")
@@ -791,15 +754,14 @@ func (w *worker) commitTransaction(env *environment, parent *types.WorkObject, t
 				if denominations[uint8(denomination)] == 0 {
 					continue
 				}
-				for j := uint8(0); j < denominations[uint8(denomination)]; j++ {
+				for j := uint64(0); j < denominations[uint8(denomination)]; j++ {
 					if outputIndex >= types.MaxOutputIndex {
 						// No more gas, the rest of the denominations are lost but the tx is still valid
 						break
 					}
 					// the ETX hash is guaranteed to be unique
-					if err := env.state.CreateUTXO(tx.Hash(), outputIndex, types.NewUtxoEntry(types.NewTxOut(uint8(denomination), tx.To().Bytes(), env.wo.Number(w.hc.NodeCtx())))); err != nil {
-						return nil, false, err
-					}
+					utxoHash := types.UTXOHash(tx.Hash(), outputIndex, types.NewUtxoEntry(types.NewTxOut(uint8(denomination), tx.To().Bytes(), env.wo.Number(w.hc.NodeCtx()))))
+					env.utxosCreate = append(env.utxosCreate, utxoHash)
 					outputIndex++
 				}
 			}
@@ -815,12 +777,11 @@ func (w *worker) commitTransaction(env *environment, parent *types.WorkObject, t
 		if tx.ETXSender().Location().Equal(*tx.To().Location()) { // Quai->Qi conversion
 			txGas := tx.Gas()
 			lock := new(big.Int).Add(env.wo.Number(w.hc.NodeCtx()), big.NewInt(params.ConversionLockPeriod))
-			_, parentOrder, err := w.CalcOrder(parent)
-			if err != nil {
-				return nil, false, err
+			if env.parentOrder == nil {
+				return nil, false, errors.New("parent order not set")
 			}
 			var primeTerminus *types.WorkObject
-			if parentOrder == common.PRIME_CTX {
+			if *env.parentOrder == common.PRIME_CTX {
 				primeTerminus = parent
 			} else {
 				primeTerminus = w.hc.GetPrimeTerminus(env.wo)
@@ -847,7 +808,7 @@ func (w *worker) commitTransaction(env *environment, parent *types.WorkObject, t
 				if denominations[uint8(denomination)] == 0 {
 					continue
 				}
-				for j := uint8(0); j < denominations[uint8(denomination)]; j++ {
+				for j := uint64(0); j < denominations[uint8(denomination)]; j++ {
 					if txGas < params.CallValueTransferGas || outputIndex >= types.MaxOutputIndex {
 						// No more gas, the rest of the denominations are lost but the tx is still valid
 						break
@@ -858,9 +819,8 @@ func (w *worker) commitTransaction(env *environment, parent *types.WorkObject, t
 					}
 					gasUsed += params.CallValueTransferGas
 					// the ETX hash is guaranteed to be unique
-					if err := env.state.CreateUTXO(tx.Hash(), outputIndex, types.NewUtxoEntry(types.NewTxOut(uint8(denomination), tx.To().Bytes(), lock))); err != nil {
-						return nil, false, err
-					}
+					utxoHash := types.UTXOHash(tx.Hash(), outputIndex, types.NewUtxoEntry(types.NewTxOut(uint8(denomination), tx.To().Bytes(), lock)))
+					env.utxosCreate = append(env.utxosCreate, utxoHash)
 					outputIndex++
 				}
 			}
@@ -869,9 +829,8 @@ func (w *worker) commitTransaction(env *environment, parent *types.WorkObject, t
 			if err := env.gasPool.SubGas(params.CallValueTransferGas); err != nil {
 				return nil, false, err
 			}
-			if err := env.state.CreateUTXO(tx.OriginatingTxHash(), tx.ETXIndex(), types.NewUtxoEntry(types.NewTxOut(uint8(tx.Value().Uint64()), tx.To().Bytes(), big.NewInt(0)))); err != nil {
-				return nil, false, err
-			}
+			utxoHash := types.UTXOHash(tx.OriginatingTxHash(), tx.ETXIndex(), types.NewUtxoEntry(types.NewTxOut(uint8(tx.Value().Uint64()), tx.To().Bytes(), common.Big0)))
+			env.utxosCreate = append(env.utxosCreate, utxoHash)
 			gasUsed += params.CallValueTransferGas
 		}
 		env.wo.Header().SetGasUsed(gasUsed)
@@ -881,7 +840,8 @@ func (w *worker) commitTransaction(env *environment, parent *types.WorkObject, t
 	snap := env.state.Snapshot()
 	// retrieve the gas used int and pass in the reference to the ApplyTransaction
 	gasUsed := env.wo.GasUsed()
-	receipt, quaiFees, err := ApplyTransaction(w.chainConfig, parent, w.hc, &env.coinbase, env.gasPool, env.state, env.wo, tx, &gasUsed, *w.hc.bc.processor.GetVMConfig(), &env.etxRLimit, &env.etxPLimit, w.logger)
+	stateUsed := env.wo.StateUsed()
+	receipt, quaiFees, err := ApplyTransaction(w.chainConfig, parent, *env.parentOrder, w.hc, &env.coinbase, env.gasPool, env.state, env.wo, tx, &gasUsed, &stateUsed, *w.hc.bc.processor.GetVMConfig(), &env.etxRLimit, &env.etxPLimit, w.logger)
 	if err != nil {
 		w.logger.WithFields(log.Fields{
 			"err":     err,
@@ -899,6 +859,7 @@ func (w *worker) commitTransaction(env *environment, parent *types.WorkObject, t
 	// This extra step is needed because previously the GasUsed was a public method and direct update of the value
 	// was possible.
 	env.wo.Header().SetGasUsed(gasUsed)
+	env.wo.Header().SetStateUsed(stateUsed)
 	env.txs = append(env.txs, tx)
 	env.quaiFees = new(big.Int).Add(env.quaiFees, quaiFees)
 	env.receipts = append(env.receipts, receipt)
@@ -1244,31 +1205,11 @@ func (w *worker) prepareWork(genParams *generateParams, wo *types.WorkObject) (*
 		}
 	}
 
-	var interlinkHashes common.Hashes
 	if nodeCtx == common.PRIME_CTX {
-		if w.hc.IsGenesisHash(parent.Hash()) {
-			// On genesis, the interlink hashes are all the same and should start with genesis hash
-			interlinkHashes = common.Hashes{parent.Hash(), parent.Hash(), parent.Hash(), parent.Hash()}
-		} else {
-			// check if parent belongs to any interlink level
-			rank, err := w.engine.CalcRank(w.hc, parent)
-			if err != nil {
-				return nil, err
-			}
-			if rank == 0 { // No change in the interlink hashes, so carry
-				interlinkHashes = parent.InterlinkHashes()
-			} else if rank > 0 && rank <= common.InterlinkDepth {
-				interlinkHashes = parent.InterlinkHashes()
-				// update the interlink hashes for each level below the rank
-				for i := 0; i < rank; i++ {
-					interlinkHashes[i] = parent.Hash()
-				}
-			} else {
-				w.logger.Error("Not possible to find rank greater than the max interlink levels")
-			}
+		interlinkHashes, err := w.hc.CalculateInterlink(parent)
+		if err != nil {
+			return nil, err
 		}
-		// Store the interlink hashes in the database
-		rawdb.WriteInterlinkHashes(w.workerDb, parent.Hash(), interlinkHashes)
 		interlinkRootHash := types.DeriveSha(interlinkHashes, trie.NewStackTrie(nil))
 		newWo.Header().SetInterlinkRootHash(interlinkRootHash)
 	}
@@ -1277,6 +1218,7 @@ func (w *worker) prepareWork(genParams *generateParams, wo *types.WorkObject) (*
 	if nodeCtx == common.ZONE_CTX && w.hc.ProcessingState() {
 		newWo.Header().SetExtra(w.extra)
 		newWo.Header().SetBaseFee(misc.CalcBaseFee(w.chainConfig, parent))
+		newWo.Header().SetStateLimit(misc.CalcStateLimit(parent, w.config.GasCeil))
 		if w.isRunning() {
 			if w.coinbase.Equal(common.Zero) {
 				w.logger.Error("Refusing to mine without etherbase")
@@ -1287,8 +1229,14 @@ func (w *worker) prepareWork(genParams *generateParams, wo *types.WorkObject) (*
 
 		// Get the latest transactions to be broadcasted from the pool
 		if len(w.txPool.broadcastSet) > 0 {
-			txs := make(types.Transactions, len(w.txPool.broadcastSet))
-			copy(txs, w.txPool.broadcastSet)
+			txsDirty := make(types.Transactions, len(w.txPool.broadcastSet))
+			copy(txsDirty, w.txPool.broadcastSet)
+			txs := make(types.Transactions, 0)
+			for _, tx := range txsDirty {
+				if tx != nil {
+					txs = append(txs, tx)
+				}
+			}
 			hash := types.DeriveSha(txs, trie.NewStackTrie(nil))
 			newWo.WorkObjectHeader().SetTxHash(hash)
 			w.txPool.broadcastSetCache.Add(hash, txs)
@@ -1307,6 +1255,7 @@ func (w *worker) prepareWork(genParams *generateParams, wo *types.WorkObject) (*
 			w.logger.WithField("err", err).Error("Failed to create sealing context")
 			return nil, err
 		}
+		env.parentOrder = &order
 		// Accumulate the uncles for the sealing work.
 		commitUncles := func(wos *lru.Cache[common.Hash, types.WorkObjectHeader]) {
 			var uncles []*types.WorkObjectHeader
@@ -1343,7 +1292,7 @@ func (w *worker) prepareWork(genParams *generateParams, wo *types.WorkObject) (*
 		if nodeCtx == common.ZONE_CTX && w.hc.ProcessingState() {
 			w.uncleMu.RLock()
 			// Prefer to locally generated uncle
-			commitUncles(w.Uncles)
+			commitUncles(w.uncles)
 			w.uncleMu.RUnlock()
 		}
 		return env, nil
@@ -1421,31 +1370,14 @@ func (w *worker) adjustGasLimit(env *environment, parent *types.WorkObject) {
 // ComputeManifestHash given a header computes the manifest hash for the header
 // and stores it in the database
 func (w *worker) ComputeManifestHash(header *types.WorkObject) common.Hash {
-	manifest := rawdb.ReadManifest(w.workerDb, header.Hash())
-	if manifest == nil {
-		nodeCtx := w.hc.NodeCtx()
-		// Compute and set manifest hash
-		manifest = types.BlockManifest{}
-		if nodeCtx == common.PRIME_CTX {
-			// Nothing to do for prime chain
-			manifest = types.BlockManifest{}
-		} else if w.engine.IsDomCoincident(w.hc, header) {
-			manifest = types.BlockManifest{header.Hash()}
-		} else {
-			parentManifest := rawdb.ReadManifest(w.workerDb, header.ParentHash(nodeCtx))
-			manifest = append(parentManifest, header.Hash())
-		}
-		// write the manifest into the disk
-		rawdb.WriteManifest(w.workerDb, header.Hash(), manifest)
-	}
+	manifest := w.hc.CalculateManifest(header)
 	manifestHash := types.DeriveSha(manifest, trie.NewStackTrie(nil))
-
 	return manifestHash
 }
 
-func (w *worker) FinalizeAssemble(chain consensus.ChainHeaderReader, newWo *types.WorkObject, parent *types.WorkObject, state *state.StateDB, txs []*types.Transaction, uncles []*types.WorkObjectHeader, etxs []*types.Transaction, subManifest types.BlockManifest, receipts []*types.Receipt) (*types.WorkObject, error) {
+func (w *worker) FinalizeAssemble(chain consensus.ChainHeaderReader, newWo *types.WorkObject, parent *types.WorkObject, state *state.StateDB, txs []*types.Transaction, uncles []*types.WorkObjectHeader, etxs []*types.Transaction, subManifest types.BlockManifest, receipts []*types.Receipt, utxosCreate, utxosDelete []common.Hash) (*types.WorkObject, error) {
 	nodeCtx := w.hc.NodeCtx()
-	wo, err := w.engine.FinalizeAndAssemble(chain, newWo, state, txs, uncles, etxs, subManifest, receipts)
+	wo, err := w.engine.FinalizeAndAssemble(chain, newWo, state, txs, uncles, etxs, subManifest, receipts, utxosCreate, utxosDelete)
 	if err != nil {
 		return nil, err
 	}
@@ -1493,12 +1425,18 @@ func (w *worker) FinalizeAssemble(chain consensus.ChainHeaderReader, newWo *type
 // AddPendingBlockBody adds an entry in the lru cache for the given pendingBodyKey
 // maps it to body.
 func (w *worker) AddPendingWorkObjectBody(wo *types.WorkObject) {
-	w.pendingBlockBody.Add(wo.SealHash(), *wo)
+	// do not include the tx hash while storing the body
+	woHeaderCopy := types.CopyWorkObjectHeader(wo.WorkObjectHeader())
+	woHeaderCopy.SetTxHash(common.Hash{})
+	w.pendingBlockBody.Add(woHeaderCopy.SealHash(), *wo)
 }
 
 // GetPendingBlockBody gets the block body associated with the given header.
 func (w *worker) GetPendingBlockBody(woHeader *types.WorkObjectHeader) (*types.WorkObject, error) {
-	body, ok := w.pendingBlockBody.Get(woHeader.SealHash())
+	// do not include the tx hash while storing the body
+	woHeaderCopy := types.CopyWorkObjectHeader(woHeader)
+	woHeaderCopy.SetTxHash(common.Hash{})
+	body, ok := w.pendingBlockBody.Peek(woHeaderCopy.SealHash())
 	if ok {
 		return &body, nil
 	}
@@ -1536,7 +1474,7 @@ func (w *worker) AddWorkShare(workShare *types.WorkObjectHeader) error {
 		return nil
 	}
 
-	w.Uncles.ContainsOrAdd(workShare.Hash(), *workShare)
+	w.uncles.ContainsOrAdd(workShare.Hash(), *workShare)
 	return nil
 }
 
@@ -1572,10 +1510,10 @@ func (w *worker) processQiTx(tx *types.Transaction, env *environment, parent *ty
 
 	addresses := make(map[common.AddressBytes]struct{})
 	totalQitIn := big.NewInt(0)
-	utxosDelete := make([]types.OutPoint, 0)
+	utxosDeleteHashes := make([]common.Hash, 0, len(tx.TxIn()))
 	inputs := make(map[uint]uint64)
 	for _, txIn := range tx.TxIn() {
-		utxo := env.state.GetUTXO(txIn.PreviousOutPoint.TxHash, txIn.PreviousOutPoint.Index)
+		utxo := rawdb.GetUTXO(w.workerDb, txIn.PreviousOutPoint.TxHash, txIn.PreviousOutPoint.Index)
 		if utxo == nil {
 			return fmt.Errorf("tx %032x spends non-existent UTXO %032x:%d", tx.Hash(), txIn.PreviousOutPoint.TxHash, txIn.PreviousOutPoint.Index)
 		}
@@ -1598,7 +1536,12 @@ func (w *worker) processQiTx(tx *types.Transaction, env *environment, parent *ty
 		}
 		addresses[common.AddressBytes(utxo.Address)] = struct{}{}
 		totalQitIn.Add(totalQitIn, types.Denominations[denomination])
-		utxosDelete = append(utxosDelete, txIn.PreviousOutPoint)
+		utxoHash := types.UTXOHash(txIn.PreviousOutPoint.TxHash, txIn.PreviousOutPoint.Index, utxo)
+		if _, exists := env.deletedUtxos[utxoHash]; exists {
+			return fmt.Errorf("tx %032x double spends UTXO %032x:%d", tx.Hash(), txIn.PreviousOutPoint.TxHash, txIn.PreviousOutPoint.Index)
+		}
+		env.deletedUtxos[utxoHash] = struct{}{}
+		utxosDeleteHashes = append(utxosDeleteHashes, utxoHash)
 		inputs[uint(denomination)]++
 	}
 	var ETXRCount int
@@ -1606,7 +1549,7 @@ func (w *worker) processQiTx(tx *types.Transaction, env *environment, parent *ty
 	etxs := make([]*types.ExternalTx, 0)
 	totalQitOut := big.NewInt(0)
 	totalConvertQitOut := big.NewInt(0)
-	utxosCreate := make(map[types.OutPoint]*types.UtxoEntry)
+	utxosCreateHashes := make([]common.Hash, 0, len(tx.TxOut()))
 	conversion := false
 	var convertAddress common.Address
 	outputs := make(map[uint]uint64)
@@ -1672,12 +1615,11 @@ func (w *worker) processQiTx(tx *types.Transaction, env *environment, parent *ty
 				return err
 			}
 
-			_, parentOrder, err := w.CalcOrder(parent)
-			if err != nil {
-				return err
+			if env.parentOrder == nil {
+				return errors.New("parent order not set")
 			}
 			var primeTerminus *types.WorkObject
-			if parentOrder == common.PRIME_CTX {
+			if *env.parentOrder == common.PRIME_CTX {
 				primeTerminus = parent
 			} else {
 				primeTerminus = w.hc.GetPrimeTerminus(env.wo)
@@ -1692,7 +1634,7 @@ func (w *worker) processQiTx(tx *types.Transaction, env *environment, parent *ty
 		} else {
 			// This output creates a normal UTXO
 			utxo := types.NewUtxoEntry(&txOut)
-			utxosCreate[types.OutPoint{TxHash: tx.Hash(), Index: uint16(txOutIdx)}] = utxo
+			utxosCreateHashes = append(utxosCreateHashes, types.UTXOHash(tx.Hash(), uint16(txOutIdx), utxo))
 		}
 	}
 	// Ensure the transaction does not spend more than its inputs.
@@ -1750,16 +1692,10 @@ func (w *worker) processQiTx(tx *types.Transaction, env *environment, parent *ty
 	}
 	env.txs = append(env.txs, tx)
 	env.utxoFees.Add(env.utxoFees, txFeeInQit)
-	for _, utxo := range utxosDelete {
-		env.state.DeleteUTXO(utxo.TxHash, utxo.Index)
-	}
-	for outPoint, utxo := range utxosCreate {
-		if err := env.state.CreateUTXO(outPoint.TxHash, outPoint.Index, utxo); err != nil {
-			// This should never happen and will invalidate the block
-			log.Global.Errorf("Failed to create UTXO %032x:%d: %v", outPoint.TxHash, outPoint.Index, err)
-			return err
-		}
-	}
+
+	env.utxosDelete = append(env.utxosDelete, utxosDeleteHashes...)
+	env.utxosCreate = append(env.utxosCreate, utxosCreateHashes...)
+
 	if err := CheckDenominations(inputs, outputs); err != nil {
 		return err
 	}

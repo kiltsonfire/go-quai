@@ -35,6 +35,7 @@ import (
 	"github.com/dominant-strategies/go-quai/params"
 	"github.com/dominant-strategies/go-quai/quai/gasprice"
 	"github.com/dominant-strategies/go-quai/rpc"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 )
 
 // QuaiAPIBackend implements quaiapi.Backend for full nodes
@@ -186,7 +187,7 @@ func (b *QuaiAPIBackend) StateAndHeaderByNumber(ctx context.Context, number rpc.
 	if header == nil {
 		return nil, nil, errors.New("header not found")
 	}
-	stateDb, err := b.quai.Core().StateAt(header.EVMRoot(), header.UTXORoot(), header.EtxSetRoot())
+	stateDb, err := b.quai.Core().StateAt(header.EVMRoot(), header.EtxSetRoot(), header.QuaiStateSize())
 	return stateDb, header, err
 }
 
@@ -209,7 +210,7 @@ func (b *QuaiAPIBackend) StateAndHeaderByNumberOrHash(ctx context.Context, block
 		if blockNrOrHash.RequireCanonical && b.quai.core.GetCanonicalHash(header.NumberU64(b.NodeCtx())) != hash {
 			return nil, nil, errors.New("hash is not currently canonical")
 		}
-		stateDb, err := b.quai.Core().StateAt(header.EVMRoot(), header.UTXORoot(), header.EtxSetRoot())
+		stateDb, err := b.quai.Core().StateAt(header.EVMRoot(), header.EtxSetRoot(), header.QuaiStateSize())
 		return stateDb, header, err
 	}
 	return nil, nil, errors.New("invalid arguments; neither block nor hash specified")
@@ -238,6 +239,11 @@ func (b *QuaiAPIBackend) GetBloom(hash common.Hash) (*types.Bloom, error) {
 		return nil, errors.New("getBloom can only be called in zone chain")
 	}
 	return b.quai.core.Slice().HeaderChain().GetBloom(hash)
+}
+
+// GetBlock returns the Block for the given block hash
+func (b *QuaiAPIBackend) GetBlock(hash common.Hash, number uint64) (*types.WorkObject, error) {
+	return b.quai.core.Slice().HeaderChain().GetBlock(hash, number), nil
 }
 
 func (b *QuaiAPIBackend) GetLogs(ctx context.Context, hash common.Hash) ([][]*types.Log, error) {
@@ -407,6 +413,14 @@ func (b *QuaiAPIBackend) SuggestGasTipCap(ctx context.Context) (*big.Int, error)
 	return b.gpo.SuggestTipCap(ctx)
 }
 
+func (b *QuaiAPIBackend) SuggestFinalityDepth(ctx context.Context, qiValue *big.Int, correlatedRisk *big.Int) (*big.Int, error) {
+	nodeCtx := b.quai.core.NodeCtx()
+	if nodeCtx != common.ZONE_CTX {
+		return common.Big0, errors.New("suggestFinalityDepth can only be called in zone chain")
+	}
+	return b.quai.core.SuggestFinalityDepth(qiValue, correlatedRisk), nil
+}
+
 func (b *QuaiAPIBackend) FeeHistory(ctx context.Context, blockCount int, lastBlock rpc.BlockNumber, rewardPercentiles []float64) (firstBlock *big.Int, reward [][]*big.Int, baseFee []*big.Int, gasUsedRatio []float64, err error) {
 	return b.gpo.FeeHistory(ctx, blockCount, lastBlock, rewardPercentiles)
 }
@@ -474,8 +488,8 @@ func (b *QuaiAPIBackend) StateAtTransaction(ctx context.Context, block *types.Wo
 	return b.quai.core.StateAtTransaction(block, txIndex, reexec)
 }
 
-func (b *QuaiAPIBackend) Append(header *types.WorkObject, manifest types.BlockManifest, domPendingHeader *types.WorkObject, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.Transactions) (types.Transactions, bool, error) {
-	return b.quai.core.Append(header, manifest, domPendingHeader, domTerminus, domOrigin, newInboundEtxs)
+func (b *QuaiAPIBackend) Append(header *types.WorkObject, manifest types.BlockManifest, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.Transactions) (types.Transactions, error) {
+	return b.quai.core.Append(header, manifest, domTerminus, domOrigin, newInboundEtxs)
 }
 
 func (b *QuaiAPIBackend) DownloadBlocksInManifest(hash common.Hash, manifest types.BlockManifest, entropy *big.Int) {
@@ -506,14 +520,6 @@ func (b *QuaiAPIBackend) PendingBlock() *types.WorkObject {
 	return b.quai.core.PendingBlock()
 }
 
-func (b *QuaiAPIBackend) SubRelayPendingHeader(pendingHeader types.PendingHeader, newEntropy *big.Int, location common.Location, subReorg bool, order int, updateDomLocation common.Location) {
-	b.quai.core.SubRelayPendingHeader(pendingHeader, newEntropy, location, subReorg, order, updateDomLocation)
-}
-
-func (b *QuaiAPIBackend) UpdateDom(oldDomReference common.Hash, pendingHeader *types.WorkObject, location common.Location) {
-	b.quai.core.UpdateDom(oldDomReference, pendingHeader, location)
-}
-
 func (b *QuaiAPIBackend) RequestDomToAppendOrFetch(hash common.Hash, entropy *big.Int, order int) {
 	b.quai.core.RequestDomToAppendOrFetch(hash, entropy, order)
 }
@@ -528,6 +534,10 @@ func (b *QuaiAPIBackend) NewGenesisPendingHeader(pendingHeader *types.WorkObject
 
 func (b *QuaiAPIBackend) SetCurrentExpansionNumber(expansionNumber uint8) {
 	b.quai.core.SetCurrentExpansionNumber(expansionNumber)
+}
+
+func (b *QuaiAPIBackend) GetExpansionNumber() uint8 {
+	return b.quai.core.GetExpansionNumber()
 }
 
 func (b *QuaiAPIBackend) WriteGenesisBlock(block *types.WorkObject, location common.Location) {
@@ -594,7 +604,7 @@ func (b *QuaiAPIBackend) SendWorkShare(workShare *types.WorkObjectHeader) error 
 	return b.quai.core.SendWorkShare(workShare)
 }
 
-func (b *QuaiAPIBackend) CheckIfValidWorkShare(workShare *types.WorkObjectHeader) bool {
+func (b *QuaiAPIBackend) CheckIfValidWorkShare(workShare *types.WorkObjectHeader) types.WorkShareValidity {
 	return b.quai.core.CheckIfValidWorkShare(workShare)
 }
 
@@ -604,6 +614,18 @@ func (b *QuaiAPIBackend) SetDomInterface(domInterface core.CoreBackend) {
 
 func (b *QuaiAPIBackend) GetMaxTxInWorkShare() uint64 {
 	return b.quai.core.GetMaxTxInWorkShare()
+}
+
+func (b *QuaiAPIBackend) TxMiningEnabled() bool {
+	return b.quai.core.TxMiningEnabled()
+}
+
+func (b *QuaiAPIBackend) GetWorkShareThreshold() int {
+	return b.quai.core.GetWorkShareThreshold()
+}
+
+func (b *QuaiAPIBackend) GetMinerEndpoints() []string {
+	return b.quai.core.GetMinerEndpoints()
 }
 
 func (b *QuaiAPIBackend) BadHashExistsInChain() bool {
@@ -660,6 +682,34 @@ func (b *QuaiAPIBackend) SanityCheckWorkObjectHeaderViewBody(wo *types.WorkObjec
 
 func (b *QuaiAPIBackend) SanityCheckWorkObjectShareViewBody(wo *types.WorkObject) error {
 	return b.quai.core.SanityCheckWorkObjectShareViewBody(wo)
+}
+
+func (b *QuaiAPIBackend) CheckInCalcOrderCache(hash common.Hash) (*big.Int, int, bool) {
+	return b.quai.core.CheckInCalcOrderCache(hash)
+}
+
+func (b *QuaiAPIBackend) AddToCalcOrderCache(hash common.Hash, order int, intrinsicS *big.Int) {
+	b.quai.core.AddToCalcOrderCache(hash, order, intrinsicS)
+}
+
+func (b *QuaiAPIBackend) ApplyPoWFilter(wo *types.WorkObject) pubsub.ValidationResult {
+	return b.quai.core.ApplyPoWFilter(wo)
+}
+
+func (b *QuaiAPIBackend) WorkShareDistance(wo *types.WorkObject, ws *types.WorkObjectHeader) (*big.Int, error) {
+	return b.quai.core.WorkShareDistance(wo, ws)
+}
+
+func (b *QuaiAPIBackend) Database() ethdb.Database {
+	return b.quai.ChainDb()
+}
+
+func (b *QuaiAPIBackend) GeneratePendingHeader(block *types.WorkObject, fill bool) (*types.WorkObject, error) {
+	return b.quai.core.GeneratePendingHeader(block, fill)
+}
+
+func (b *QuaiAPIBackend) MakeFullPendingHeader(primePh, regionPh, zonePh *types.WorkObject) *types.WorkObject {
+	return b.quai.core.MakeFullPendingHeader(primePh, regionPh, zonePh)
 }
 
 // ///////////////////////////

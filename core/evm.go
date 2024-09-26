@@ -52,6 +52,9 @@ type ChainContext interface {
 	// CheckIfEtxIsEligible checks if the given slice is eligible to accept the
 	// etx based on the EtxEligibleSlices
 	CheckIfEtxIsEligible(common.Hash, common.Location) bool
+
+	CheckInCalcOrderCache(common.Hash) (*big.Int, int, bool)
+	AddToCalcOrderCache(common.Hash, int, *big.Int)
 }
 
 // NewEVMBlockContext creates a new context for use in the EVM.
@@ -112,6 +115,7 @@ func NewEVMBlockContext(header *types.WorkObject, parent *types.WorkObject, chai
 		GasLimit:           header.GasLimit(),
 		CheckIfEtxEligible: chain.CheckIfEtxIsEligible,
 		EtxEligibleSlices:  etxEligibleSlices,
+		QuaiStateSize:      parent.QuaiStateSize(), // using the state size at the parent for all the gas calculations
 	}, nil
 }
 

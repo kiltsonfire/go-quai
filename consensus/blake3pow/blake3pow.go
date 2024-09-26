@@ -38,6 +38,8 @@ type Config struct {
 
 	MinDifficulty *big.Int
 
+	WorkShareThreshold int
+
 	// When set, notifications sent by the remote sealer will
 	// be block header JSON objects instead of work package arrays.
 	NotifyFull bool
@@ -75,6 +77,7 @@ func New(config Config, notify []string, noverify bool, logger *log.Logger) *Bla
 		config:  config,
 		update:  make(chan struct{}),
 		logger:  logger,
+		rand:    rand.New(rand.NewSource(time.Now().UnixNano())),
 		threads: config.NumThreads,
 	}
 	if config.PowMode == ModeShared {

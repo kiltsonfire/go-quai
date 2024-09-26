@@ -23,7 +23,7 @@ const (
 	logDir = "nodelogs"
 	// default log file params
 	defaultLogMaxSize    = 100  // maximum file size before rotation, in MB
-	defaultLogMaxBackups = 3    // maximum number of old log files to keep
+	defaultLogMaxBackups = 10   // maximum number of old log files to keep
 	defaultLogMaxAge     = 28   // maximum number of days to retain old log files
 	defaultLogCompress   = true // whether to compress the rotated log files using gzip
 )

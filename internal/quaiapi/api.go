@@ -1055,6 +1055,7 @@ type RPCTransaction struct {
 	OriginatingTxHash *common.Hash      `json:"originatingTxHash,omitempty"`
 	ETXIndex          *hexutil.Uint64   `json:"etxIndex,omitempty"`
 	IsCoinbase        *hexutil.Uint64   `json:"isCoinbase,omitempty"`
+	ETxType           string            `json:"etxType"`
 	// Optional fields only present for external transactions
 	Sender *common.Address `json:"sender,omitempty"`
 }
@@ -1138,6 +1139,18 @@ func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber
 		} else {
 			isCoinbase := uint64(0)
 			result.IsCoinbase = (*hexutil.Uint64)(&isCoinbase)
+		}
+		coinbase := types.IsCoinBaseTx(tx)
+		if coinbase {
+			result.ETxType = "coinbase"
+		} else {
+			conversion := types.IsConversionTx(tx)
+			if conversion {
+				result.ETxType = "conversion"
+			} else {
+				// Neither coinbase nor conversion
+				result.ETxType = "etx"
+			}
 		}
 	}
 	if blockHash != (common.Hash{}) {
@@ -1707,4 +1720,92 @@ func toHexSlice(b [][]byte) []string {
 		r[i] = hexutil.Encode(b[i])
 	}
 	return r
+}
+
+type PublicWorkSharesAPI struct {
+	b        Backend
+	txPool   *PublicTransactionPoolAPI
+	txWorker *TxWorker
+}
+
+// NewPublicWorkSharesAPI creates a new RPC service with methods specific for the transaction pool.
+func NewPublicWorkSharesAPI(txpoolAPi *PublicTransactionPoolAPI, b Backend) *PublicWorkSharesAPI {
+	api := &PublicWorkSharesAPI{
+		b,
+		txpoolAPi,
+		nil,
+	}
+	// Start WorkShare workers
+	worker := StartTxWorker(b.Engine(), b.GetMinerEndpoints(), b.NodeLocation(), api, b.GetWorkShareThreshold())
+	api.txWorker = worker
+
+	return api
+}
+
+// GetWork returns the current workObjectHeader and the workThreshold to recognize a share
+func (s *PublicWorkSharesAPI) GetWork(ctx context.Context) (hexutil.Bytes, int, error) {
+	header := s.b.CurrentHeader()
+
+	protoWo, err := header.WorkObjectHeader().ProtoEncode()
+	if err != nil {
+		return nil, -1, err
+	}
+
+	protoBytes, err := proto.Marshal(protoWo)
+	if err != nil {
+		return nil, -1, err
+	}
+
+	return protoBytes, s.b.GetWorkShareThreshold(), nil
+}
+
+// GetWorkShareThreshold returns the minimal WorkShareThreshold that this node will accept
+func (s *PublicWorkSharesAPI) GetWorkShareThreshold(ctx context.Context) (int, error) {
+	return s.b.GetWorkShareThreshold(), nil
+}
+
+// SendWorkedTransaction will check that the transaction in the form of a worked WorkObject
+// fufills the work threshold before adding it to the transaction pool.
+func (s *PublicWorkSharesAPI) SendUnworkedTransaction(ctx context.Context, input hexutil.Bytes) (common.Hash, error) {
+	tx := new(types.Transaction)
+	protoTransaction := new(types.ProtoTransaction)
+	err := proto.Unmarshal(input, protoTransaction)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	err = tx.ProtoDecode(protoTransaction, s.b.NodeLocation())
+	if err != nil {
+		return common.Hash{}, err
+	}
+	return tx.Hash(), s.txWorker.AddTransaction(tx)
+}
+
+func (s *PublicWorkSharesAPI) ReceiveSubWorkshare(ctx context.Context, input hexutil.Bytes) error {
+	protoSubWorkshare := &types.ProtoWorkObject{}
+	err := proto.Unmarshal(input, protoSubWorkshare)
+	if err != nil {
+		return err
+	}
+
+	workShare := &types.WorkObject{}
+	workShare.ProtoDecode(protoSubWorkshare, s.b.NodeLocation(), types.WorkShareTxObject)
+
+	// check if the workshare is valid before broadcasting as a sanity
+	workShareValidity := s.b.CheckIfValidWorkShare(workShare.WorkObjectHeader())
+	if workShareValidity == types.Valid {
+		s.b.Logger().WithField("number", workShare.WorkObjectHeader().NumberU64()).Info("Received Work Share")
+		shareView := workShare.ConvertToWorkObjectShareView(workShare.Transactions())
+		err = s.b.BroadcastWorkShare(shareView, s.b.NodeLocation())
+		if err != nil {
+			s.b.Logger().WithField("err", err).Error("Error broadcasting work share")
+		}
+		txEgressCounter.Add(float64(len(shareView.WorkObject.Transactions())))
+		s.b.Logger().WithFields(log.Fields{"tx count": len(workShare.Transactions())}).Info("Broadcasted workshares with txs")
+		return nil
+	} else if workShareValidity == types.Sub {
+		tx := workShare.Tx()
+		return s.b.SendTx(ctx, tx)
+	} else {
+		return errors.New("work share is invalid")
+	}
 }

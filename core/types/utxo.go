@@ -71,8 +71,8 @@ func (txIns *TxIns) ProtoDecode(protoTxIns *ProtoTxIns) error {
 
 // TxIn defines a Qi transaction input
 type TxIn struct {
-	PreviousOutPoint OutPoint
-	PubKey           []byte
+	PreviousOutPoint OutPoint `json:"previousOutPoint"`
+	PubKey           []byte   `json:"pubKey"`
 }
 
 func (txIn TxIn) ProtoEncode() (*ProtoTxIn, error) {
@@ -99,8 +99,8 @@ func (txIn *TxIn) ProtoDecode(protoTxIn *ProtoTxIn) error {
 
 // OutPoint defines a Qi data type that is used to track previous outputs
 type OutPoint struct {
-	TxHash common.Hash
-	Index  uint16
+	TxHash common.Hash `json:"txHash"`
+	Index  uint16      `json:"index"`
 }
 
 func (outPoint OutPoint) Key() string {
@@ -189,6 +189,7 @@ func (txOuts TxOuts) ProtoEncode() (*ProtoTxOuts, error) {
 }
 
 func (txOuts *TxOuts) ProtoDecode(protoTxOuts *ProtoTxOuts) error {
+	*txOuts = make(TxOuts, 0, len(protoTxOuts.TxOuts))
 	for _, protoTxOut := range protoTxOuts.TxOuts {
 		decodedTxOut := &TxOut{}
 		err := decodedTxOut.ProtoDecode(protoTxOut)
@@ -252,17 +253,39 @@ type UtxoEntry struct {
 	Lock         *big.Int // Block height the entry unlocks. 0 = unlocked
 }
 
-// Clone returns a shallow copy of the utxo entry.
-func (entry *UtxoEntry) Clone() *UtxoEntry {
-	if entry == nil {
-		return nil
-	}
+// SpentUtxoEntry houses details about a spent UtxoEntry.
+type SpentUtxoEntry struct {
+	OutPoint
+	*UtxoEntry
+}
 
-	return &UtxoEntry{
-		Denomination: entry.Denomination,
-		Address:      entry.Address,
-		Lock:         new(big.Int).Set(entry.Lock),
+func (sutxo *SpentUtxoEntry) ProtoEncode() (*ProtoSpentUTXO, error) {
+	protoSpentUtxoEntry := &ProtoSpentUTXO{}
+
+	protoOutPoint, err := sutxo.OutPoint.ProtoEncode()
+	if err != nil {
+		return nil, err
 	}
+	protoSpentUtxoEntry.Outpoint = protoOutPoint
+
+	protoUtxoEntry, err := sutxo.UtxoEntry.ProtoEncode()
+	if err != nil {
+		return nil, err
+	}
+	protoSpentUtxoEntry.Sutxo = protoUtxoEntry
+
+	return protoSpentUtxoEntry, nil
+}
+
+func (sutxo *SpentUtxoEntry) ProtoDecode(protoSpentUtxoEntry *ProtoSpentUTXO) error {
+	if err := sutxo.OutPoint.ProtoDecode(protoSpentUtxoEntry.Outpoint); err != nil {
+		return err
+	}
+	sutxo.UtxoEntry = &UtxoEntry{}
+	if err := sutxo.UtxoEntry.ProtoDecode(protoSpentUtxoEntry.Sutxo); err != nil {
+		return err
+	}
+	return nil
 }
 
 // NewUtxoEntry returns a new UtxoEntry built from the arguments.
@@ -277,4 +300,39 @@ func NewUtxoEntry(txOut *TxOut) *UtxoEntry {
 type AddressUtxos struct {
 	Address common.Address
 	Utxos   []*UtxoEntry
+}
+
+func (utxo *UtxoEntry) ProtoEncode() (*ProtoTxOut, error) {
+	protoTxOut := &ProtoTxOut{}
+
+	denomination := uint32(utxo.Denomination)
+	protoTxOut.Denomination = &denomination
+	protoTxOut.Address = utxo.Address
+	if utxo.Lock == nil {
+		protoTxOut.Lock = big.NewInt(0).Bytes()
+	} else {
+		protoTxOut.Lock = utxo.Lock.Bytes()
+	}
+	return protoTxOut, nil
+}
+
+func (utxo *UtxoEntry) ProtoDecode(protoTxOut *ProtoTxOut) error {
+	// check if protoTxOut.Denomination is above the max uint8 value
+	if *protoTxOut.Denomination > math.MaxUint8 {
+		return errors.New("protoTxOut.Denomination is above the max uint8 value")
+	}
+	utxo.Denomination = uint8(protoTxOut.GetDenomination())
+	utxo.Address = protoTxOut.Address
+	if protoTxOut.Lock == nil {
+		utxo.Lock = nil
+	} else {
+		utxo.Lock = new(big.Int).SetBytes(protoTxOut.Lock)
+	}
+	return nil
+}
+
+func UTXOHash(txHash common.Hash, index uint16, utxo *UtxoEntry) common.Hash {
+	indexBytes := make([]byte, 2)
+	binary.BigEndian.PutUint16(indexBytes, index)
+	return RlpHash([]interface{}{txHash, indexBytes, utxo}) // TODO: Consider encoding to protobuf instead
 }
