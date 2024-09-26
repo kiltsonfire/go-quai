@@ -455,11 +455,13 @@ func (sl *Slice) asyncPendingHeaderLoop() {
 	for {
 		select {
 		case asyncPh := <-sl.asyncPhCh:
+			sl.hc.headermu.Lock()
 			bestPh := sl.ReadBestPh()
 			if bestPh.ParentHash(common.ZONE_CTX) == asyncPh.ParentHash(common.ZONE_CTX) {
 				combinedPendingHeader := sl.combinePendingHeader(asyncPh, bestPh, common.ZONE_CTX, true)
 				sl.SetBestPh(combinedPendingHeader)
 			}
+			sl.hc.headermu.Unlock()
 		case <-sl.asyncPhSub.Err():
 			return
 		case <-sl.quit:
@@ -1063,6 +1065,11 @@ func (sl *Slice) MakeFullPendingHeader(primePendingHeader, regionPendingHeader, 
 func (sl *Slice) GeneratePendingHeader(block *types.WorkObject, fill bool) (*types.WorkObject, error) {
 	sl.hc.headermu.Lock()
 
+	sl.logger.WithFields(log.Fields{
+		"number": block.NumberArray(),
+		"hash":   block.Hash(),
+		"fill":   fill,
+	}).Info("GeneratePendingHeader")
 	start := time.Now()
 	// set the current header to this block
 	switch sl.NodeCtx() {

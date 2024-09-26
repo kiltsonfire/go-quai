@@ -140,24 +140,20 @@ func (hc *HierarchicalCoordinator) InitPendingHeaders() {
 			pendingHeaderMu[common.Location{byte(i), byte(j)}.Name()] = &sync.RWMutex{}
 		}
 	}
-	hc.Add(new(big.Int).SetUint64(0), nodeSet)
+	hc.Add(new(big.Int).SetUint64(0), nodeSet, hc.pendingHeaders)
 	hc.pendingHeaderMu = pendingHeaderMu
 }
 
-func (hc *HierarchicalCoordinator) Add(entropy *big.Int, node NodeSet) {
+func (hc *HierarchicalCoordinator) Add(entropy *big.Int, node NodeSet, newPendingHeaders *PendingHeaders) {
 	entropyStr := entropy.String()
-	if _, exists := hc.pendingHeaders.collection.Peek(entropyStr); !exists {
-		hc.pendingHeaders.order = append(hc.pendingHeaders.order, new(big.Int).Set(entropy)) // Store a copy of the big.Int
-		hc.pendingHeaders.collection.Add(entropyStr, node)
+	if _, exists := newPendingHeaders.collection.Peek(entropyStr); !exists {
+		newPendingHeaders.order = append(newPendingHeaders.order, new(big.Int).Set(entropy)) // Store a copy of the big.Int
+		newPendingHeaders.collection.Add(entropyStr, node)
 	}
 
 	if hc.bestEntropy.Cmp(entropy) < 0 {
 		log.Global.Info("Picking the Extern entropy to build pending headers")
 		hc.bestEntropy = new(big.Int).Set(entropy)
-		go hc.ComputePendingHeaders(node)
-		sort.Slice(hc.pendingHeaders.order, func(i, j int) bool {
-			return hc.pendingHeaders.order[i].Cmp(hc.pendingHeaders.order[j]) < 0 // Sort based on big.Int values
-		})
 	}
 
 }
@@ -773,9 +769,12 @@ search:
 	log.Global.Info("Map Based New Set Entropy: ", common.BigBitsToBits(entropy), " Best Entropy: ", common.BigBitsToBits(hc.bestEntropy))
 	printNodeSet(nodeSet)
 	hc.oneMu.Lock()
-	hc.Add(entropy, nodeSet)
+	hc.Add(entropy, nodeSet, hc.pendingHeaders)
 	hc.oneMu.Unlock()
-
+	// bestNode, exists := hc.pendingHeaders.collection.Peek(hc.bestEntropy.String())
+	// if exists {
+	// 	go hc.ComputePendingHeaders(bestNode)
+	// }
 }
 
 func (hc *HierarchicalCoordinator) NodeFromHash(hash common.Hash, location common.Location) (Node, error) {
@@ -927,11 +926,11 @@ func (hc *HierarchicalCoordinator) BuildPendingHeaders(wo *types.WorkObject, ord
 	misses := 0
 	var threshold int
 	threshold = 30
-	if order == common.PRIME_CTX || order == common.REGION_CTX {
-		threshold = int(numRegions) * int(numZones) * 2 * threshold
-	}
+	threshold = int(numRegions) * int(numZones) * 2 * threshold
 
 	var start time.Time
+	var newPendingHeaders *PendingHeaders
+	newPendingHeaders = NewPendingHeaders()
 	start = time.Now()
 	log.Global.Info("PendingHeadersOrderLen:", startingLen)
 	for i := startingLen - 1; i >= 0; i-- {
@@ -953,7 +952,7 @@ func (hc *HierarchicalCoordinator) BuildPendingHeaders(wo *types.WorkObject, ord
 				log.Global.Info("Pending Headers Cache New Set Entropy: ", common.BigBitsToBits(newSetEntropy), " Best Entropy: ", common.BigBitsToBits(hc.bestEntropy))
 				printNodeSet(newNodeSet)
 			}
-			hc.Add(newSetEntropy, newNodeSet)
+			hc.Add(newSetEntropy, newNodeSet, newPendingHeaders)
 		} else {
 			//log.Global.Info("NodeSet not extendable for entropy", " entropy: ", common.BigBitsToBits(entropy), " order: ", order, " number: ", wo.NumberArray(), " hash: ", wo.Hash(), " location: ", wo.Location().Name(), " parentHash: ", wo.ParentHash(order))
 		}
@@ -962,6 +961,23 @@ func (hc *HierarchicalCoordinator) BuildPendingHeaders(wo *types.WorkObject, ord
 			break
 		}
 	}
+
+	for _, entropy := range newPendingHeaders.order {
+		hc.pendingHeaders.order = append(hc.pendingHeaders.order, entropy)
+		newCollection, exists := newPendingHeaders.collection.Peek(entropy.String())
+		if exists {
+			hc.pendingHeaders.collection.Add(entropy.String(), newCollection)
+		}
+	}
+
+	bestNode, exists := hc.pendingHeaders.collection.Peek(hc.bestEntropy.String())
+	if exists {
+		go hc.ComputePendingHeaders(bestNode)
+	}
+	sort.Slice(hc.pendingHeaders.order, func(i, j int) bool {
+		return hc.pendingHeaders.order[i].Cmp(hc.pendingHeaders.order[j]) < 0 // Sort based on big.Int values
+	})
+
 	log.Global.Info("Time taken to compute pending headers: ", time.Since(start))
 }
 
