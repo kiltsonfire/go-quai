@@ -317,6 +317,8 @@ func (p *StateProcessor) Process(block *types.WorkObject, batch ethdb.Batch) (ty
 	totalQiProcessTimes := make(map[string]time.Duration)
 	firstQiTx := true
 
+	gasPriceCache := make(map[common.Hash]*big.Int)
+
 	primeTerminus := p.hc.GetHeaderByHash(header.PrimeTerminusHash())
 	if primeTerminus == nil {
 		return nil, nil, nil, nil, 0, 0, 0, nil, fmt.Errorf("could not find prime terminus header %032x", header.PrimeTerminusHash())
@@ -360,6 +362,8 @@ func (p *StateProcessor) Process(block *types.WorkObject, batch ethdb.Batch) (ty
 					minGasPrice = new(big.Int).Set(qiGasPrice)
 				}
 			}
+
+			gasPriceCache[tx.Hash()] = qiGasPrice
 
 			totalEtxCoinbaseTime += time.Since(startEtxCoinbase)
 			totalQiTime += time.Since(qiTimeBefore)
@@ -584,6 +588,8 @@ func (p *StateProcessor) Process(block *types.WorkObject, batch ethdb.Batch) (ty
 				}
 			}
 
+			gasPriceCache[tx.Hash()] = minGasPrice
+
 		} else {
 			return nil, nil, nil, nil, 0, 0, 0, nil, ErrTxTypeNotSupported
 		}
@@ -600,7 +606,19 @@ func (p *StateProcessor) Process(block *types.WorkObject, batch ethdb.Batch) (ty
 	}
 
 	if block.BaseFee().Cmp(minGasPrice) != 0 {
-		log.Global.Error("length of transactions", len(block.Transactions()))
+		p.logger.WithField("len", len(block.Transactions())).Error("Block base fee is not the minGasPrice")
+		for _, tx := range block.Transactions() {
+			txGasPrice := big.NewInt(0)
+			if tx.Type() != types.ExternalTxType {
+				gasPrice, ok := gasPriceCache[tx.Hash()]
+				if !ok {
+					p.logger.WithField("hash", tx.Hash()).Error("could not find the gas price in the cache, impossible")
+				} else {
+					txGasPrice = gasPrice
+				}
+			}
+			p.logger.WithFields(log.Fields{"type": tx.Type(), "gas price": txGasPrice, "hash": tx.Hash()}).Info("Tx Info")
+		}
 		return nil, nil, nil, nil, 0, 0, 0, nil, fmt.Errorf("invalid base fee used (remote: %d local: %d)", block.BaseFee(), minGasPrice)
 	}
 
