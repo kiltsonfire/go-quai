@@ -317,6 +317,8 @@ func (p *StateProcessor) Process(block *types.WorkObject, batch ethdb.Batch) (ty
 	totalQiProcessTimes := make(map[string]time.Duration)
 	firstQiTx := true
 
+	nonEtxExists := false
+
 	gasPriceCache := make(map[common.Hash]*big.Int)
 
 	primeTerminus := p.hc.GetHeaderByHash(header.PrimeTerminusHash())
@@ -327,7 +329,7 @@ func (p *StateProcessor) Process(block *types.WorkObject, batch ethdb.Batch) (ty
 	// value is not the basefee mentioned in the block, the block is invalid In
 	// the case of the Qi transactions, its converted into Quai at the rate
 	// defined in the prime terminus
-	minGasPrice := big.NewInt(0)
+	var minGasPrice *big.Int
 	for i, tx := range block.Transactions() {
 		startProcess := time.Now()
 
@@ -355,7 +357,7 @@ func (p *StateProcessor) Process(block *types.WorkObject, batch ethdb.Batch) (ty
 			qiTxFeeInQuai := misc.QiToQuai(primeTerminus.WorkObjectHeader(), qiTxFee)
 			// get the gas price by dividing the fee by qiTxGas
 			qiGasPrice := new(big.Int).Div(qiTxFeeInQuai, big.NewInt(int64(types.CalculateBlockQiTxGas(tx, qiScalingFactor, p.hc.NodeLocation()))))
-			if minGasPrice.Cmp(big.NewInt(0)) == 0 {
+			if minGasPrice == nil {
 				minGasPrice = new(big.Int).Set(qiGasPrice)
 			} else {
 				if minGasPrice.Cmp(qiGasPrice) > 0 {
@@ -372,6 +374,8 @@ func (p *StateProcessor) Process(block *types.WorkObject, batch ethdb.Batch) (ty
 			totalQiProcessTimes["Output Processing"] += timing["Output Processing"]
 			totalQiProcessTimes["Fee Verification"] += timing["Fee Verification"]
 			totalQiProcessTimes["Signature Check"] += timing["Signature Check"]
+
+			nonEtxExists = true
 
 			continue
 		}
@@ -580,7 +584,7 @@ func (p *StateProcessor) Process(block *types.WorkObject, batch ethdb.Batch) (ty
 
 			// update the min gas price if the gas price in the tx is less than
 			// the min gas price
-			if minGasPrice.Cmp(big.NewInt(0)) == 0 {
+			if minGasPrice == nil {
 				minGasPrice = new(big.Int).Set(tx.GasPrice())
 			} else {
 				if minGasPrice.Cmp(tx.GasPrice()) > 0 {
@@ -589,6 +593,8 @@ func (p *StateProcessor) Process(block *types.WorkObject, batch ethdb.Batch) (ty
 			}
 
 			gasPriceCache[tx.Hash()] = minGasPrice
+
+			nonEtxExists = true
 
 		} else {
 			return nil, nil, nil, nil, 0, 0, 0, nil, ErrTxTypeNotSupported
@@ -605,7 +611,11 @@ func (p *StateProcessor) Process(block *types.WorkObject, batch ethdb.Batch) (ty
 		i++
 	}
 
-	if block.BaseFee().Cmp(minGasPrice) != 0 {
+	if nonEtxExists && block.BaseFee().Cmp(big.NewInt(0)) == 0 {
+		return nil, nil, nil, nil, 0, 0, 0, nil, fmt.Errorf("block base fee is nil though non etx transactions exist")
+	}
+
+	if minGasPrice != nil && block.BaseFee().Cmp(minGasPrice) != 0 {
 		p.logger.WithField("len", len(block.Transactions())).Error("Block base fee is not the minGasPrice")
 		for _, tx := range block.Transactions() {
 			txGasPrice := big.NewInt(0)
