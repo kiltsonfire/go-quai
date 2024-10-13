@@ -387,7 +387,6 @@ func (v *BlockValidator) ValidateState(block *types.WorkObject, statedb *state.S
 // to keep the baseline gas close to the provided target, and increase it towards
 // the target if the baseline gas is lower.
 func CalcGasLimit(parent *types.WorkObject, gasCeil uint64) uint64 {
-	return params.MinGasLimit
 	// No Gas for TimeToStartTx days worth of zone blocks, this gives enough time to
 	// onboard new miners into the slice
 	if parent.NumberU64(common.ZONE_CTX) < params.TimeToStartTx {
@@ -407,7 +406,7 @@ func CalcGasLimit(parent *types.WorkObject, gasCeil uint64) uint64 {
 	var desiredLimit uint64
 	percentGasUsed := parent.GasUsed() * 100 / parent.GasLimit()
 	if percentGasUsed > params.PercentGasUsedThreshold {
-		desiredLimit = CalcGasCeil(parent.NumberU64(common.ZONE_CTX), gasCeil)
+		desiredLimit = gasCeil
 		if desiredLimit > gasCeil {
 			desiredLimit = gasCeil
 		}
@@ -424,15 +423,4 @@ func CalcGasLimit(parent *types.WorkObject, gasCeil uint64) uint64 {
 			return limit - delta/2
 		}
 	}
-}
-
-func CalcGasCeil(blockNumber uint64, gasCeil uint64) uint64 {
-	if blockNumber < params.GasLimitStepOneBlockThreshold {
-		return gasCeil / 4
-	} else if blockNumber < params.GasLimitStepTwoBlockThreshold {
-		return gasCeil / 2
-	} else if blockNumber < params.GasLimitStepThreeBlockThreshold {
-		return gasCeil * 3 / 4
-	}
-	return gasCeil
 }
