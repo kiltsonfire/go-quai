@@ -24,10 +24,10 @@ import (
 )
 
 const (
-	GasLimitBoundDivisor    uint64 = 1024    // The bound divisor of the gas limit, used in update calculations.
-	PercentGasUsedThreshold uint64 = 90      // Percent Gas used threshold at which the gas limit adjusts
-	MinGasLimit             uint64 = 5000000 // Minimum the gas limit may ever be.
-	GenesisGasLimit         uint64 = 5000000 // Gas limit of the Genesis block.
+	GasLimitBoundDivisor    uint64 = 1024     // The bound divisor of the gas limit, used in update calculations.
+	PercentGasUsedThreshold uint64 = 90       // Percent Gas used threshold at which the gas limit adjusts
+	MinGasLimit             uint64 = 50000000 // Minimum the gas limit may ever be.
+	GenesisGasLimit         uint64 = 50000000 // Gas limit of the Genesis block.
 
 	StateCeil                 uint64 = 20000000 // Maximum the StateCeil may ever be
 	StateLimitBoundDivisor    uint64 = 1024     // The bound divisor of the gas limit, used in update calculations.
