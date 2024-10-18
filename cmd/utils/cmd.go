@@ -100,10 +100,7 @@ func makeConfigNode(slicesRunning []common.Location, nodeLocation common.Locatio
 	}
 	SetQuaiConfig(stack, &cfg.Quai, slicesRunning, nodeLocation, currentExpansionNumber, logger)
 
-	// TODO: Apply stats
-	if viper.IsSet(QuaiStatsURLFlag.Name) {
-		cfg.Quaistats.URL = viper.GetString(QuaiStatsURLFlag.Name)
-	}
+	cfg.Quaistats.URL = viper.GetString(QuaiStatsURLFlag.Name)
 
 	return stack, cfg
 }
@@ -112,8 +109,8 @@ func defaultNodeConfig() node.Config {
 	cfg := node.DefaultConfig
 	cfg.Name = ""
 	cfg.Version = params.VersionWithCommit("", "")
-	cfg.HTTPModules = append(cfg.HTTPModules, "eth")
-	cfg.WSModules = append(cfg.WSModules, "eth")
+	cfg.HTTPModules = append(cfg.HTTPModules, "quai")
+	cfg.WSModules = append(cfg.WSModules, "quai")
 	return cfg
 }
 
@@ -134,7 +131,7 @@ func makeFullNode(p2p quai.NetworkingAPI, nodeLocation common.Location, slicesRu
 // The second return value is the full node instance, which may be nil if the
 // node is running as a light client.
 func RegisterQuaiService(stack *node.Node, p2p quai.NetworkingAPI, cfg quaiconfig.Config, nodeCtx int, currentExpansionNumber uint8, startingExpansionNumber uint64, genesisBlock *types.WorkObject, logger *log.Logger) (quaiapi.Backend, error) {
-	backend, err := quai.New(stack, p2p, &cfg, nodeCtx, currentExpansionNumber, startingExpansionNumber, genesisBlock, logger)
+	backend, err := quai.New(stack, p2p, &cfg, nodeCtx, currentExpansionNumber, startingExpansionNumber, genesisBlock, logger, viper.GetInt(WSMaxSubsFlag.Name))
 	if err != nil {
 		Fatalf("Failed to register the Quai service: %v", err)
 	}

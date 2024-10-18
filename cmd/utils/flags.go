@@ -34,23 +34,27 @@ import (
 	"github.com/dominant-strategies/go-quai/metrics_config"
 	"github.com/dominant-strategies/go-quai/node"
 	"github.com/dominant-strategies/go-quai/params"
-	"github.com/dominant-strategies/go-quai/quai/gasprice"
 	"github.com/dominant-strategies/go-quai/quai/quaiconfig"
 )
 
 const (
-	c_GlobalFlagPrefix  = "global."
-	c_NodeFlagPrefix    = "node."
-	c_TXPoolPrefix      = "txpool."
-	c_RPCFlagPrefix     = "rpc."
-	c_PeersFlagPrefix   = "peers."
-	c_MetricsFlagPrefix = "metrics."
+	c_GlobalFlagPrefix    = "global."
+	c_NodeFlagPrefix      = "node."
+	c_TXPoolPrefix        = "txpool."
+	c_RPCFlagPrefix       = "rpc."
+	c_WorkShareFlagPrefix = "workshare."
+	c_PeersFlagPrefix     = "peers."
+	c_MetricsFlagPrefix   = "metrics."
+
+	c_regionPortOffset = 1
+	c_zonePortOffset   = 199
 )
 
 var Flags = [][]Flag{
 	GlobalFlags,
 	NodeFlags,
 	TXPoolFlags,
+	WorkShareFlags,
 	RPCFlags,
 	PeersFlags,
 	MetricsFlags,
@@ -59,6 +63,7 @@ var Flags = [][]Flag{
 var GlobalFlags = []Flag{
 	ConfigDirFlag,
 	DataDirFlag,
+	InitConfigFlag,
 	AncientDirFlag,
 	LogLevelFlag,
 	LogSizeFlag,
@@ -67,7 +72,6 @@ var GlobalFlags = []Flag{
 var NodeFlags = []Flag{
 	IPAddrFlag,
 	P2PPortFlag,
-	BootNodeFlag,
 	BootPeersFlag,
 	PortMapFlag,
 	KeyFileFlag,
@@ -101,17 +105,16 @@ var NodeFlags = []Flag{
 	VMEnableDebugFlag,
 	PprofFlag,
 	InsecureUnlockAllowedFlag,
-	GpoBlocksFlag,
-	GpoPercentileFlag,
-	GpoMaxGasPriceFlag,
-	GpoIgnoreGasPriceFlag,
-	CoinbaseAddressFlag,
+	QuaiCoinbaseFlag,
+	QiCoinbaseFlag,
+	MinerPreferenceFlag,
 	EnvironmentFlag,
 	QuaiStatsURLFlag,
 	SendFullStatsFlag,
 	IndexAddressUtxos,
 	StartingExpansionNumberFlag,
 	NodeLogLevelFlag,
+	GenesisNonce,
 }
 
 var TXPoolFlags = []Flag{
@@ -128,6 +131,12 @@ var TXPoolFlags = []Flag{
 	TxPoolLifetimeFlag,
 }
 
+var WorkShareFlags = []Flag{
+	WorkShareMiningFlag,
+	WorkShareThresholdFlag,
+	WorkShareMinerEndpoints,
+}
+
 var RPCFlags = []Flag{
 	HTTPEnabledFlag,
 	HTTPListenAddrFlag,
@@ -135,11 +144,14 @@ var RPCFlags = []Flag{
 	HTTPVirtualHostsFlag,
 	HTTPApiFlag,
 	HTTPPathPrefixFlag,
+	HTTPPortStartFlag,
 	WSEnabledFlag,
 	WSListenAddrFlag,
+	WSMaxSubsFlag,
 	WSApiFlag,
 	WSAllowedOriginsFlag,
 	WSPathPrefixFlag,
+	WSPortStartFlag,
 	PreloadJSFlag,
 	RPCGlobalTxFeeCapFlag,
 	RPCGlobalGasCapFlag,
@@ -174,6 +186,12 @@ var (
 		Abbreviation: "d",
 		Value:        filepath.Join(xdg.DataHome, constants.APP_NAME),
 		Usage:        "data directory" + generateEnvDoc(c_GlobalFlagPrefix+"data-dir"),
+	}
+
+	InitConfigFlag = Flag{
+		Name:  c_GlobalFlagPrefix + "init-cfg",
+		Value: false,
+		Usage: "initialize a new config file, if one does not already exist",
 	}
 
 	AncientDirFlag = Flag{
@@ -214,13 +232,6 @@ var (
 		Abbreviation: "p",
 		Value:        "4001",
 		Usage:        "p2p port to listen on" + generateEnvDoc(c_NodeFlagPrefix+"port"),
-	}
-
-	BootNodeFlag = Flag{
-		Name:         c_NodeFlagPrefix + "bootnode",
-		Abbreviation: "b",
-		Value:        false,
-		Usage:        "start the node as a boot node (no static peers required)" + generateEnvDoc(c_NodeFlagPrefix+"bootnode"),
 	}
 
 	BootPeersFlag = Flag{
@@ -495,34 +506,22 @@ var (
 		Usage: "Allow insecure account unlocking when account-related RPCs are exposed by http" + generateEnvDoc(c_NodeFlagPrefix+"allow-insecure-unlock"),
 	}
 
-	GpoBlocksFlag = Flag{
-		Name:  c_NodeFlagPrefix + "gpo-blocks",
-		Value: quaiconfig.Defaults.GPO.Blocks,
-		Usage: "Number of recent blocks to check for gas prices" + generateEnvDoc(c_NodeFlagPrefix+"gpo-blocks"),
-	}
-
-	GpoPercentileFlag = Flag{
-		Name:  c_NodeFlagPrefix + "gpo-percentile",
-		Value: quaiconfig.Defaults.GPO.Percentile,
-		Usage: "Suggested gas price is the given percentile of a set of recent transaction gas prices" + generateEnvDoc(c_NodeFlagPrefix+"gpo-percentile"),
-	}
-
-	GpoMaxGasPriceFlag = Flag{
-		Name:  c_NodeFlagPrefix + "gpo-maxprice",
-		Value: quaiconfig.Defaults.GPO.MaxPrice.Int64(),
-		Usage: "Maximum gas price will be recommended by gpo" + generateEnvDoc(c_NodeFlagPrefix+"gpo-maxprice"),
-	}
-
-	GpoIgnoreGasPriceFlag = Flag{
-		Name:  c_NodeFlagPrefix + "gpo-ignoreprice",
-		Value: quaiconfig.Defaults.GPO.IgnorePrice.Int64(),
-		Usage: "Gas price below which gpo will ignore transactions" + generateEnvDoc(c_NodeFlagPrefix+"gpo-ignoreprice"),
-	}
-
-	CoinbaseAddressFlag = Flag{
-		Name:  c_NodeFlagPrefix + "coinbases",
+	QuaiCoinbaseFlag = Flag{
+		Name:  c_NodeFlagPrefix + "quai-coinbases",
 		Value: "",
-		Usage: "Input TOML string or path to TOML file" + generateEnvDoc(c_NodeFlagPrefix+"coinbases"),
+		Usage: "Input TOML string or path to TOML file" + generateEnvDoc(c_NodeFlagPrefix+"quai-coinbase"),
+	}
+
+	QiCoinbaseFlag = Flag{
+		Name:  c_NodeFlagPrefix + "qi-coinbases",
+		Value: "",
+		Usage: "Input TOML string or path to TOML file" + generateEnvDoc(c_NodeFlagPrefix+"qi-coinbase"),
+	}
+
+	MinerPreferenceFlag = Flag{
+		Name:  c_NodeFlagPrefix + "miner-preference",
+		Value: 0.5,
+		Usage: "Indicates preference towards mining Quai or Qi. Any value between 0 and 1 is valid. Neutral: 0.5, Quai only: 0, Qi only: 1" + generateEnvDoc(c_NodeFlagPrefix+"miner-preference"),
 	}
 
 	IndexAddressUtxos = Flag{
@@ -560,6 +559,12 @@ var (
 		Value: "info",
 		Usage: "log level (trace, debug, info, warn, error, fatal, panic)" + generateEnvDoc(c_GlobalFlagPrefix+"log-level"),
 	}
+
+	GenesisNonce = Flag{
+		Name:  c_NodeFlagPrefix + "genesis-nonce",
+		Value: 0,
+		Usage: "Nonce to use for the genesis block" + generateEnvDoc(c_NodeFlagPrefix+"genesis-nonce"),
+	}
 )
 
 var (
@@ -570,7 +575,7 @@ var (
 	// ****************************************
 	HTTPEnabledFlag = Flag{
 		Name:  c_RPCFlagPrefix + "http",
-		Value: false,
+		Value: true,
 		Usage: "Enable the HTTP-RPC server" + generateEnvDoc(c_RPCFlagPrefix+"http"),
 	}
 
@@ -604,9 +609,15 @@ var (
 		Usage: "HTTP path path prefix on which JSON-RPC is served. Use '/' to serve on all paths." + generateEnvDoc(c_RPCFlagPrefix+"http-rpcprefix"),
 	}
 
+	HTTPPortStartFlag = Flag{
+		Name:  c_RPCFlagPrefix + "http-port",
+		Value: 9001,
+		Usage: "HTTP-RPC server listening port" + generateEnvDoc(c_RPCFlagPrefix+"http-port"),
+	}
+
 	WSEnabledFlag = Flag{
 		Name:  c_RPCFlagPrefix + "ws",
-		Value: false,
+		Value: true,
 		Usage: "Enable the WS-RPC server" + generateEnvDoc(c_RPCFlagPrefix+"ws"),
 	}
 
@@ -614,6 +625,12 @@ var (
 		Name:  c_RPCFlagPrefix + "ws-addr",
 		Value: node.DefaultWSHost,
 		Usage: "WS-RPC server listening interface" + generateEnvDoc(c_RPCFlagPrefix+"ws-addr"),
+	}
+
+	WSMaxSubsFlag = Flag{
+		Name:  c_RPCFlagPrefix + "ws-max-subs",
+		Value: 1000,
+		Usage: "maximum concurrent subscribers to the WS-RPC server",
 	}
 
 	WSApiFlag = Flag{
@@ -634,6 +651,12 @@ var (
 		Usage: "HTTP path prefix on which JSON-RPC is served. Use '/' to serve on all paths." + generateEnvDoc(c_RPCFlagPrefix+"ws-rpcprefix"),
 	}
 
+	WSPortStartFlag = Flag{
+		Name:  c_RPCFlagPrefix + "ws-port",
+		Value: 8001,
+		Usage: "WS-RPC server listening port" + generateEnvDoc(c_RPCFlagPrefix+"ws-port"),
+	}
+
 	PreloadJSFlag = Flag{
 		Name:  c_RPCFlagPrefix + "preload",
 		Value: "",
@@ -650,6 +673,31 @@ var (
 		Name:  c_RPCFlagPrefix + "gascap",
 		Value: quaiconfig.Defaults.RPCGasCap,
 		Usage: "Sets a cap on gas that can be used in eth_call/estimateGas (0=infinite)" + generateEnvDoc(c_RPCFlagPrefix+"gascap"),
+	}
+)
+
+var (
+	// ****************************************
+	// **                                    **
+	// **         WORKSHARE FLAGS            **
+	// **                                    **
+	// ****************************************
+	WorkShareMiningFlag = Flag{
+		Name:  c_WorkShareFlagPrefix + "mining",
+		Value: false,
+		Usage: "Enable workshare mining" + generateEnvDoc(c_WorkShareFlagPrefix+"mining"),
+	}
+
+	WorkShareThresholdFlag = Flag{
+		Name:  c_WorkShareFlagPrefix + "threshold",
+		Value: 10,
+		Usage: "Threshold for workshare" + generateEnvDoc(c_WorkShareFlagPrefix+"threshold"),
+	}
+
+	WorkShareMinerEndpoints = Flag{
+		Name:  c_WorkShareFlagPrefix + "miners",
+		Value: "",
+		Usage: "RPC endpoint to send minimally mined transactions for further working" + generateEnvDoc(c_WorkShareFlagPrefix+"miners"),
 	}
 )
 
@@ -694,51 +742,49 @@ var (
 	}
 )
 
-/*
-ParseCoinbaseAddresses parses the coinbase addresses from different sources based on the user input.
-It handles three scenarios:
+// ParseCoinbaseAddresses reads the coinbase addresses and performs necessary validation.
+func ParseCoinbaseAddresses() (map[string]common.Address, error) {
+	quaiCoinbases := viper.GetString(QuaiCoinbaseFlag.Name)
+	qiCoinbases := viper.GetString(QiCoinbaseFlag.Name)
+	coinbases := make(map[string]common.Address)
 
- 1. File Path Input:
-    If the user specifies a file path, the function expects a TOML file containing the coinbase addresses.
-    The file should have a 'coinbases' section with shard-address mappings.
-    Example:
-    Command: --coinbases "0x00Address0, 0x01Address1, 0x02Address2, ..."
-
-The function reads the coinbase addresses and performs necessary validation as per the above scenarios.
-*/
-func ParseCoinbaseAddresses() (map[string]string, error) {
-	coinbaseInput := viper.GetString(CoinbaseAddressFlag.Name)
-	coinbases := make(map[string]string)
-
-	if coinbaseInput == "" {
-		log.Global.Info("No coinbase addresses provided")
-		return coinbases, nil
+	if quaiCoinbases == "" || qiCoinbases == "" {
+		missingCoinbaseErr := errors.New("must provide both Quai and Qi coinbase addresses")
+		log.Global.Fatal(missingCoinbaseErr)
+		return nil, missingCoinbaseErr
 	}
 
-	for _, coinbase := range strings.Split(coinbaseInput, ",") {
-		coinbase = strings.TrimSpace(coinbase)
-		address := common.FromHex(coinbase)
-		location := common.LocationFromAddressBytes(address)
-		if _, exists := coinbases[location.Name()]; exists {
-			log.Global.WithField("shard", location.Name()).Fatalf("Duplicate coinbase address for shard")
+	for _, quaiCoinbase := range strings.Split(quaiCoinbases, ",") {
+		quaiAddr, err := isValidAddress(quaiCoinbase)
+		if err != nil {
+			log.Global.WithField("err", err).Fatalf("Error parsing quai address")
+			return nil, err
 		}
-		if err := isValidAddress(coinbase); err != nil {
-			log.Global.WithField("err", err).Fatalf("Error parsing coinbase addresses")
-		}
-		coinbases[location.Name()] = coinbase
+		quaiAddrCoinbaseKey := quaiAddr.Location().Name() + "quai"
+		coinbases[quaiAddrCoinbaseKey] = quaiAddr
 	}
 
-	log.Global.Infof("Coinbase Addresses: %v", coinbases)
+	for _, qiCoinbase := range strings.Split(qiCoinbases, ",") {
+		qiAddr, err := isValidAddress(qiCoinbase)
+		if err != nil {
+			log.Global.WithField("err", err).Fatalf("Error parsing qi address")
+			return nil, err
+		}
+		qiAddrCoinbaseKey := qiAddr.Location().Name() + "qi"
+		coinbases[qiAddrCoinbaseKey] = qiAddr
+	}
 
 	return coinbases, nil
 }
 
-func isValidAddress(address string) error {
+func isValidAddress(addressStr string) (common.Address, error) {
+	addressStr = strings.TrimSpace(addressStr)
+	address := common.HexToAddress(addressStr, common.Location{0, 0})
 	re := regexp.MustCompile(`^(0x)?[0-9a-fA-F]{40}$`)
-	if !re.MatchString(address) {
-		return fmt.Errorf("invalid address: %s", address)
+	if !re.MatchString(addressStr) {
+		return common.Address{}, fmt.Errorf("invalid address: %s", address)
 	}
-	return nil
+	return address, nil
 }
 
 func CreateAndBindFlag(flag Flag, cmd *cobra.Command) {
@@ -757,6 +803,8 @@ func CreateAndBindFlag(flag Flag, cmd *cobra.Command) {
 		cmd.PersistentFlags().Int64P(flag.GetName(), flag.GetAbbreviation(), val, flag.GetUsage())
 	case uint64:
 		cmd.PersistentFlags().Uint64P(flag.GetName(), flag.GetAbbreviation(), val, flag.GetUsage())
+	case float64:
+		cmd.PersistentFlags().Float64P(flag.GetName(), flag.GetAbbreviation(), val, flag.GetUsage())
 	case *TextMarshalerValue:
 		cmd.PersistentFlags().VarP(val, flag.GetName(), flag.GetAbbreviation(), flag.GetUsage())
 	case *BigIntValue:
@@ -800,39 +848,34 @@ func SplitAndTrim(input string) (ret []string) {
 // command line flags, returning empty if the HTTP endpoint is disabled.
 func setHTTP(cfg *node.Config, nodeLocation common.Location) {
 	if viper.GetBool(HTTPEnabledFlag.Name) && cfg.HTTPHost == "" {
-		cfg.HTTPHost = "127.0.0.1"
-		if viper.IsSet(HTTPListenAddrFlag.Name) {
-			cfg.HTTPHost = viper.GetString(HTTPListenAddrFlag.Name)
-		}
+		cfg.HTTPHost = viper.GetString(HTTPListenAddrFlag.Name)
 	}
 
 	cfg.HTTPPort = GetHttpPort(nodeLocation)
 
-	if viper.IsSet(HTTPCORSDomainFlag.Name) {
-		cfg.HTTPCors = SplitAndTrim(viper.GetString(HTTPCORSDomainFlag.Name))
-	}
+	cfg.HTTPCors = SplitAndTrim(viper.GetString(HTTPCORSDomainFlag.Name))
 
-	if viper.IsSet(HTTPApiFlag.Name) {
-		cfg.HTTPModules = SplitAndTrim(viper.GetString(HTTPApiFlag.Name))
-	}
+	cfg.HTTPModules = SplitAndTrim(viper.GetString(HTTPApiFlag.Name))
 
-	if viper.IsSet(HTTPVirtualHostsFlag.Name) {
-		cfg.HTTPVirtualHosts = SplitAndTrim(viper.GetString(HTTPVirtualHostsFlag.Name))
-	}
+	cfg.HTTPVirtualHosts = SplitAndTrim(viper.GetString(HTTPVirtualHostsFlag.Name))
 
-	if viper.IsSet(HTTPPathPrefixFlag.Name) {
-		cfg.HTTPPathPrefix = viper.GetString(HTTPPathPrefixFlag.Name)
-	}
+	cfg.HTTPPathPrefix = viper.GetString(HTTPPathPrefixFlag.Name)
 }
 
 func GetHttpPort(nodeLocation common.Location) int {
+	var startPort int
+	if viper.IsSet(HTTPPortStartFlag.Name) {
+		startPort = viper.GetInt(HTTPPortStartFlag.Name)
+	} else {
+		startPort = HTTPPortStartFlag.Value.(int)
+	}
 	switch nodeLocation.Context() {
 	case common.PRIME_CTX:
-		return 9001
+		return startPort
 	case common.REGION_CTX:
-		return 9002 + nodeLocation.Region()
+		return (startPort + c_regionPortOffset) + nodeLocation.Region()
 	case common.ZONE_CTX:
-		return 9200 + 20*nodeLocation.Region() + nodeLocation.Zone()
+		return (startPort + c_zonePortOffset) + 20*nodeLocation.Region() + nodeLocation.Zone()
 	}
 	panic("node location is not valid")
 }
@@ -849,27 +892,27 @@ func setWS(cfg *node.Config, nodeLocation common.Location) {
 
 	cfg.WSPort = GetWSPort(nodeLocation)
 
-	if viper.IsSet(WSAllowedOriginsFlag.Name) {
-		cfg.WSOrigins = SplitAndTrim(viper.GetString(WSAllowedOriginsFlag.Name))
-	}
+	cfg.WSOrigins = SplitAndTrim(viper.GetString(WSAllowedOriginsFlag.Name))
 
-	if viper.IsSet(WSApiFlag.Name) {
-		cfg.WSModules = SplitAndTrim(viper.GetString(WSApiFlag.Name))
-	}
+	cfg.WSModules = SplitAndTrim(viper.GetString(WSApiFlag.Name))
 
-	if viper.IsSet(WSPathPrefixFlag.Name) {
-		cfg.WSPathPrefix = viper.GetString(WSPathPrefixFlag.Name)
-	}
+	cfg.WSPathPrefix = viper.GetString(WSPathPrefixFlag.Name)
 }
 
 func GetWSPort(nodeLocation common.Location) int {
+	var startPort int
+	if viper.IsSet(WSPortStartFlag.Name) {
+		startPort = viper.GetInt(WSPortStartFlag.Name)
+	} else {
+		startPort = WSPortStartFlag.Value.(int)
+	}
 	switch nodeLocation.Context() {
 	case common.PRIME_CTX:
-		return 8001
+		return startPort
 	case common.REGION_CTX:
-		return 8002 + nodeLocation.Region()
+		return (startPort + c_regionPortOffset) + nodeLocation.Region()
 	case common.ZONE_CTX:
-		return 8200 + 20*nodeLocation.Region() + nodeLocation.Zone()
+		return (startPort + c_zonePortOffset) + 20*nodeLocation.Region() + nodeLocation.Zone()
 	}
 	panic("node location is not valid")
 }
@@ -917,23 +960,24 @@ func HexAddress(account string, nodeLocation common.Location) (common.Address, e
 	return common.Address{}, errors.New("invalid account address")
 }
 
-// setEtherbase retrieves the etherbase either from the directly specified
+// setCoinbase retrieves the etherbase either from the directly specified
 // command line flags or from the keystore if CLI indexed.
-func setEtherbase(cfg *quaiconfig.Config) {
+func setCoinbase(cfg *quaiconfig.Config) {
 	coinbaseMap, err := ParseCoinbaseAddresses()
 	if err != nil {
 		log.Global.Fatalf("error parsing coinbase addresses: %s", err)
 	}
-	// TODO: Have to handle more shards in the future
-	etherbase := coinbaseMap[cfg.NodeLocation.Name()]
-	// Convert the etherbase into an address and configure it
-	if etherbase != "" {
-		account, err := HexAddress(etherbase, cfg.NodeLocation)
-		if err != nil {
-			Fatalf("Invalid miner etherbase: %v", err)
-		}
-		cfg.Miner.Etherbase = account
+	quaiCoinbase, ok := coinbaseMap[cfg.NodeLocation.Name()+"quai"]
+	if !ok {
+		log.Global.Fatal("Missing Quai coinbase for this location")
 	}
+	qiCoinbase, ok := coinbaseMap[cfg.NodeLocation.Name()+"qi"]
+	if !ok {
+		log.Global.Fatal("Missing Qi coinbase for this location")
+	}
+
+	cfg.Miner.QuaiCoinbase = quaiCoinbase
+	cfg.Miner.QiCoinbase = qiCoinbase
 }
 
 // MakePasswordList reads password lines from the file specified by the global --password flag.
@@ -1010,21 +1054,6 @@ func setDataDir(cfg *node.Config) {
 	}
 }
 
-func setGPO(cfg *gasprice.Config) {
-	if viper.IsSet(GpoBlocksFlag.Name) {
-		cfg.Blocks = viper.GetInt(GpoBlocksFlag.Name)
-	}
-	if viper.IsSet(GpoPercentileFlag.Name) {
-		cfg.Percentile = viper.GetInt(GpoPercentileFlag.Name)
-	}
-	if viper.IsSet(GpoMaxGasPriceFlag.Name) {
-		cfg.MaxPrice = big.NewInt(viper.GetInt64(GpoMaxGasPriceFlag.Name))
-	}
-	if viper.IsSet(GpoIgnoreGasPriceFlag.Name) {
-		cfg.IgnorePrice = big.NewInt(viper.GetInt64(GpoIgnoreGasPriceFlag.Name))
-	}
-}
-
 func setTxPool(cfg *core.TxPoolConfig, nodeLocation common.Location) {
 	if viper.IsSet(TxPoolLocalsFlag.Name) && viper.GetString(TxPoolLocalsFlag.Name) != "" {
 		locals := strings.Split(viper.GetString(TxPoolLocalsFlag.Name), ",")
@@ -1034,7 +1063,7 @@ func setTxPool(cfg *core.TxPoolConfig, nodeLocation common.Location) {
 			} else {
 				internal, err := common.HexToAddress(account, nodeLocation).InternalAddress()
 				if err != nil {
-					Fatalf("Invalid account in --txpool.locals: %s", account)
+					Fatalf("Invalid account in --txpool.locals: %s, err %s", account, err)
 				}
 				cfg.Locals = append(cfg.Locals, internal)
 			}
@@ -1079,31 +1108,31 @@ func setConsensusEngineConfig(cfg *quaiconfig.Config) {
 		case params.ColosseumName:
 			cfg.Blake3Pow.DurationLimit = params.DurationLimit
 			cfg.Blake3Pow.GasCeil = params.ColosseumGasCeil
-			cfg.Blake3Pow.MinDifficulty = new(big.Int).Div(core.DefaultColosseumGenesisBlock(cfg.ConsensusEngine).Difficulty, common.Big2)
+			cfg.Blake3Pow.MinDifficulty = new(big.Int).Div(core.DefaultColosseumGenesisBlock(cfg.ConsensusEngine, cfg.GenesisNonce).Difficulty, common.Big2)
 		case params.GardenName:
 			cfg.Blake3Pow.DurationLimit = params.GardenDurationLimit
 			cfg.Blake3Pow.GasCeil = params.GardenGasCeil
-			cfg.Blake3Pow.MinDifficulty = new(big.Int).Div(core.DefaultGardenGenesisBlock(cfg.ConsensusEngine).Difficulty, common.Big2)
+			cfg.Blake3Pow.MinDifficulty = new(big.Int).Div(core.DefaultGardenGenesisBlock(cfg.ConsensusEngine, cfg.GenesisNonce).Difficulty, common.Big2)
 		case params.OrchardName:
 			cfg.Blake3Pow.DurationLimit = params.OrchardDurationLimit
 			cfg.Blake3Pow.GasCeil = params.OrchardGasCeil
-			cfg.Blake3Pow.MinDifficulty = new(big.Int).Div(core.DefaultOrchardGenesisBlock(cfg.ConsensusEngine).Difficulty, common.Big2)
+			cfg.Blake3Pow.MinDifficulty = new(big.Int).Div(core.DefaultOrchardGenesisBlock(cfg.ConsensusEngine, cfg.GenesisNonce).Difficulty, common.Big2)
 		case params.LighthouseName:
 			cfg.Blake3Pow.DurationLimit = params.LighthouseDurationLimit
 			cfg.Blake3Pow.GasCeil = params.LighthouseGasCeil
-			cfg.Blake3Pow.MinDifficulty = new(big.Int).Div(core.DefaultLighthouseGenesisBlock(cfg.ConsensusEngine).Difficulty, common.Big2)
+			cfg.Blake3Pow.MinDifficulty = new(big.Int).Div(core.DefaultLighthouseGenesisBlock(cfg.ConsensusEngine, cfg.GenesisNonce).Difficulty, common.Big2)
 		case params.LocalName:
 			cfg.Blake3Pow.DurationLimit = params.LocalDurationLimit
 			cfg.Blake3Pow.GasCeil = params.LocalGasCeil
-			cfg.Blake3Pow.MinDifficulty = new(big.Int).Div(core.DefaultLocalGenesisBlock(cfg.ConsensusEngine).Difficulty, common.Big2)
+			cfg.Blake3Pow.MinDifficulty = new(big.Int).Div(core.DefaultLocalGenesisBlock(cfg.ConsensusEngine, cfg.GenesisNonce).Difficulty, common.Big2)
 		case params.DevName:
 			cfg.Blake3Pow.DurationLimit = params.DurationLimit
 			cfg.Blake3Pow.GasCeil = params.LocalGasCeil
-			cfg.Blake3Pow.MinDifficulty = new(big.Int).Div(core.DefaultLocalGenesisBlock(cfg.ConsensusEngine).Difficulty, common.Big2)
+			cfg.Blake3Pow.MinDifficulty = new(big.Int).Div(core.DefaultLocalGenesisBlock(cfg.ConsensusEngine, cfg.GenesisNonce).Difficulty, common.Big2)
 		default:
 			cfg.Blake3Pow.DurationLimit = params.DurationLimit
 			cfg.Blake3Pow.GasCeil = params.GasCeil
-			cfg.Blake3Pow.MinDifficulty = new(big.Int).Div(core.DefaultColosseumGenesisBlock(cfg.ConsensusEngine).Difficulty, common.Big2)
+			cfg.Blake3Pow.MinDifficulty = new(big.Int).Div(core.DefaultColosseumGenesisBlock(cfg.ConsensusEngine, cfg.GenesisNonce).Difficulty, common.Big2)
 
 		}
 	} else {
@@ -1112,32 +1141,31 @@ func setConsensusEngineConfig(cfg *quaiconfig.Config) {
 		case params.ColosseumName:
 			cfg.Progpow.DurationLimit = params.DurationLimit
 			cfg.Progpow.GasCeil = params.ColosseumGasCeil
-			cfg.Progpow.MinDifficulty = new(big.Int).Div(core.DefaultColosseumGenesisBlock(cfg.ConsensusEngine).Difficulty, common.Big2)
+			cfg.Progpow.MinDifficulty = new(big.Int).Div(core.DefaultColosseumGenesisBlock(cfg.ConsensusEngine, cfg.GenesisNonce).Difficulty, common.Big2)
 		case params.GardenName:
 			cfg.Progpow.DurationLimit = params.GardenDurationLimit
 			cfg.Progpow.GasCeil = params.GardenGasCeil
-			cfg.Progpow.MinDifficulty = new(big.Int).Div(core.DefaultGardenGenesisBlock(cfg.ConsensusEngine).Difficulty, common.Big2)
+			cfg.Progpow.MinDifficulty = new(big.Int).Div(core.DefaultGardenGenesisBlock(cfg.ConsensusEngine, cfg.GenesisNonce).Difficulty, common.Big2)
 		case params.OrchardName:
 			cfg.Progpow.DurationLimit = params.OrchardDurationLimit
 			cfg.Progpow.GasCeil = params.OrchardGasCeil
-			cfg.Progpow.GasCeil = params.ColosseumGasCeil
-			cfg.Progpow.MinDifficulty = new(big.Int).Div(core.DefaultOrchardGenesisBlock(cfg.ConsensusEngine).Difficulty, common.Big2)
+			cfg.Progpow.MinDifficulty = new(big.Int).Div(core.DefaultOrchardGenesisBlock(cfg.ConsensusEngine, cfg.GenesisNonce).Difficulty, common.Big2)
 		case params.LighthouseName:
 			cfg.Progpow.DurationLimit = params.LighthouseDurationLimit
 			cfg.Progpow.GasCeil = params.LighthouseGasCeil
-			cfg.Progpow.MinDifficulty = new(big.Int).Div(core.DefaultLighthouseGenesisBlock(cfg.ConsensusEngine).Difficulty, common.Big2)
+			cfg.Progpow.MinDifficulty = new(big.Int).Div(core.DefaultLighthouseGenesisBlock(cfg.ConsensusEngine, cfg.GenesisNonce).Difficulty, common.Big2)
 		case params.LocalName:
 			cfg.Progpow.DurationLimit = params.LocalDurationLimit
 			cfg.Progpow.GasCeil = params.LocalGasCeil
-			cfg.Progpow.MinDifficulty = new(big.Int).Div(core.DefaultLocalGenesisBlock(cfg.ConsensusEngine).Difficulty, common.Big2)
+			cfg.Progpow.MinDifficulty = new(big.Int).Div(core.DefaultLocalGenesisBlock(cfg.ConsensusEngine, cfg.GenesisNonce).Difficulty, common.Big2)
 		case params.DevName:
 			cfg.Progpow.DurationLimit = params.DurationLimit
 			cfg.Progpow.GasCeil = params.LocalGasCeil
-			cfg.Progpow.MinDifficulty = new(big.Int).Div(core.DefaultLocalGenesisBlock(cfg.ConsensusEngine).Difficulty, common.Big2)
+			cfg.Progpow.MinDifficulty = new(big.Int).Div(core.DefaultLocalGenesisBlock(cfg.ConsensusEngine, cfg.GenesisNonce).Difficulty, common.Big2)
 		default:
 			cfg.Progpow.DurationLimit = params.DurationLimit
 			cfg.Progpow.GasCeil = params.GasCeil
-			cfg.Progpow.MinDifficulty = new(big.Int).Div(core.DefaultColosseumGenesisBlock(cfg.ConsensusEngine).Difficulty, common.Big2)
+			cfg.Progpow.MinDifficulty = new(big.Int).Div(core.DefaultColosseumGenesisBlock(cfg.ConsensusEngine, cfg.GenesisNonce).Difficulty, common.Big2)
 
 		}
 	}
@@ -1229,9 +1257,8 @@ func SetQuaiConfig(stack *node.Node, cfg *quaiconfig.Config, slicesRunning []com
 
 	// only set etherbase if its a zone chain
 	if len(nodeLocation) == 2 {
-		setEtherbase(cfg)
+		setCoinbase(cfg)
 	}
-	setGPO(&cfg.GPO)
 	setTxPool(&cfg.TxPool, nodeLocation)
 
 	// If blake3 consensus engine is specifically asked use the blake3 engine
@@ -1335,13 +1362,28 @@ func SetQuaiConfig(stack *node.Node, cfg *quaiconfig.Config, slicesRunning []com
 	if viper.IsSet(RPCGlobalTxFeeCapFlag.Name) {
 		cfg.RPCTxFeeCap = viper.GetFloat64(RPCGlobalTxFeeCapFlag.Name)
 	}
+	cfg.GenesisNonce = viper.GetUint64(GenesisNonce.Name)
+
+	cfg.Miner.WorkShareMining = viper.GetBool(WorkShareMiningFlag.Name)
+	cfg.Miner.WorkShareThreshold = params.WorkSharesThresholdDiff + viper.GetInt(WorkShareThresholdFlag.Name)
+	if viper.GetString(WorkShareMinerEndpoints.Name) != "" {
+		cfg.Miner.Endpoints = []string{viper.GetString(WorkShareMinerEndpoints.Name)}
+	}
+
+	minerPreference := viper.GetFloat64(MinerPreferenceFlag.Name)
+	if minerPreference < 0 || minerPreference > 1 {
+		log.Global.WithField("MinerPreference", minerPreference).Fatal("Invalid MinerPreference field. Must be [0,1]")
+	} else {
+		cfg.Miner.MinerPreference = minerPreference
+	}
+
 	// Override any default configs for hard coded networks.
 	switch viper.GetString(EnvironmentFlag.Name) {
 	case params.ColosseumName:
 		if !viper.IsSet(NetworkIdFlag.Name) {
 			cfg.NetworkId = 1
 		}
-		cfg.Genesis = core.DefaultColosseumGenesisBlock(cfg.ConsensusEngine)
+		cfg.Genesis = core.DefaultColosseumGenesisBlock(cfg.ConsensusEngine, cfg.GenesisNonce)
 		if cfg.ConsensusEngine == "progpow" {
 			cfg.DefaultGenesisHash = params.ProgpowColosseumGenesisHash
 		} else {
@@ -1352,7 +1394,7 @@ func SetQuaiConfig(stack *node.Node, cfg *quaiconfig.Config, slicesRunning []com
 		if !viper.IsSet(NetworkIdFlag.Name) {
 			cfg.NetworkId = 2
 		}
-		cfg.Genesis = core.DefaultGardenGenesisBlock(cfg.ConsensusEngine)
+		cfg.Genesis = core.DefaultGardenGenesisBlock(cfg.ConsensusEngine, cfg.GenesisNonce)
 		if cfg.ConsensusEngine == "progpow" {
 			cfg.DefaultGenesisHash = params.ProgpowGardenGenesisHash
 		} else {
@@ -1362,7 +1404,7 @@ func SetQuaiConfig(stack *node.Node, cfg *quaiconfig.Config, slicesRunning []com
 		if !viper.IsSet(NetworkIdFlag.Name) {
 			cfg.NetworkId = 3
 		}
-		cfg.Genesis = core.DefaultOrchardGenesisBlock(cfg.ConsensusEngine)
+		cfg.Genesis = core.DefaultOrchardGenesisBlock(cfg.ConsensusEngine, cfg.GenesisNonce)
 		if cfg.ConsensusEngine == "progpow" {
 			cfg.DefaultGenesisHash = params.ProgpowOrchardGenesisHash
 		} else {
@@ -1372,7 +1414,7 @@ func SetQuaiConfig(stack *node.Node, cfg *quaiconfig.Config, slicesRunning []com
 		if !viper.IsSet(NetworkIdFlag.Name) {
 			cfg.NetworkId = 4
 		}
-		cfg.Genesis = core.DefaultLocalGenesisBlock(cfg.ConsensusEngine)
+		cfg.Genesis = core.DefaultLocalGenesisBlock(cfg.ConsensusEngine, cfg.GenesisNonce)
 		if cfg.ConsensusEngine == "progpow" {
 			cfg.DefaultGenesisHash = params.ProgpowLocalGenesisHash
 		} else {
@@ -1382,7 +1424,7 @@ func SetQuaiConfig(stack *node.Node, cfg *quaiconfig.Config, slicesRunning []com
 		if !viper.IsSet(NetworkIdFlag.Name) {
 			cfg.NetworkId = 5
 		}
-		cfg.Genesis = core.DefaultLighthouseGenesisBlock(cfg.ConsensusEngine)
+		cfg.Genesis = core.DefaultLighthouseGenesisBlock(cfg.ConsensusEngine, cfg.GenesisNonce)
 		if cfg.ConsensusEngine == "progpow" {
 			cfg.DefaultGenesisHash = params.ProgpowLighthouseGenesisHash
 		} else {
@@ -1445,18 +1487,24 @@ func MakeChainDatabase(stack *node.Node, readonly bool) ethdb.Database {
 }
 
 func MakeGenesis() *core.Genesis {
+	consensusEngine := viper.GetString(ConsensusEngineFlag.Name)
+	genesisNonce := viper.GetUint64(GenesisNonce.Name)
 	var genesis *core.Genesis
 	switch viper.GetString(EnvironmentFlag.Name) {
 	case params.ColosseumName:
-		genesis = core.DefaultColosseumGenesisBlock(viper.GetString(ConsensusEngineFlag.Name))
+		genesis = core.DefaultColosseumGenesisBlock(consensusEngine, genesisNonce)
+		genesis.Nonce = genesisNonce
 	case params.GardenName:
-		genesis = core.DefaultGardenGenesisBlock(viper.GetString(ConsensusEngineFlag.Name))
+		genesis = core.DefaultGardenGenesisBlock(consensusEngine, genesisNonce)
+		genesis.Nonce = genesisNonce
 	case params.OrchardName:
-		genesis = core.DefaultOrchardGenesisBlock(viper.GetString(ConsensusEngineFlag.Name))
+		genesis = core.DefaultOrchardGenesisBlock(consensusEngine, genesisNonce)
+		genesis.Nonce = genesisNonce
 	case params.LighthouseName:
-		genesis = core.DefaultLighthouseGenesisBlock(viper.GetString(ConsensusEngineFlag.Name))
+		genesis = core.DefaultLighthouseGenesisBlock(consensusEngine, genesisNonce)
+		genesis.Nonce = genesisNonce
 	case params.LocalName:
-		genesis = core.DefaultLocalGenesisBlock(viper.GetString(ConsensusEngineFlag.Name))
+		genesis = core.DefaultLocalGenesisBlock(consensusEngine, genesisNonce)
 	case params.DevName:
 		Fatalf("Developer chains are ephemeral")
 	}

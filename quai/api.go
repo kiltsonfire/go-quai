@@ -49,14 +49,9 @@ func NewPublicQuaiAPI(e *Quai) *PublicQuaiAPI {
 	return &PublicQuaiAPI{e}
 }
 
-// Etherbase is the address that mining rewards will be send to
-func (api *PublicQuaiAPI) Etherbase() (common.Address, error) {
-	return api.e.Etherbase()
-}
-
-// Coinbase is the address that mining rewards will be send to (alias for Etherbase)
-func (api *PublicQuaiAPI) Coinbase() (common.Address, error) {
-	return api.Etherbase()
+// PrimaryCoinbase is the address that mining rewards will be send to
+func (api *PublicQuaiAPI) PrimaryCoinbase() (common.Address, error) {
+	return api.e.core.Slice().GetPrimaryCoinbase(), nil
 }
 
 // PublicMinerAPI provides an API to control the miner.
@@ -110,9 +105,15 @@ func (api *PrivateMinerAPI) SetGasLimit(gasLimit hexutil.Uint64) bool {
 	return true
 }
 
-// SetEtherbase sets the etherbase of the miner
-func (api *PrivateMinerAPI) SetEtherbase(etherbase common.Address) bool {
-	api.e.Core().SetEtherbase(etherbase)
+// SetPrimaryCoinbase sets the primary coinbase of the miner
+func (api *PrivateMinerAPI) SetPrimaryCoinbase(primaryCoinbase common.Address) bool {
+	api.e.Core().SetPrimaryCoinbase(primaryCoinbase)
+	return true
+}
+
+// SetSecondaryCoinbase sets the secondary coinbase of the miner
+func (api *PrivateMinerAPI) SetSecondaryCoinbase(secondaryCoinbase common.Address) bool {
+	api.e.Core().SetSecondaryCoinbase(secondaryCoinbase)
 	return true
 }
 
@@ -260,7 +261,7 @@ func (api *PublicDebugAPI) DumpBlock(blockNr rpc.BlockNumber) (state.Dump, error
 	if block == nil {
 		return state.Dump{}, fmt.Errorf("block #%d not found", blockNr)
 	}
-	stateDb, err := api.quai.core.StateAt(block.EVMRoot(), block.UTXORoot(), block.EtxSetRoot())
+	stateDb, err := api.quai.core.StateAt(block.EVMRoot(), block.EtxSetRoot(), block.QuaiStateSize())
 	if err != nil {
 		return state.Dump{}, err
 	}
@@ -311,7 +312,7 @@ func (api *PublicDebugAPI) AccountRange(blockNrOrHash rpc.BlockNumberOrHash, sta
 			if block == nil {
 				return state.IteratorDump{}, fmt.Errorf("block #%d not found", number)
 			}
-			stateDb, err = api.quai.core.StateAt(block.EVMRoot(), block.UTXORoot(), block.EtxSetRoot())
+			stateDb, err = api.quai.core.StateAt(block.EVMRoot(), block.EtxSetRoot(), block.QuaiStateSize())
 			if err != nil {
 				return state.IteratorDump{}, err
 			}
@@ -321,7 +322,7 @@ func (api *PublicDebugAPI) AccountRange(blockNrOrHash rpc.BlockNumberOrHash, sta
 		if block == nil {
 			return state.IteratorDump{}, fmt.Errorf("block %s not found", hash.Hex())
 		}
-		stateDb, err = api.quai.core.StateAt(block.EVMRoot(), block.UTXORoot(), block.EtxSetRoot())
+		stateDb, err = api.quai.core.StateAt(block.EVMRoot(), block.EtxSetRoot(), block.QuaiStateSize())
 		if err != nil {
 			return state.IteratorDump{}, err
 		}

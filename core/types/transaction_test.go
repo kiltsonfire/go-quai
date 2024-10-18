@@ -19,8 +19,8 @@ func TestTransactionProtoEncodeDecode(t *testing.T) {
 	inner := &QuaiTx{
 		ChainID:    new(big.Int).SetUint64(1),
 		Nonce:      uint64(0),
-		GasTipCap:  new(big.Int).SetUint64(0),
-		GasFeeCap:  new(big.Int).SetUint64(0),
+		MinerTip:   new(big.Int).SetUint64(0),
+		GasPrice:   new(big.Int).SetUint64(0),
 		Gas:        uint64(0),
 		To:         &to,
 		Value:      new(big.Int).SetUint64(0),
@@ -67,6 +67,7 @@ func TestUTXOTransactionEncode(t *testing.T) {
 	in := TxIn{
 		PreviousOutPoint: *NewOutPoint(&common.Hash{},
 			MaxOutputIndex),
+		PubKey: []byte{0x04, 0x50, 0x49, 0x5c, 0xb2, 0xf9, 0x53, 0x5c, 0x68, 0x4e, 0xbe, 0x46, 0x87, 0xb5, 0x01, 0xc0, 0xd4, 0x1a, 0x62, 0x3d, 0x68, 0xc1, 0x18, 0xb8, 0xdc, 0xec, 0xd3, 0x93, 0x37, 0x0f, 0x1d, 0x90, 0xe6, 0x5c, 0x4c, 0x6c, 0x44, 0xcd, 0x3f, 0xe8, 0x09, 0xb4, 0x1d, 0xfa, 0xc9, 0x06, 0x0a, 0xd8, 0x4c, 0xb5, 0x7e, 0x2d, 0x57, 0x5f, 0xad, 0x24, 0xd2, 0x5a, 0x7e, 0xfa, 0x33, 0x96, 0xe7, 0x3c, 0x10},
 	}
 
 	newOut := TxOut{
@@ -115,14 +116,14 @@ func quaiTxData() (*Transaction, common.Hash) {
 	mixHash := common.HexToHash("0x56789abcdef0123456789abcdef0123456789abcdef0123456789abcdef4")
 	workNonce := EncodeNonce(1)
 	inner := &QuaiTx{
-		ChainID:   new(big.Int).SetUint64(1),
-		Nonce:     uint64(1),
-		GasTipCap: new(big.Int).SetUint64(1),
-		GasFeeCap: new(big.Int).SetUint64(1),
-		Gas:       uint64(1),
-		To:        &to,
-		Value:     new(big.Int).SetUint64(1),
-		Data:      []byte{0x04},
+		ChainID:  new(big.Int).SetUint64(1),
+		Nonce:    uint64(1),
+		MinerTip: new(big.Int).SetUint64(1),
+		GasPrice: new(big.Int).SetUint64(1),
+		Gas:      uint64(1),
+		To:       &to,
+		Value:    new(big.Int).SetUint64(1),
+		Data:     []byte{0x04},
 		AccessList: AccessList{AccessTuple{
 			Address:     address,
 			StorageKeys: []common.Hash{common.HexToHash("0x23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef1")},
@@ -285,11 +286,11 @@ func FuzzQuaiTxHashingNonce(f *testing.F) {
 	})
 }
 
-func FuzzQuaiTxHashingGasTipCap(f *testing.F) {
+func FuzzQuaiTxHashingMinerTip(f *testing.F) {
 	// Create a new transaction
 	tx, hash := quaiTxData()
 	f.Add(testUInt64)
-	f.Add(tx.inner.gasTipCap().Uint64())
+	f.Add(tx.inner.minerTip().Uint64())
 	// Verify the hash of the transaction
 	if hash == (common.Hash{}) {
 		f.Errorf("Transaction hash is empty")
@@ -297,23 +298,23 @@ func FuzzQuaiTxHashingGasTipCap(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, i uint64) {
 		bi := new(big.Int).SetUint64(i)
-		if bi.Cmp(tx.inner.gasTipCap()) != 0 {
+		if bi.Cmp(tx.inner.minerTip()) != 0 {
 			// change something in the transaction
 			newInner := *tx.inner.(*QuaiTx)
-			newInner.GasTipCap = bi
+			newInner.MinerTip = bi
 			// Create a new transaction with the modified inner transaction
 			newTx := NewTx(&newInner)
 
-			require.NotEqual(t, newTx.Hash(), hash, "Hash collision\noriginal: %v, modified: %v", tx.inner.gasTipCap(), bi)
+			require.NotEqual(t, newTx.Hash(), hash, "Hash collision\noriginal: %v, modified: %v", tx.inner.minerTip(), bi)
 		}
 	})
 }
 
-func FuzzQuaiTxHashingGasFeeCap(f *testing.F) {
+func FuzzQuaiTxHashingGasPrice(f *testing.F) {
 	// Create a new transaction
 	tx, hash := quaiTxData()
 	f.Add(testUInt64)
-	f.Add(tx.inner.gasFeeCap().Uint64())
+	f.Add(tx.inner.gasPrice().Uint64())
 	// Verify the hash of the transaction
 	if hash == (common.Hash{}) {
 		f.Errorf("Transaction hash is empty")
@@ -321,14 +322,14 @@ func FuzzQuaiTxHashingGasFeeCap(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, i uint64) {
 		bi := new(big.Int).SetUint64(i)
-		if bi.Cmp(tx.inner.gasFeeCap()) != 0 {
+		if bi.Cmp(tx.inner.gasPrice()) != 0 {
 			// change something in the transaction
 			newInner := *tx.inner.(*QuaiTx)
-			newInner.GasFeeCap = bi
+			newInner.GasPrice = bi
 			// Create a new transaction with the modified inner transaction
 			newTx := NewTx(&newInner)
 
-			require.NotEqual(t, newTx.Hash(), hash, "Hash collision\noriginal: %v, modified: %v", tx.inner.gasFeeCap(), bi)
+			require.NotEqual(t, newTx.Hash(), hash, "Hash collision\noriginal: %v, modified: %v", tx.inner.gasPrice(), bi)
 		}
 	})
 }
@@ -523,7 +524,8 @@ func etxData() (*Transaction, common.Hash) {
 				StorageKeys: []common.Hash{common.HexToHash("0x23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef1")},
 			},
 		},
-		Sender: sender,
+		Sender:  sender,
+		EtxType: 0,
 	}
 	tx := NewTx(inner)
 	return tx, tx.Hash()
@@ -556,6 +558,29 @@ func FuzzEtxOriginatingTxHash(f *testing.F) {
 			newTx := NewTx(&newInner)
 
 			require.NotEqual(t, newTx.Hash(), hash, "Hash collision\noriginal: %v, modified: %v", tx.inner.originatingTxHash(), bHash)
+		}
+	})
+}
+
+func FuzzEtxType(f *testing.F) {
+	// Create a new transaction
+	tx, hash := etxData()
+	f.Add(testUInt16)
+	f.Add(tx.inner.etxIndex())
+	// Verify the hash of the transaction
+	if hash == (common.Hash{}) {
+		f.Errorf("Transaction hash is empty")
+	}
+
+	f.Fuzz(func(t *testing.T, i uint16) {
+		if tx.inner.etxIndex() != i {
+			// change something in the transaction
+			newInner := *tx.inner.(*ExternalTx)
+			newInner.ETXIndex = i
+			// Create a new transaction with the modified inner transaction
+			newTx := NewTx(&newInner)
+
+			require.NotEqual(t, newTx.Hash(), hash, "Hash collision\noriginal: %v, modified: %v", tx.inner.etxIndex(), i)
 		}
 	})
 }
@@ -752,7 +777,7 @@ func qiTxData() (*Transaction, common.Hash) {
 	outpoint := NewOutPoint(&txHash, 1)
 	inner := &QiTx{
 		ChainID:    new(big.Int).SetUint64(1),
-		TxIn:       TxIns{*NewTxIn(outpoint, []byte{0x01}, [][]byte{{0x01}})},
+		TxIn:       TxIns{*NewTxIn(outpoint, []byte{0x04, 0x50, 0x49, 0x5c, 0xb2, 0xf9, 0x53, 0x5c, 0x68, 0x4e, 0xbe, 0x46, 0x87, 0xb5, 0x01, 0xc0, 0xd4, 0x1a, 0x62, 0x3d, 0x68, 0xc1, 0x18, 0xb8, 0xdc, 0xec, 0xd3, 0x93, 0x37, 0x0f, 0x1d, 0x90, 0xe6, 0x5c, 0x4c, 0x6c, 0x44, 0xcd, 0x3f, 0xe8, 0x09, 0xb4, 0x1d, 0xfa, 0xc9, 0x06, 0x0a, 0xd8, 0x4c, 0xb5, 0x7e, 0x2d, 0x57, 0x5f, 0xad, 0x24, 0xd2, 0x5a, 0x7e, 0xfa, 0x33, 0x96, 0xe7, 0x3c, 0x10}, [][]byte{{0x01}})},
 		TxOut:      TxOuts{*NewTxOut(1, []byte{0x2}, big.NewInt(1))},
 		ParentHash: &parentHash,
 		MixHash:    &mixHash,
@@ -764,8 +789,8 @@ func qiTxData() (*Transaction, common.Hash) {
 
 func TestQiTxHash(t *testing.T) {
 	_, hash := qiTxData()
-	correctHash := common.HexToHash("0x20f420e372c75c4a43555f02ae79b9c5edaeab288af2b0b8086150b3a9a3e3f0")
-	require.Equal(t, hash, correctHash, "Hash not equal to expected hash")
+	correctHash := common.HexToHash("0x3ab73ae4860b3db006d7a19fed6be3efe5619f53f499ef561f42c46bc12b555d")
+	require.Equal(t, correctHash, hash, "Hash not equal to expected hash")
 }
 
 func FuzzQiTxHashingChainID(f *testing.F) {
@@ -1025,7 +1050,7 @@ func FuzzQiTxHashingWorkNonce(f *testing.F) {
 
 func TestCoinbaseTxEncodeDecode(t *testing.T) {
 	toAddr := common.HexToAddress("0x0013e45aa16163F2663015b6695894D918866d19", common.Location{0, 0})
-	coinbaseTx := NewTx(&ExternalTx{To: &toAddr, Value: big.NewInt(10), Data: []byte{1}, OriginatingTxHash: common.HexToHash("0xa"), Sender: common.HexToAddress("0x0", common.Location{0, 0})})
+	coinbaseTx := NewTx(&ExternalTx{To: &toAddr, Value: big.NewInt(10), Data: []byte{1}, EtxType: DefaultType, OriginatingTxHash: common.HexToHash("0xa"), Sender: common.HexToAddress("0x0", common.Location{0, 0})})
 
 	// Encode transaction
 	protoTx, err := coinbaseTx.ProtoEncode()

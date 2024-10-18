@@ -11,17 +11,24 @@ import (
 
 	"github.com/dominant-strategies/go-quai/core/types"
 	"github.com/dominant-strategies/go-quai/log"
+	"github.com/dominant-strategies/go-quai/metrics_config"
 	"github.com/dominant-strategies/go-quai/p2p"
 	"github.com/dominant-strategies/go-quai/p2p/node/pubsubManager"
 	"github.com/dominant-strategies/go-quai/p2p/node/streamManager"
+	"github.com/dominant-strategies/go-quai/p2p/protocol"
 	quaiprotocol "github.com/dominant-strategies/go-quai/p2p/protocol"
 	"github.com/dominant-strategies/go-quai/quai"
-	"github.com/dominant-strategies/go-quai/trie"
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 
 	"github.com/dominant-strategies/go-quai/common"
+)
+
+var (
+	propagationTimes      = metrics_config.NewHistogramVec("PropagationTimes", "message propagation times by type (sec)")
+	blockPropagationHist  = propagationTimes.WithLabelValues("block propagation time (sec)")
+	headerPropagationHist = propagationTimes.WithLabelValues("header propagation time (sec)")
 )
 
 const requestTimeout = 10 * time.Second
@@ -37,7 +44,7 @@ func (p *P2PNode) Start() error {
 
 	// Register the Quai protocol handler
 	p.peerManager.GetHost().SetStreamHandler(quaiprotocol.ProtocolVersion, func(s network.Stream) {
-		quaiprotocol.QuaiProtocolHandler(s, p)
+		quaiprotocol.QuaiProtocolHandler(p.ctx, s, p)
 	})
 
 	// Start the pubsub manager
@@ -47,12 +54,20 @@ func (p *P2PNode) Start() error {
 }
 
 func (p *P2PNode) Subscribe(location common.Location, datatype interface{}) error {
-	err := p.pubsub.Subscribe(location, datatype)
+	err := p.pubsub.SubscribeAndRegisterValidator(location, datatype, nil)
 	if err != nil {
 		return err
 	}
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Global.WithFields(log.Fields{
+					"error":      r,
+					"stacktrace": string(debug.Stack()),
+				}).Error("Go-Quai Panicked")
+			}
+		}()
 		ticker := time.NewTicker(time.Second)
 		timeout := time.NewTicker(60 * time.Second)
 		for {
@@ -62,6 +77,8 @@ func (p *P2PNode) Subscribe(location common.Location, datatype interface{}) erro
 					log.Global.Infof("providing topic %s in %s", reflect.TypeOf(datatype), location.Name())
 					return
 				}
+			case <-p.quitCh:
+				return
 			case <-timeout.C:
 				log.Global.Errorf("unable to provide topic %s in %s", reflect.TypeOf(datatype), location.Name())
 				return
@@ -145,29 +162,39 @@ func (p *P2PNode) requestFromPeers(topic *pubsubManager.Topic, requestData inter
 			}
 		}()
 		defer close(resultChan)
-		peers := p.peerManager.GetPeers(topic)
-		log.Global.WithFields(log.Fields{
-			"peers": peers,
-			"topic": topic,
-		}).Debug("Requesting data from peers")
+		select {
+		case <-p.ctx.Done():
+			return
+		default:
+			peers := p.peerManager.GetPeers(topic)
+			log.Global.WithFields(log.Fields{
+				"peers": peers,
+				"topic": topic,
+			}).Debug("Requesting data from peers")
 
-		var requestWg sync.WaitGroup
-		for peerID := range peers {
-			requestWg.Add(1)
-			go func(peerID peer.ID) {
-				defer requestWg.Done()
-				defer func() {
-					if r := recover(); r != nil {
-						log.Global.WithFields(log.Fields{
-							"error":      r,
-							"stacktrace": string(debug.Stack()),
-						}).Error("Go-Quai Panicked")
-					}
-				}()
-				p.requestAndWait(peerID, topic, requestData, respDataType, resultChan)
-			}(peerID)
+			var requestWg sync.WaitGroup
+			for peerID := range peers {
+				// if we have exceeded the outbound rate limit for this peer, skip them for now
+				if err := protocol.ProcRequestRate(peerID, false); err != nil {
+					log.Global.Warnf("Exceeded request rate to peer %s", peerID)
+					continue
+				}
+				requestWg.Add(1)
+				go func(peerID peer.ID) {
+					defer func() {
+						if r := recover(); r != nil {
+							log.Global.WithFields(log.Fields{
+								"error":      r,
+								"stacktrace": string(debug.Stack()),
+							}).Error("Go-Quai Panicked")
+						}
+					}()
+					defer requestWg.Done()
+					p.requestAndWait(peerID, topic, requestData, respDataType, resultChan)
+				}(peerID)
+			}
+			requestWg.Wait()
 		}
-		requestWg.Wait()
 	}()
 }
 
@@ -190,8 +217,6 @@ func (p *P2PNode) requestAndWait(peerID peer.ID, topic *pubsubManager.Topic, req
 			"topic":  topic.String(),
 		}).Trace("Received data from peer")
 
-		// Mark this peer as behaving well
-		p.peerManager.MarkResponsivePeer(peerID, topic)
 		select {
 		case resultChan <- recvd:
 			// Data sent successfully
@@ -218,7 +243,7 @@ func (p *P2PNode) requestAndWait(peerID peer.ID, topic *pubsubManager.Topic, req
 			"err":    err,
 		}).Error("Error requesting the data from peer")
 		// Mark this peer as not responding
-		p.peerManager.MarkUnresponsivePeer(peerID, topic)
+		p.peerManager.AdjustPeerQuality(peerID, topic.String(), p2p.QualityAdjOnTimeout)
 	}
 }
 
@@ -252,40 +277,8 @@ func (p *P2PNode) Request(location common.Location, requestData interface{}, res
 	return resultChan
 }
 
-func (p *P2PNode) MarkLivelyPeer(peer p2p.PeerID, topic string) {
-	log.Global.WithFields(log.Fields{
-		"peer":  peer,
-		"topic": topic,
-	}).Debug("Recording well-behaving peer")
-
-	t, err := pubsubManager.TopicFromString(topic)
-	if err != nil {
-		log.Global.WithFields(log.Fields{
-			"topic": topic,
-			"err":   err,
-		}).Error("Error getting topic name")
-		panic(err)
-	}
-
-	p.peerManager.MarkLivelyPeer(peer, t)
-}
-
-func (p *P2PNode) MarkLatentPeer(peer p2p.PeerID, topic string) {
-	log.Global.WithFields(log.Fields{
-		"peer":  peer,
-		"topic": topic,
-	}).Debug("Recording misbehaving peer")
-
-	t, err := pubsubManager.TopicFromString(topic)
-	if err != nil {
-		log.Global.WithFields(log.Fields{
-			"topic": topic,
-			"err":   err,
-		}).Error("Error getting topic name")
-		panic(err)
-	}
-
-	p.peerManager.MarkLatentPeer(peer, t)
+func (p *P2PNode) AdjustPeerQuality(peer p2p.PeerID, topic string, adjFn func(int) int) {
+	p.peerManager.AdjustPeerQuality(peer, topic, adjFn)
 }
 
 func (p *P2PNode) ProtectPeer(peer p2p.PeerID) {
@@ -329,12 +322,39 @@ func (p *P2PNode) GetWorkObject(hash common.Hash, location common.Location) *typ
 	return p.consensus.LookupBlock(hash, location)
 }
 
+// Search for the block in the data base and get the count number of the next blocks
+func (p *P2PNode) GetWorkObjectsFrom(hash common.Hash, location common.Location, count int) []*types.WorkObjectBlockView {
+	response := []*types.WorkObjectBlockView{}
+	block := p.consensus.LookupBlock(hash, location)
+	if block == nil {
+		return nil
+	}
+	response = append(response, block.ConvertToBlockView())
+	for i := 1; i < count; i++ {
+		nextNumber := block.NumberU64(location.Context()) + uint64(i)
+		next := p.consensus.LookupBlockByNumber(big.NewInt(int64(nextNumber)), location)
+		if next == nil {
+			return nil
+		}
+		// The parent hash has to be continuous
+		if next.ParentHash(location.Context()) != response[i-1].Hash() {
+			return nil
+		}
+		response = append(response, next.ConvertToBlockView())
+	}
+	return response
+}
+
+func (p *P2PNode) GetHeight(location common.Location) uint64 {
+	return p.consensus.GetHeight(location)
+}
+
 func (p *P2PNode) GetBlockHashByNumber(number *big.Int, location common.Location) *common.Hash {
 	return p.consensus.LookupBlockHashByNumber(number, location)
 }
 
-func (p *P2PNode) GetTrieNode(hash common.Hash, location common.Location) *trie.TrieNodeResponse {
-	return p.consensus.GetTrieNode(hash, location)
+func (p *P2PNode) GetBlockByNumber(number *big.Int, location common.Location) *types.WorkObject {
+	return p.consensus.LookupBlockByNumber(number, location)
 }
 
 func (p *P2PNode) handleBroadcast(sourcePeer peer.ID, Id string, topic string, data interface{}, nodeLocation common.Location) {
@@ -349,8 +369,12 @@ func (p *P2PNode) handleBroadcast(sourcePeer peer.ID, Id string, topic string, d
 
 	switch v := data.(type) {
 	case types.WorkObjectHeaderView:
+		dt := uint64(time.Now().Unix()) - v.Time()
+		headerPropagationHist.Observe(float64(dt))
 		p.cacheAdd(v.Hash(), &v, nodeLocation)
 	case types.WorkObjectBlockView:
+		dt := uint64(time.Now().Unix()) - v.Time()
+		blockPropagationHist.Observe(float64(dt))
 		p.cacheAdd(v.Hash(), &v, nodeLocation)
 	}
 

@@ -70,6 +70,7 @@ func DialContext(ctx context.Context, rawurl string, logger *log.Logger) (*Clien
 			"attempts": attempts,
 			"delay":    delaySecs,
 			"url":      rawurl,
+			"err":      err,
 		}).Warn("Attempting to connect to go-quai node. Waiting and retrying...")
 
 		time.Sleep(time.Duration(delaySecs) * time.Second)
@@ -134,6 +135,20 @@ func (ec *Client) GetPendingHeader(ctx context.Context) (*types.WorkObject, erro
 	return wo, nil
 }
 
+func (ec *Client) GetWorkShareThreshold(ctx context.Context) (int, error) {
+	var raw json.RawMessage
+	err := ec.c.CallContext(ctx, &raw, "workshare_getWorkShareThreshold")
+	if err != nil {
+		return -1, err
+	}
+
+	var threshold int
+	if err := json.Unmarshal(raw, &threshold); err != nil {
+		return -1, err
+	}
+	return threshold, nil
+}
+
 // ReceiveMinedHeader sends a mined block back to the node
 func (ec *Client) ReceiveMinedHeader(ctx context.Context, header *types.WorkObject) error {
 	protoWo, err := header.ProtoEncode(types.PEtxObject)
@@ -156,7 +171,7 @@ func (ec *Client) ReceiveWorkShare(ctx context.Context, header *types.WorkObject
 	if err != nil {
 		return err
 	}
-	return ec.c.CallContext(ctx, nil, "quai_receiveWorkShare", hexutil.Bytes(data))
+	return ec.c.CallContext(ctx, nil, "quai_receiveRawWorkShare", hexutil.Bytes(data))
 }
 
 // Filters
@@ -278,10 +293,27 @@ func (ec *Client) QuaiRateAtBlock(ctx context.Context, block interface{}) (*big.
 	return (*big.Int)(&hex), nil
 }
 
+/// TxPool
+
 func (ec *Client) TxPoolStatus(ctx context.Context) (map[string]hexutil.Uint, error) {
 	var result map[string]hexutil.Uint
 	err := ec.c.CallContext(ctx, &result, "txpool_status")
 	return result, err
+}
+
+// Submits a minimally worked workshare to the client node
+func (ec *Client) SubmitSubWorkshare(ctx context.Context, wo *types.WorkObject) error {
+	protoWo, err := wo.ProtoEncode(types.WorkShareTxObject)
+	if err != nil {
+		log.Global.WithField("err", err).Error("Unable to encode worked transaction")
+		return err
+	}
+	bytesWo, err := proto.Marshal(protoWo)
+	if err != nil {
+		log.Global.WithField("err", err).Error("Unable to marshal worked transaction")
+		return err
+	}
+	return ec.c.CallContext(ctx, nil, "workshare_receiveSubWorkshare", hexutil.Bytes(bytesWo))
 }
 
 func (ec *Client) CalcOrder(ctx context.Context, header *types.WorkObject) (int, error) {

@@ -96,14 +96,15 @@ func registerMetrics() {
 // * Accounts
 type StateDB struct {
 	db           Database
-	utxoDb       Database
 	etxDb        Database
 	prefetcher   *triePrefetcher
 	originalRoot common.Hash // The pre-state root, before any changes were made
 	trie         Trie
-	utxoTrie     Trie
 	etxTrie      Trie
 	hasher       crypto.KeccakState
+
+	newAccountsAdded map[common.AddressBytes]bool
+	size             *big.Int
 
 	logger *log.Logger
 
@@ -138,8 +139,8 @@ type StateDB struct {
 	preimages map[common.Hash][]byte
 
 	// Per-transaction access list
-	accessList *accessList
-
+	accessList      *accessList
+	accessListDebug bool // used for simulating the EVM to create an access list
 	// Journal of state modifications. This is the backbone of
 	// Snapshot and RevertToSnapshot.
 	journal        *journal
@@ -161,12 +162,8 @@ type StateDB struct {
 }
 
 // New creates a new state from a given trie.
-func New(root common.Hash, utxoRoot common.Hash, etxRoot common.Hash, db Database, utxoDb Database, etxDb Database, snaps *snapshot.Tree, nodeLocation common.Location, logger *log.Logger) (*StateDB, error) {
+func New(root common.Hash, etxRoot common.Hash, quaiStateSize *big.Int, db Database, etxDb Database, snaps *snapshot.Tree, nodeLocation common.Location, logger *log.Logger) (*StateDB, error) {
 	tr, err := db.OpenTrie(root)
-	if err != nil {
-		return nil, err
-	}
-	utxoTr, err := utxoDb.OpenTrie(utxoRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -176,13 +173,13 @@ func New(root common.Hash, utxoRoot common.Hash, etxRoot common.Hash, db Databas
 	}
 	sdb := &StateDB{
 		db:                  db,
-		utxoDb:              utxoDb,
 		etxDb:               etxDb,
 		trie:                tr,
-		utxoTrie:            utxoTr,
 		etxTrie:             etxTr,
 		originalRoot:        root,
 		snaps:               snaps,
+		size:                quaiStateSize,
+		newAccountsAdded:    make(map[common.AddressBytes]bool),
 		logger:              logger,
 		stateObjects:        make(map[common.InternalAddress]*stateObject),
 		stateObjectsPending: make(map[common.InternalAddress]struct{}),
@@ -295,6 +292,16 @@ func (s *StateDB) SubRefund(gas uint64) {
 	s.refund -= gas
 }
 
+// AddSize increases the size variable for the statedb by 1
+func (s *StateDB) AddSize() {
+	s.size = new(big.Int).Add(s.size, common.Big1)
+}
+
+// SubSize decreases the size variable for the statedb by 1
+func (s *StateDB) SubSize() {
+	s.size = new(big.Int).Sub(s.size, common.Big1)
+}
+
 // Exist reports whether the given account address exists in the state.
 // Notably this also returns true for suicided accounts.
 func (s *StateDB) Exist(addr common.InternalAddress) bool {
@@ -323,6 +330,17 @@ func (s *StateDB) GetNonce(addr common.InternalAddress) uint64 {
 	}
 
 	return 0
+}
+func (s *StateDB) GetSize(addr common.InternalAddress) *big.Int {
+	stateObject := s.getStateObject(addr)
+	if stateObject != nil {
+		return stateObject.Size()
+	}
+	return common.Big0
+}
+
+func (s *StateDB) GetQuaiTrieSize() *big.Int {
+	return s.size
 }
 
 // TxIndex returns the current transaction index set by Prepare.
@@ -398,10 +416,6 @@ func (s *StateDB) GetCommittedState(addr common.InternalAddress, hash common.Has
 // Database retrieves the low level database supporting the lower level trie ops.
 func (s *StateDB) Database() Database {
 	return s.db
-}
-
-func (s *StateDB) UTXODatabase() Database {
-	return s.utxoDb
 }
 
 func (s *StateDB) ETXDatabase() Database {
@@ -502,6 +516,7 @@ func (s *StateDB) Suicide(addr common.InternalAddress) bool {
 	})
 	stateObject.markSuicided()
 	stateObject.data.Balance = new(big.Int)
+	stateObject.data.Size = new(big.Int)
 
 	return true
 }
@@ -532,7 +547,7 @@ func (s *StateDB) updateStateObject(obj *stateObject) {
 	// enough to track account updates at commit time, deletions need tracking
 	// at transaction boundary level to ensure we capture state clearing.
 	if s.snap != nil {
-		s.snapAccounts[obj.addrHash] = snapshot.SlimAccountRLP(obj.data.Nonce, obj.data.Balance, obj.data.Root, obj.data.CodeHash)
+		s.snapAccounts[obj.addrHash] = snapshot.SlimAccountRLP(obj.data.Nonce, obj.data.Balance, obj.data.Root, obj.data.CodeHash, obj.data.Size)
 	}
 }
 
@@ -557,90 +572,6 @@ func (s *StateDB) getStateObject(addr common.InternalAddress) *stateObject {
 		return obj
 	}
 	return nil
-}
-
-// GetUTXO retrieves a UTXO entry given by the hash, returning nil if the object
-// is not found or was deleted in this execution context.
-func (s *StateDB) GetUTXO(txHash common.Hash, outputIndex uint16) *types.UtxoEntry {
-	if metrics_config.MetricsEnabled() {
-		defer func(start time.Time) { stateMetrics.WithLabelValues("GetUTXO").Add(float64(time.Since(start))) }(time.Now())
-	}
-	enc, err := s.utxoTrie.TryGet(utxoKey(txHash, outputIndex))
-	if err != nil {
-		s.setError(fmt.Errorf("getUTXO (%x) error: %v", txHash, err))
-		return nil
-	}
-	if len(enc) == 0 {
-		return nil
-	}
-	utxo := new(types.UtxoEntry)
-	if err := rlp.DecodeBytes(enc, utxo); err != nil {
-		s.logger.WithFields(log.Fields{
-			"hash": txHash,
-			"err":  err,
-		}).Error("Failed to decode UTXO entry")
-		return nil
-	}
-	return utxo
-}
-
-// DeleteUTXO removes the given utxo from the state trie.
-func (s *StateDB) DeleteUTXO(txHash common.Hash, outputIndex uint16) {
-	// Track the amount of time wasted on deleting the utxo from the trie
-	if metrics_config.MetricsEnabled() {
-		defer func(start time.Time) { stateMetrics.WithLabelValues("DeleteUTXO").Add(float64(time.Since(start))) }(time.Now())
-	}
-	// Delete the utxo from the trie
-	if err := s.utxoTrie.TryDelete(utxoKey(txHash, outputIndex)); err != nil {
-		s.setError(fmt.Errorf("deleteUTXO (%x) error: %v", txHash, err))
-	}
-}
-
-// CreateUTXO explicitly creates a UTXO entry.
-func (s *StateDB) CreateUTXO(txHash common.Hash, outputIndex uint16, utxo *types.UtxoEntry) error {
-	if metrics_config.MetricsEnabled() {
-		defer func(start time.Time) { stateMetrics.WithLabelValues("CreateUTXO").Add(float64(time.Since(start))) }(time.Now())
-	}
-	// This check is largely redundant, but it's a good sanity check. Might be removed in the future.
-	if err := common.CheckIfBytesAreInternalAndQiAddress(utxo.Address, s.nodeLocation); err != nil {
-		return err
-	}
-	if utxo.Denomination > types.MaxDenomination { // sanity check
-		return fmt.Errorf("tx %032x emits UTXO with value %d greater than max denomination", txHash, utxo.Denomination)
-	}
-	data, err := rlp.EncodeToBytes(utxo)
-	if err != nil {
-		panic(fmt.Errorf("can't encode UTXO entry at %x: %v", txHash, err))
-	}
-	if err := s.utxoTrie.TryUpdate(utxoKey(txHash, outputIndex), data); err != nil {
-		s.setError(fmt.Errorf("createUTXO (%x) error: %v", txHash, err))
-	}
-	return nil
-}
-
-func (s *StateDB) CommitUTXOs() (common.Hash, error) {
-	// Track the amount of time wasted on committing the utxos to the trie
-	if metrics_config.MetricsEnabled() {
-		defer func(start time.Time) { stateMetrics.WithLabelValues("CommitUTXOs").Add(float64(time.Since(start))) }(time.Now())
-	}
-	if s.utxoTrie == nil {
-		return common.Hash{}, errors.New("UTXO trie is not initialized")
-	}
-	root, err := s.utxoTrie.Commit(nil)
-	if err != nil {
-		s.setError(fmt.Errorf("commitUTXOs error: %v", err))
-	}
-	return root, err
-}
-
-func (s *StateDB) UTXORoot() common.Hash {
-	return s.utxoTrie.Hash()
-}
-
-func (s *StateDB) GetUTXOProof(hash common.Hash, index uint16) ([][]byte, error) {
-	var proof proofList
-	err := s.utxoTrie.Prove(utxoKey(hash, index), 0, &proof)
-	return proof, err
 }
 
 func (s *StateDB) PushETX(etx *types.Transaction) error {
@@ -757,7 +688,7 @@ func (s *StateDB) ETXRoot() common.Hash {
 	return s.etxTrie.Hash()
 }
 
-func (s *StateDB) CommitETXs() (common.Hash, error) {
+func (s *StateDB) CommitEtxs() (common.Hash, error) {
 	if metrics_config.MetricsEnabled() {
 		defer func(start time.Time) { stateMetrics.WithLabelValues("CommitETXs").Add(float64(time.Since(start))) }(time.Now())
 	}
@@ -801,6 +732,7 @@ func (s *StateDB) getDeletedStateObject(addr common.InternalAddress) *stateObjec
 				Balance:  acc.Balance,
 				CodeHash: acc.CodeHash,
 				Root:     common.BytesToHash(acc.Root),
+				Size:     acc.Size,
 			}
 			if len(data.CodeHash) == 0 {
 				data.CodeHash = emptyCodeHash
@@ -854,8 +786,12 @@ func (s *StateDB) GetOrNewStateObject(addr common.InternalAddress) *stateObject 
 // createObject creates a new state object. If there is an existing account with
 // the given address, it is overwritten and returned as the second return value.
 func (s *StateDB) createObject(addr common.InternalAddress) (newobj, prev *stateObject) {
-	if !common.IsInChainScope(addr.Bytes(), s.nodeLocation) || !addr.IsInQuaiLedgerScope() {
-		s.setError(fmt.Errorf("createObject (%x) error: %v", addr.Bytes(), common.ErrInvalidScope))
+	if !common.IsInChainScope(addr.Bytes(), s.nodeLocation) {
+		s.setError(fmt.Errorf("createObject (%x) error: %v", addr.Bytes(), common.ErrExternalAddress))
+		return nil, nil
+	}
+	if !addr.IsInQuaiLedgerScope() {
+		s.setError(fmt.Errorf("createObject (%x) error: %v", addr.Bytes(), common.MakeErrQiAddress(addr.Hex())))
 		return nil, nil
 	}
 	prev = s.getDeletedStateObject(addr) // Note, prev might have been deleted, we need that!
@@ -869,6 +805,9 @@ func (s *StateDB) createObject(addr common.InternalAddress) (newobj, prev *state
 	}
 	newobj = newObject(s, addr, Account{})
 	if prev == nil {
+		// Add this new account to the collection of accounts that might be
+		// created during the execution of the state in this block
+		s.newAccountsAdded[addr.Bytes20()] = true
 		s.journal.append(createObjectChange{account: &addr})
 	} else {
 		s.journal.append(resetObjectChange{prev: prev, prevdestruct: prevdestruct})
@@ -894,6 +833,7 @@ func (s *StateDB) CreateAccount(addr common.InternalAddress) {
 	newObj, prev := s.createObject(addr)
 	if prev != nil {
 		newObj.setBalance(prev.data.Balance)
+		newObj.setSize(prev.data.Size)
 	}
 }
 
@@ -933,10 +873,10 @@ func (s *StateDB) Copy() *StateDB {
 	state := &StateDB{
 		db:                  s.db,
 		trie:                s.db.CopyTrie(s.trie),
-		utxoTrie:            s.utxoDb.CopyTrie(s.utxoTrie),
-		utxoDb:              s.utxoDb,
 		etxTrie:             s.etxDb.CopyTrie(s.etxTrie),
 		etxDb:               s.etxDb,
+		size:                new(big.Int).Set(s.size),
+		newAccountsAdded:    make(map[common.AddressBytes]bool, len(s.newAccountsAdded)),
 		stateObjects:        make(map[common.InternalAddress]*stateObject, len(s.journal.dirties)),
 		stateObjectsPending: make(map[common.InternalAddress]struct{}, len(s.stateObjectsPending)),
 		stateObjectsDirty:   make(map[common.InternalAddress]struct{}, len(s.journal.dirties)),
@@ -996,12 +936,19 @@ func (s *StateDB) Copy() *StateDB {
 	// However, it doesn't cost us much to copy an empty list, so we do it anyway
 	// to not blow up if we ever decide copy it in the middle of a transaction
 	state.accessList = s.accessList.Copy()
-
+	state.accessListDebug = s.accessListDebug
 	// If there's a prefetcher running, make an inactive copy of it that can
 	// only access data but does not actively preload (since the user will not
 	// know that they need to explicitly terminate an active copy).
 	if s.prefetcher != nil {
 		state.prefetcher = s.prefetcher.copy()
+	}
+	// If len of the new accounts added is non zero, we can copy the map into
+	// the state variable
+	if len(s.newAccountsAdded) > 0 {
+		for acc, val := range s.newAccountsAdded {
+			state.newAccountsAdded[acc] = val
+		}
 	}
 	if s.snaps != nil {
 		// In order for the miner to be able to use and make additions
@@ -1145,8 +1092,22 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	for addr := range s.stateObjectsPending {
 		if obj := s.stateObjects[addr]; obj.deleted {
 			s.deleteStateObject(obj)
+			// In the case of deletion because the balance was nil or that the
+			// address was deleted using opSuicide we need to lower the size of
+			// the quai state trie if this was not a newAccont created during the
+			// execution of this block
+			_, exists := s.newAccountsAdded[addr.Bytes20()]
+			if !exists {
+				s.SubSize()
+			}
 		} else {
 			s.updateStateObject(obj)
+			// If this address exists in the newAccountsAdded map, we can
+			// increase the size of the statedb
+			_, exists := s.newAccountsAdded[addr.Bytes20()]
+			if exists {
+				s.AddSize()
+			}
 		}
 		usedAddrs = append(usedAddrs, common.CopyBytes(addr[:])) // Copy needed for closure
 	}
@@ -1156,10 +1117,14 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	if len(s.stateObjectsPending) > 0 {
 		s.stateObjectsPending = make(map[common.InternalAddress]struct{})
 	}
+	if len(s.newAccountsAdded) > 0 {
+		s.newAccountsAdded = make(map[common.AddressBytes]bool)
+	}
 	// Track the amount of time wasted on hashing the account trie
 	if metrics_config.MetricsEnabled() {
 		defer func(start time.Time) { stateMetrics.WithLabelValues("AccountHashes").Add(float64(time.Since(start))) }(time.Now())
 	}
+
 	return s.trie.Hash()
 }
 
@@ -1268,58 +1233,63 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, error) {
 // - Add destination to access list
 // - Add precompiles to access list
 // - Add the contents of the optional tx access list
-func (s *StateDB) PrepareAccessList(sender common.Address, dst *common.Address, precompiles []common.Address, list types.AccessList) {
-	s.AddAddressToAccessList(sender)
+func (s *StateDB) PrepareAccessList(sender common.Address, dst *common.Address, precompiles []common.Address, list types.AccessList, debug bool) {
+	s.accessListDebug = debug
+	s.AddAddressToAccessList(sender.Bytes20())
 	if dst != nil {
-		s.AddAddressToAccessList(*dst)
+		s.AddAddressToAccessList(dst.Bytes20())
 		// If it's a create-tx, the destination will be added inside evm.create
 	}
 	for _, addr := range precompiles {
-		s.AddAddressToAccessList(addr)
+		s.AddAddressToAccessList(addr.Bytes20())
 	}
 	for _, el := range list {
-		s.AddAddressToAccessList(el.Address)
+		s.AddAddressToAccessList(el.Address.Bytes20())
 		for _, key := range el.StorageKeys {
-			s.AddSlotToAccessList(el.Address, key)
+			s.AddSlotToAccessList(el.Address.Bytes20(), key)
 		}
 	}
 }
 
 // AddAddressToAccessList adds the given address to the access list
-func (s *StateDB) AddAddressToAccessList(addr common.Address) {
-	addrBytes := addr.Bytes20()
-	if s.accessList.AddAddress(addrBytes) {
-		s.journal.append(accessListAddAccountChange{&addrBytes})
+func (s *StateDB) AddAddressToAccessList(addr common.AddressBytes) {
+	if s.accessList.AddAddress(addr) {
+		s.journal.append(accessListAddAccountChange{&addr})
 	}
 }
 
 // AddSlotToAccessList adds the given (address, slot)-tuple to the access list
-func (s *StateDB) AddSlotToAccessList(addr common.Address, slot common.Hash) {
-	addrBytes := addr.Bytes20()
-	addrMod, slotMod := s.accessList.AddSlot(addrBytes, slot)
+func (s *StateDB) AddSlotToAccessList(addr common.AddressBytes, slot common.Hash) {
+	addrMod, slotMod := s.accessList.AddSlot(addr, slot)
 	if addrMod {
 		// In practice, this should not happen, since there is no way to enter the
 		// scope of 'address' without having the 'address' become already added
 		// to the access list (via call-variant, create, etc).
 		// Better safe than sorry, though
-		s.journal.append(accessListAddAccountChange{&addrBytes})
+		s.journal.append(accessListAddAccountChange{&addr})
 	}
 	if slotMod {
 		s.journal.append(accessListAddSlotChange{
-			address: &addrBytes,
+			address: &addr,
 			slot:    &slot,
 		})
 	}
 }
 
 // AddressInAccessList returns true if the given address is in the access list.
-func (s *StateDB) AddressInAccessList(addr common.Address) bool {
-	return s.accessList.ContainsAddress(addr.Bytes20())
+func (s *StateDB) AddressInAccessList(addr common.AddressBytes) bool {
+	if s.accessListDebug {
+		return true
+	}
+	return s.accessList.ContainsAddress(addr)
 }
 
 // SlotInAccessList returns true if the given (address, slot)-tuple is in the access list.
-func (s *StateDB) SlotInAccessList(addr common.Address, slot common.Hash) (addressPresent bool, slotPresent bool) {
-	return s.accessList.Contains(addr.Bytes20(), slot)
+func (s *StateDB) SlotInAccessList(addr common.AddressBytes, slot common.Hash) (addressPresent bool, slotPresent bool) {
+	if s.accessListDebug {
+		return true, true
+	}
+	return s.accessList.Contains(addr, slot)
 }
 
 // This can be optimized via VLQ encoding as btcd has done

@@ -7,19 +7,24 @@ import (
 	"math/big"
 
 	"github.com/dominant-strategies/go-quai/common"
+	"github.com/dominant-strategies/go-quai/crypto"
 	"github.com/dominant-strategies/go-quai/params"
 )
 
 const (
-	MaxDenomination = 16
+	MaxDenomination = 14
 
-	MaxOutputIndex = math.MaxUint16
+	MaxOutputIndex                  = math.MaxUint16
+	MaxTrimDenomination             = 5
+	MaxTrimCollisionsPerKeyPerBlock = 1000
 )
 
 var MaxQi = new(big.Int).Mul(big.NewInt(math.MaxInt64), big.NewInt(params.Ether)) // This is just a default; determine correct value later
 
 // Denominations is a map of denomination to number of Qi
 var Denominations map[uint8]*big.Int
+
+var TrimDepths map[uint8]uint64
 
 func init() {
 	// Initialize denominations
@@ -29,18 +34,25 @@ func init() {
 	Denominations[2] = big.NewInt(10)          // 0.01 Qi
 	Denominations[3] = big.NewInt(50)          // 0.05 Qi
 	Denominations[4] = big.NewInt(100)         // 0.1 Qi
-	Denominations[5] = big.NewInt(250)         // 0.25 Qi
-	Denominations[6] = big.NewInt(500)         // 0.5 Qi
-	Denominations[7] = big.NewInt(1000)        // 1 Qi
-	Denominations[8] = big.NewInt(5000)        // 5 Qi
-	Denominations[9] = big.NewInt(10000)       // 10 Qi
-	Denominations[10] = big.NewInt(20000)      // 20 Qi
-	Denominations[11] = big.NewInt(50000)      // 50 Qi
-	Denominations[12] = big.NewInt(100000)     // 100 Qi
-	Denominations[13] = big.NewInt(1000000)    // 1000 Qi
-	Denominations[14] = big.NewInt(10000000)   // 10000 Qi
-	Denominations[15] = big.NewInt(100000000)  // 100000 Qi
-	Denominations[16] = big.NewInt(1000000000) // 1000000 Qi
+	Denominations[5] = big.NewInt(500)         // 0.5 Qi
+	Denominations[6] = big.NewInt(1000)        // 1 Qi
+	Denominations[7] = big.NewInt(5000)        // 5 Qi
+	Denominations[8] = big.NewInt(10000)       // 10 Qi
+	Denominations[9] = big.NewInt(20000)       // 20 Qi
+	Denominations[10] = big.NewInt(100000)     // 100 Qi
+	Denominations[11] = big.NewInt(1000000)    // 1000 Qi
+	Denominations[12] = big.NewInt(10000000)   // 10000 Qi
+	Denominations[13] = big.NewInt(100000000)  // 100000 Qi
+	Denominations[14] = big.NewInt(1000000000) // 1000000 Qi
+
+	TrimDepths = make(map[uint8]uint64)
+	TrimDepths[0] = 720  // 2 hours
+	TrimDepths[1] = 720  // 2 hours
+	TrimDepths[2] = 1080 // 3 hours
+	TrimDepths[3] = 1080 // 3 hours
+	TrimDepths[4] = 2160 // 6 hours
+	TrimDepths[5] = 4320 // 12 hours
+	TrimDepths[6] = 8640 // 24 hours
 }
 
 type TxIns []TxIn
@@ -71,8 +83,8 @@ func (txIns *TxIns) ProtoDecode(protoTxIns *ProtoTxIns) error {
 
 // TxIn defines a Qi transaction input
 type TxIn struct {
-	PreviousOutPoint OutPoint
-	PubKey           []byte
+	PreviousOutPoint OutPoint `json:"previousOutPoint"`
+	PubKey           []byte   `json:"pubKey"`
 }
 
 func (txIn TxIn) ProtoEncode() (*ProtoTxIn, error) {
@@ -84,7 +96,13 @@ func (txIn TxIn) ProtoEncode() (*ProtoTxIn, error) {
 		return nil, err
 	}
 
-	protoTxIn.PubKey = txIn.PubKey
+	// Compress the public key if it's uncompressed
+	compressedPubKey, err := compressPubKeyIfNeeded(txIn.PubKey)
+	if err != nil {
+		return nil, err
+	}
+	protoTxIn.PubKey = compressedPubKey
+
 	return protoTxIn, nil
 }
 
@@ -93,14 +111,53 @@ func (txIn *TxIn) ProtoDecode(protoTxIn *ProtoTxIn) error {
 	if err != nil {
 		return err
 	}
-	txIn.PubKey = protoTxIn.PubKey
+
+	// Decompress the public key if it's compressed
+	pubKey, err := decompressPubKeyIfNeeded(protoTxIn.PubKey)
+	if err != nil {
+		return err
+	}
+	txIn.PubKey = pubKey
+
 	return nil
+}
+
+// decompressPubKeyIfNeeded decompresses the public key if it's in compressed format
+func decompressPubKeyIfNeeded(pubKey []byte) ([]byte, error) {
+	switch len(pubKey) {
+	case 33: // Compressed public key
+		uncompressedPubKey, err := crypto.DecompressPubkey(pubKey)
+		if err != nil {
+			return nil, err
+		}
+		return crypto.FromECDSAPub(uncompressedPubKey), nil
+	case 65: // Uncompressed public key
+		return pubKey, nil
+	default:
+		return nil, errors.New("invalid public key length")
+	}
+}
+
+// compressPubKeyIfNeeded compresses the public key if it's in uncompressed format
+func compressPubKeyIfNeeded(pubKey []byte) ([]byte, error) {
+	switch len(pubKey) {
+	case 65: // Uncompressed public key
+		uncompressedPubKey, err := crypto.UnmarshalPubkey(pubKey)
+		if err != nil {
+			return nil, err
+		}
+		return crypto.CompressPubkey(uncompressedPubKey), nil
+	case 33: // Already compressed public key
+		return pubKey, nil
+	default:
+		return nil, errors.New("invalid public key length")
+	}
 }
 
 // OutPoint defines a Qi data type that is used to track previous outputs
 type OutPoint struct {
-	TxHash common.Hash
-	Index  uint16
+	TxHash common.Hash `json:"txHash"`
+	Index  uint16      `json:"index"`
 }
 
 func (outPoint OutPoint) Key() string {
@@ -189,6 +246,7 @@ func (txOuts TxOuts) ProtoEncode() (*ProtoTxOuts, error) {
 }
 
 func (txOuts *TxOuts) ProtoDecode(protoTxOuts *ProtoTxOuts) error {
+	*txOuts = make(TxOuts, 0, len(protoTxOuts.TxOuts))
 	for _, protoTxOut := range protoTxOuts.TxOuts {
 		decodedTxOut := &TxOut{}
 		err := decodedTxOut.ProtoDecode(protoTxOut)
@@ -252,17 +310,39 @@ type UtxoEntry struct {
 	Lock         *big.Int // Block height the entry unlocks. 0 = unlocked
 }
 
-// Clone returns a shallow copy of the utxo entry.
-func (entry *UtxoEntry) Clone() *UtxoEntry {
-	if entry == nil {
-		return nil
-	}
+// SpentUtxoEntry houses details about a spent UtxoEntry.
+type SpentUtxoEntry struct {
+	OutPoint
+	*UtxoEntry
+}
 
-	return &UtxoEntry{
-		Denomination: entry.Denomination,
-		Address:      entry.Address,
-		Lock:         new(big.Int).Set(entry.Lock),
+func (sutxo *SpentUtxoEntry) ProtoEncode() (*ProtoSpentUTXO, error) {
+	protoSpentUtxoEntry := &ProtoSpentUTXO{}
+
+	protoOutPoint, err := sutxo.OutPoint.ProtoEncode()
+	if err != nil {
+		return nil, err
 	}
+	protoSpentUtxoEntry.Outpoint = protoOutPoint
+
+	protoUtxoEntry, err := sutxo.UtxoEntry.ProtoEncode()
+	if err != nil {
+		return nil, err
+	}
+	protoSpentUtxoEntry.Sutxo = protoUtxoEntry
+
+	return protoSpentUtxoEntry, nil
+}
+
+func (sutxo *SpentUtxoEntry) ProtoDecode(protoSpentUtxoEntry *ProtoSpentUTXO) error {
+	if err := sutxo.OutPoint.ProtoDecode(protoSpentUtxoEntry.Outpoint); err != nil {
+		return err
+	}
+	sutxo.UtxoEntry = &UtxoEntry{}
+	if err := sutxo.UtxoEntry.ProtoDecode(protoSpentUtxoEntry.Sutxo); err != nil {
+		return err
+	}
+	return nil
 }
 
 // NewUtxoEntry returns a new UtxoEntry built from the arguments.
@@ -277,4 +357,39 @@ func NewUtxoEntry(txOut *TxOut) *UtxoEntry {
 type AddressUtxos struct {
 	Address common.Address
 	Utxos   []*UtxoEntry
+}
+
+func (utxo *UtxoEntry) ProtoEncode() (*ProtoTxOut, error) {
+	protoTxOut := &ProtoTxOut{}
+
+	denomination := uint32(utxo.Denomination)
+	protoTxOut.Denomination = &denomination
+	protoTxOut.Address = utxo.Address
+	if utxo.Lock == nil {
+		protoTxOut.Lock = big.NewInt(0).Bytes()
+	} else {
+		protoTxOut.Lock = utxo.Lock.Bytes()
+	}
+	return protoTxOut, nil
+}
+
+func (utxo *UtxoEntry) ProtoDecode(protoTxOut *ProtoTxOut) error {
+	// check if protoTxOut.Denomination is above the max uint8 value
+	if *protoTxOut.Denomination > math.MaxUint8 {
+		return errors.New("protoTxOut.Denomination is above the max uint8 value")
+	}
+	utxo.Denomination = uint8(protoTxOut.GetDenomination())
+	utxo.Address = protoTxOut.Address
+	if protoTxOut.Lock == nil {
+		utxo.Lock = nil
+	} else {
+		utxo.Lock = new(big.Int).SetBytes(protoTxOut.Lock)
+	}
+	return nil
+}
+
+func UTXOHash(txHash common.Hash, index uint16, utxo *UtxoEntry) common.Hash {
+	indexBytes := make([]byte, 2)
+	binary.BigEndian.PutUint16(indexBytes, index)
+	return RlpHash([]interface{}{txHash, indexBytes, utxo}) // TODO: Consider encoding to protobuf instead
 }

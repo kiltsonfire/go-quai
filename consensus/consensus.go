@@ -18,12 +18,54 @@
 package consensus
 
 import (
+	"errors"
 	"math/big"
 
 	"github.com/dominant-strategies/go-quai/common"
 	"github.com/dominant-strategies/go-quai/core/state"
 	"github.com/dominant-strategies/go-quai/core/types"
+	"github.com/dominant-strategies/go-quai/ethdb"
+	"github.com/dominant-strategies/go-quai/multiset"
 	"github.com/dominant-strategies/go-quai/params"
+)
+
+const (
+	// staleThreshold is the maximum depth of the acceptable stale but valid solution.
+	StaleThreshold = 7
+	MantBits       = 64
+)
+
+// Some useful constants to avoid constant memory allocs for them.
+var (
+	ExpDiffPeriod = big.NewInt(100000)
+	Big0          = big.NewInt(0)
+	Big1          = big.NewInt(1)
+	Big2          = big.NewInt(2)
+	Big3          = big.NewInt(3)
+	Big8          = big.NewInt(8)
+	Big9          = big.NewInt(9)
+	Big10         = big.NewInt(10)
+	Big32         = big.NewInt(32)
+	BigMinus99    = big.NewInt(-99)
+	Big2e256      = new(big.Int).Exp(big.NewInt(2), big.NewInt(256), big.NewInt(0)) // 2^256
+)
+
+// Various error messages to mark blocks invalid. These should be private to
+// prevent engine specific errors from being referenced in the remainder of the
+// codebase, inherently breaking if the engine is swapped out. Please put common
+// error types into the consensus package.
+var (
+	ErrOlderBlockTime       = errors.New("timestamp older than parent")
+	ErrTooManyUncles        = errors.New("too many uncles")
+	ErrDuplicateUncle       = errors.New("duplicate uncle")
+	ErrUncleIsAncestor      = errors.New("uncle is ancestor")
+	ErrDanglingUncle        = errors.New("uncle's parent is not ancestor")
+	ErrInvalidDifficulty    = errors.New("difficulty too low")
+	ErrInvalidThresholdDiff = errors.New("threshold provided is below base difficulty")
+	ErrDifficultyCrossover  = errors.New("sub's difficulty exceeds dom's")
+	ErrInvalidMixHash       = errors.New("invalid mixHash")
+	ErrInvalidPoW           = errors.New("invalid proof-of-work")
+	ErrInvalidOrder         = errors.New("invalid order")
 )
 
 // ChainHeaderReader defines a small collection of methods needed to access the local
@@ -51,7 +93,10 @@ type ChainHeaderReader interface {
 	ProcessingState() bool
 
 	// ComputeEfficiencyScore returns the efficiency score computed at each prime block
-	ComputeEfficiencyScore(header *types.WorkObject) uint16
+	ComputeEfficiencyScore(header *types.WorkObject) (uint16, error)
+
+	// ComputeExpansionNumber returns the expansion number of the block
+	ComputeExpansionNumber(parent *types.WorkObject) (uint8, error)
 
 	// IsGenesisHash returns true if the given hash is the genesis block hash.
 	IsGenesisHash(hash common.Hash) bool
@@ -61,6 +106,13 @@ type ChainHeaderReader interface {
 
 	// WriteAddressOutpoints writes the address outpoints to the database
 	WriteAddressOutpoints(outpointsMap map[string]map[string]*types.OutpointAndDenomination) error
+
+	// WorkShareDistance calculates the geodesic distance between the
+	// workshare and the workobject in which that workshare is included.
+	WorkShareDistance(wo *types.WorkObject, ws *types.WorkObjectHeader) (*big.Int, error)
+	Database() ethdb.Database
+
+	BlockReader
 }
 
 // ChainReader defines a small collection of methods needed to access the local
@@ -83,30 +135,30 @@ type Engine interface {
 	// engine is based on signatures.
 	Author(header *types.WorkObject) (common.Address, error)
 
-	// IntrinsicLogS returns the logarithm of the intrinsic entropy reduction of a PoW hash
-	IntrinsicLogS(powHash common.Hash) *big.Int
+	// IntrinsicLogEntropy returns the logarithm of the intrinsic entropy reduction of a PoW hash
+	IntrinsicLogEntropy(powHash common.Hash) *big.Int
 
 	// CalcOrder returns the order of the block within the hierarchy of chains
 	CalcOrder(chain BlockReader, header *types.WorkObject) (*big.Int, int, error)
 
-	// TotalLogS returns the log of the total entropy reduction if the chain since genesis to the given header
-	TotalLogS(chain ChainHeaderReader, header *types.WorkObject) *big.Int
+	// TotalLogEntropy returns the log of the total entropy reduction if the chain since genesis to the given header
+	TotalLogEntropy(chain ChainHeaderReader, header *types.WorkObject) *big.Int
 
-	// DeltaLogS returns the log of the entropy delta for a chain since its prior coincidence
-	DeltaLogS(chain ChainHeaderReader, header *types.WorkObject) *big.Int
+	// DeltaLogEntropy returns the log of the entropy delta for a chain since its prior coincidence
+	DeltaLogEntropy(chain ChainHeaderReader, header *types.WorkObject) *big.Int
 
-	// UncledLogS returns the log of the entropy reduction by uncles referenced in the block
-	UncledLogS(block *types.WorkObject) *big.Int
+	// UncledLogEntropy returns the log of the entropy reduction by uncles referenced in the block
+	UncledLogEntropy(block *types.WorkObject) *big.Int
 
-	// WorkShareLogS returns the log of the entropy reduction by the workshare referenced in the block
-	WorkShareLogS(block *types.WorkObject) (*big.Int, error)
+	// WorkShareLogEntropy returns the log of the entropy reduction by the workshare referenced in the block
+	WorkShareLogEntropy(chain ChainHeaderReader, block *types.WorkObject) (*big.Int, error)
 
 	// CheckIfValidWorkShare checks if the workshare meets the work share
 	// requirements defined by the protocol
-	CheckIfValidWorkShare(workShare *types.WorkObjectHeader) bool
+	CheckIfValidWorkShare(workShare *types.WorkObjectHeader) types.WorkShareValidity
 
-	// UncledUncledSubDeltaLogS returns the log of the uncled entropy reduction  since the past coincident
-	UncledSubDeltaLogS(chain ChainHeaderReader, header *types.WorkObject) *big.Int
+	// UncledDeltaLogEntropy returns the log of the uncled entropy reduction  since the past coincident
+	UncledDeltaLogEntropy(chain ChainHeaderReader, header *types.WorkObject) *big.Int
 
 	// CalcRank calculates the rank of the prime block
 	CalcRank(chain ChainHeaderReader, header *types.WorkObject) (int, error)
@@ -137,14 +189,14 @@ type Engine interface {
 	//
 	// Note: The block header and state database might be updated to reflect any
 	// consensus rules that happen at finalization (e.g. block rewards).
-	Finalize(chain ChainHeaderReader, header *types.WorkObject, state *state.StateDB)
+	Finalize(chain ChainHeaderReader, batch ethdb.Batch, header *types.WorkObject, state *state.StateDB, setRoots bool, parentUtxoSetSize uint64, utxosCreate, utxosDelete []common.Hash) (*multiset.MultiSet, uint64, error)
 
 	// FinalizeAndAssemble runs any post-transaction state modifications (e.g. block
 	// rewards) and assembles the final block.
 	//
 	// Note: The block header and state database might be updated to reflect any
 	// consensus rules that happen at finalization (e.g. block rewards).
-	FinalizeAndAssemble(chain ChainHeaderReader, woHeader *types.WorkObject, state *state.StateDB, txs []*types.Transaction, uncles []*types.WorkObjectHeader, etxs []*types.Transaction, subManifest types.BlockManifest, receipts []*types.Receipt) (*types.WorkObject, error)
+	FinalizeAndAssemble(chain ChainHeaderReader, woHeader *types.WorkObject, state *state.StateDB, txs []*types.Transaction, uncles []*types.WorkObjectHeader, etxs []*types.Transaction, subManifest types.BlockManifest, receipts []*types.Receipt, parentUtxoSetSize uint64, utxosCreate, utxosDelete []common.Hash) (*types.WorkObject, error)
 
 	// Seal generates a new sealing request for the given input block and pushes
 	// the result into the given channel.
@@ -172,11 +224,23 @@ type Engine interface {
 	// requirement specified in header
 	VerifySeal(header *types.WorkObjectHeader) (common.Hash, error)
 
+	// VerifyWorkThreshold checks if the work meets the difficulty requirement
+	CheckWorkThreshold(workObjectHeader *types.WorkObjectHeader, workShareThreshold int) bool
+
 	SetThreads(threads int)
+
+	// Mine is the actual proof-of-work miner that searches for a nonce starting from
+	// seed that results in correct final block difficulty.
+	Mine(workObject *types.WorkObject, abort <-chan struct{}, found chan *types.WorkObject)
+
+	// MineToThreshold allows for customization of the difficulty threshold.
+	MineToThreshold(workObject *types.WorkObject, threshold int, abort <-chan struct{}, found chan *types.WorkObject)
 }
 
 type BlockReader interface {
 	GetBlockByHash(hash common.Hash) *types.WorkObject
+	CheckInCalcOrderCache(common.Hash) (*big.Int, int, bool)
+	AddToCalcOrderCache(common.Hash, int, *big.Int)
 }
 
 func TargetToDifficulty(target *big.Int) *big.Int {
@@ -185,6 +249,20 @@ func TargetToDifficulty(target *big.Int) *big.Int {
 
 func DifficultyToTarget(difficulty *big.Int) *big.Int {
 	return TargetToDifficulty(difficulty)
+}
+
+// CalcWorkShareThreshold lowers the difficulty of the workShare header by thresholdDiff bits.
+// workShareTarget := 2^256 / workShare.Difficulty() * 2^workShareThresholdDiff
+func CalcWorkShareThreshold(workShare *types.WorkObjectHeader, workShareThresholdDiff int) (*big.Int, error) {
+	if workShareThresholdDiff <= 0 {
+		// If workShareThresholdDiff = 0, you should use the difficulty directly from the header.
+		return nil, ErrInvalidThresholdDiff
+	}
+	diff := workShare.Difficulty()
+	diffTarget := new(big.Int).Div(Big2e256, diff)
+	workShareTarget := new(big.Int).Exp(Big2, big.NewInt(int64(workShareThresholdDiff)), nil)
+
+	return workShareTarget.Mul(diffTarget, workShareTarget), nil
 }
 
 // PoW is a consensus engine based on proof-of-work.
