@@ -13,12 +13,12 @@ import (
 	"github.com/dominant-strategies/go-quai/common"
 	"github.com/dominant-strategies/go-quai/core/types"
 	"github.com/dominant-strategies/go-quai/log"
+	"github.com/dominant-strategies/go-quai/p2p"
 	"github.com/dominant-strategies/go-quai/p2p/node/peerManager"
 	"github.com/dominant-strategies/go-quai/p2p/node/pubsubManager"
 	"github.com/dominant-strategies/go-quai/p2p/node/requestManager"
 	"github.com/dominant-strategies/go-quai/p2p/pb"
 	"github.com/dominant-strategies/go-quai/p2p/protocol"
-	"github.com/dominant-strategies/go-quai/trie"
 )
 
 // Opens a stream to the given peer and request some data for the given hash at the given location
@@ -31,6 +31,13 @@ func (p *P2PNode) requestFromPeer(peerID peer.ID, topic *pubsubManager.Topic, re
 			}).Error("Go-Quai Panicked")
 		}
 	}()
+
+	// Only proceed if we aren't violating our request rate to that peer
+	if protocol.ProcRequestRate(peerID, false) != nil {
+		log.Global.Warnf("Exceeded request rate to peer %s", peerID)
+		return nil, errors.Errorf("Exceeded request rate to peer %s", peerID)
+	}
+
 	log.Global.WithFields(log.Fields{
 		"peerId": peerID,
 		"topic":  topic,
@@ -73,18 +80,21 @@ func (p *P2PNode) requestFromPeer(peerID peer.ID, topic *pubsubManager.Topic, re
 			"requestID": id,
 			"peerId":    peerID,
 		}).Warn("Peer did not respond in time")
-		p.peerManager.MarkUnresponsivePeer(peerID, topic)
+		p.peerManager.AdjustPeerQuality(peerID, topic.String(), p2p.QualityAdjOnTimeout)
 		return nil, errors.New("peer did not respond in time")
 	}
 
 	if recvdType == nil {
+		p.peerManager.AdjustPeerQuality(peerID, topic.String(), p2p.QualityAdjOnNack)
 		return nil, nil
+	} else {
+		p.peerManager.AdjustPeerQuality(peerID, topic.String(), p2p.QualityAdjOnResponse)
 	}
 
 	// Check the received data type & hash matches the request
 	switch respDataType.(type) {
 	// First, check that the recvdType is the same as the expected type
-	case *types.WorkObjectBlockView, *types.WorkObjectHeaderView:
+	case *types.WorkObjectBlockView, *types.WorkObjectHeaderView, []*types.WorkObjectBlockView:
 		switch reqData := reqData.(type) {
 		case common.Hash:
 			// Next, if it was a requestByHash, verify the hash matches
@@ -114,27 +124,17 @@ func (p *P2PNode) requestFromPeer(peerID peer.ID, topic *pubsubManager.Topic, re
 				if block.Number(nodeCtx).Cmp(reqData) == 0 {
 					return recvdType, nil
 				}
+			case []*types.WorkObjectBlockView:
+				return recvdType, nil
 			default:
 				return nil, errors.New("invalid response")
 			}
 			return nil, errors.Errorf("invalid response: got block with different number")
 		}
 		return nil, errors.New("block request invalid response")
-	case *types.Header:
-		if header, ok := recvdType.(*types.Header); ok && header.Hash() == reqData.(common.Hash) {
-			return header, nil
-		}
-	case *types.Transaction:
-		if tx, ok := recvdType.(*types.Transaction); ok && tx.Hash() == reqData.(common.Hash) {
-			return tx, nil
-		}
 	case common.Hash:
 		if hash, ok := recvdType.(common.Hash); ok {
 			return hash, nil
-		}
-	case *trie.TrieNodeRequest:
-		if trieNode, ok := recvdType.(*trie.TrieNodeResponse); ok {
-			return trieNode, nil
 		}
 	default:
 		log.Global.Warn("peer returned unexpected type")

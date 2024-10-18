@@ -39,23 +39,10 @@ To bootstrap to a private node, use the --bootstrap flag.`,
 func init() {
 	rootCmd.AddCommand(startCmd)
 
-	// Create and bind all node flags to the start command
-	for _, flag := range utils.NodeFlags {
-		utils.CreateAndBindFlag(flag, startCmd)
-	}
-
-	for _, flag := range utils.TXPoolFlags {
-		utils.CreateAndBindFlag(flag, startCmd)
-	}
-
-	// Create and bind all rpc flags to the start command
-	for _, flag := range utils.RPCFlags {
-		utils.CreateAndBindFlag(flag, startCmd)
-	}
-
-	// Create and bind all metrics flags to the start command
-	for _, flag := range utils.MetricsFlags {
-		utils.CreateAndBindFlag(flag, startCmd)
+	for _, flagGroup := range utils.Flags {
+		for _, flag := range flagGroup {
+			utils.CreateAndBindFlag(flag, startCmd)
+		}
 	}
 }
 
@@ -94,13 +81,10 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	logLevel := viper.GetString(utils.NodeLogLevelFlag.Name)
 
-	var startingExpansionNumber uint64
-	if viper.IsSet(utils.StartingExpansionNumberFlag.Name) {
-		startingExpansionNumber = viper.GetUint64(utils.StartingExpansionNumberFlag.Name)
-	}
+	startingExpansionNumber := viper.GetUint64(utils.StartingExpansionNumberFlag.Name)
 	// Start the  hierarchical co-ordinator
 	var nodeWg sync.WaitGroup
-	hc := utils.NewHierarchicalCoordinator(node, logLevel, &nodeWg, startingExpansionNumber, quitCh)
+	hc := utils.NewHierarchicalCoordinator(node, logLevel, &nodeWg, startingExpansionNumber)
 	err = hc.StartHierarchicalCoordinator()
 	if err != nil {
 		log.Global.WithField("error", err).Fatal("error starting hierarchical coordinator")

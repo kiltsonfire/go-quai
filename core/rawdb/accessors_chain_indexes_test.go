@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"math/big"
 	"testing"
 
 	"github.com/dominant-strategies/go-quai/common"
@@ -29,6 +30,7 @@ func TestTxLookupStorage(t *testing.T) {
 	tx1 := createTransaction(1)
 	tx2 := createTransaction(2)
 	block := createBlockWithTransactions(types.Transactions{tx1, tx2})
+	block.SetNumber(big.NewInt(1), common.ZONE_CTX)
 
 	WriteTxLookupEntriesByBlock(db, block, common.ZONE_CTX)
 
@@ -76,7 +78,7 @@ func TestTxLookupStorage(t *testing.T) {
 	v3Number := uint64(4)
 	v3entry, err := proto.Marshal(&ProtoLegacyTxLookupEntry{BlockIndex: v3Number, Hash: v3ProtoHash})
 	if err != nil {
-		t.Fatal("Failed to marshal ProtoLegacyTxLookupEntry")
+		t.Fatalf("Failed to marshal ProtoLegacyTxLookupEntry, err %s", err)
 	}
 	writeTxLookupEntry(db, v3Hash, v3entry)
 
@@ -90,6 +92,7 @@ func TestReadTransaction(t *testing.T) {
 	db := NewMemoryDatabase(log.Global)
 	tx := createTransaction(1)
 	block := createBlockWithTransactions(types.Transactions{tx})
+	block.SetNumber(big.NewInt(1), common.ZONE_CTX)
 
 	testNilReadTransaction(t, db, tx.Hash())
 

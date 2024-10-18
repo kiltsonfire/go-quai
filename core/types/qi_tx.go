@@ -10,8 +10,8 @@ import (
 
 type QiTx struct {
 	ChainID *big.Int // replay protection
-	TxIn    TxIns
-	TxOut   TxOuts
+	TxIn    TxIns    `json:"txIns"`
+	TxOut   TxOuts   `json:"txOuts"`
 
 	Signature *schnorr.Signature
 
@@ -105,8 +105,7 @@ func (tx *QiTx) workNonce() *BlockNonce                  { return tx.WorkNonce }
 func (tx *QiTx) accessList() AccessList                  { panic("Qi TX does not have accessList") }
 func (tx *QiTx) data() []byte                            { panic("Qi TX does not have data") }
 func (tx *QiTx) gas() uint64                             { panic("Qi TX does not have gas") }
-func (tx *QiTx) gasFeeCap() *big.Int                     { panic("Qi TX does not have gasFeeCap") }
-func (tx *QiTx) gasTipCap() *big.Int                     { panic("Qi TX does not have gasTipCap") }
+func (tx *QiTx) minerTip() *big.Int                      { panic("Qi TX does not have minerTip") }
 func (tx *QiTx) gasPrice() *big.Int                      { panic("Qi TX does not have gasPrice") }
 func (tx *QiTx) value() *big.Int                         { panic("Qi TX does not have value") }
 func (tx *QiTx) nonce() uint64                           { panic("Qi TX does not have nonce") }
@@ -118,6 +117,7 @@ func (tx *QiTx) etxIndex() uint16 { panic("Qi TX does not have etxIndex") }
 func (tx *QiTx) etxSender() common.Address {
 	panic("Qi TX does not have etxSender")
 }
+func (tx *QiTx) etxType() uint64 { panic("Qi TX does not have etxType") }
 
 func (tx *QiTx) getEcdsaSignatureValues() (v, r, s *big.Int) {
 	panic("Qi TX does not have ECDSA signature values")
@@ -132,11 +132,11 @@ func (tx *QiTx) isCoinbase() bool {
 }
 
 // CalculateQiTxGas calculates the total amount of gas a Qi tx uses (for fee calculation)
-func CalculateQiTxGas(transaction *Transaction, location common.Location) uint64 {
+func CalculateQiTxGas(transaction *Transaction, qiScalingFactor float64, location common.Location) uint64 {
 	if transaction.Type() != QiTxType {
 		panic("CalculateQiTxGas called on a transaction that is not a Qi transaction")
 	}
-	txGas := CalculateIntrinsicQiTxGas(transaction)
+	txGas := CalculateIntrinsicQiTxGas(transaction, qiScalingFactor)
 	for _, output := range transaction.TxOut() {
 		toAddr := common.AddressBytes(output.Address)
 		if !location.Equal(*toAddr.Location()) {
@@ -144,18 +144,18 @@ func CalculateQiTxGas(transaction *Transaction, location common.Location) uint64
 			txGas += params.ETXGas + params.TxGas
 		} else if location.Equal(*toAddr.Location()) && toAddr.IsInQuaiLedgerScope() {
 			// This output creates a conversion
-			txGas += params.ETXGas + params.TxGas + params.ColdSloadCost + params.ColdSloadCost + params.SstoreSetGas + params.SstoreSetGas
+			txGas += params.ETXGas + params.TxGas + params.ColdSloadCost(common.Big1, big.NewInt(0)) + params.ColdSloadCost(common.Big1, big.NewInt(0)) + params.SstoreSetGas(common.Big1, big.NewInt(0)) + params.SstoreSetGas(common.Big1, big.NewInt(0))
 		}
 	}
 	return txGas
 }
 
 // CalculateBlockQiTxGas calculates the amount of gas a Qi tx uses in a block (for block gas limit calculation)
-func CalculateBlockQiTxGas(transaction *Transaction, location common.Location) uint64 {
+func CalculateBlockQiTxGas(transaction *Transaction, qiScalingFactor float64, location common.Location) uint64 {
 	if transaction.Type() != QiTxType {
 		panic("CalculateQiTxGas called on a transaction that is not a Qi transaction")
 	}
-	txGas := CalculateIntrinsicQiTxGas(transaction)
+	txGas := CalculateIntrinsicQiTxGas(transaction, qiScalingFactor)
 	for _, output := range transaction.TxOut() {
 		toAddr := common.AddressBytes(output.Address)
 		if !location.Equal(*toAddr.Location()) {
@@ -170,13 +170,18 @@ func CalculateBlockQiTxGas(transaction *Transaction, location common.Location) u
 }
 
 // CalculateIntrinsicQiTxGas calculates the intrinsic gas for a Qi tx without ETXs
-func CalculateIntrinsicQiTxGas(transaction *Transaction) uint64 {
+func CalculateIntrinsicQiTxGas(transaction *Transaction, scalingFactor float64) uint64 {
 	if transaction.Type() != QiTxType {
 		panic("CalculateIntrinsicQiTxGas called on a transaction that is not a Qi transaction")
 	}
-	return uint64(len(transaction.TxIn()))*params.SloadGas + uint64(len(transaction.TxOut()))*params.CallValueTransferGas + params.EcrecoverGas
+	baseRate := uint64(len(transaction.TxIn()))*params.SloadGas + uint64(len(transaction.TxOut()))*params.CallValueTransferGas + params.EcrecoverGas
+	return params.CalculateQiGasWithUTXOSetSizeScalingFactor(scalingFactor, baseRate)
 }
 
 func (tx *QiTx) setTo(to common.Address) {
 	panic("Cannot set To on a Qi transaction")
+}
+
+func (tx *QiTx) setValue(value *big.Int) {
+	panic("quai TX does not have set value method")
 }

@@ -30,9 +30,10 @@ import (
 	"github.com/dominant-strategies/go-quai/common/hexutil"
 	"github.com/dominant-strategies/go-quai/common/prque"
 	"github.com/dominant-strategies/go-quai/consensus"
-	"github.com/dominant-strategies/go-quai/consensus/misc"
+	"github.com/dominant-strategies/go-quai/core/rawdb"
 	"github.com/dominant-strategies/go-quai/core/state"
 	"github.com/dominant-strategies/go-quai/core/types"
+	"github.com/dominant-strategies/go-quai/ethdb"
 	"github.com/dominant-strategies/go-quai/event"
 	"github.com/dominant-strategies/go-quai/log"
 	"github.com/dominant-strategies/go-quai/metrics_config"
@@ -101,8 +102,10 @@ var (
 )
 
 var (
-	evictionInterval    = time.Minute     // Time interval to check for evictable transactions
-	statsReportInterval = 1 * time.Minute // Time interval to report transaction pool stats
+	evictionInterval          = time.Minute      // Time interval to check for evictable transactions
+	statsReportInterval       = 1 * time.Minute  // Time interval to report transaction pool stats
+	qiExpirationCheckInterval = 10 * time.Minute // Time interval to check for expired Qi transactions
+	qiExpirationCheckDivisor  = 5                // Check 1/nth of the pool for expired Qi transactions every interval
 )
 
 var (
@@ -154,7 +157,7 @@ const (
 type blockChain interface {
 	CurrentBlock() *types.WorkObject
 	GetBlock(hash common.Hash, number uint64) *types.WorkObject
-	StateAt(root, utxoRoot, etxRoot common.Hash) (*state.StateDB, error)
+	StateAt(root, etxRoot common.Hash, quaiStateSize *big.Int) (*state.StateDB, error)
 	SubscribeChainHeadEvent(ch chan<- ChainHeadEvent) event.Subscription
 	IsGenesisHash(hash common.Hash) bool
 	CheckIfEtxIsEligible(hash common.Hash, location common.Location) bool
@@ -164,6 +167,9 @@ type blockChain interface {
 	GetHeaderByHash(common.Hash) *types.WorkObject
 	GetBlockByHash(common.Hash) *types.WorkObject
 	GetMaxTxInWorkShare() uint64
+	CheckInCalcOrderCache(common.Hash) (*big.Int, int, bool)
+	AddToCalcOrderCache(common.Hash, int, *big.Int)
+	CalcMinBaseFee(block *types.WorkObject) *big.Int
 }
 
 // TxPoolConfig are the configuration parameters of the transaction pool.
@@ -184,6 +190,7 @@ type TxPoolConfig struct {
 	AccountQueue    uint64        // Maximum number of non-executable transaction slots permitted per account
 	GlobalQueue     uint64        // Maximum number of non-executable transaction slots for all accounts
 	QiPoolSize      uint64        // Maximum number of Qi transactions to store
+	QiTxLifetime    time.Duration // Maximum amount of time Qi transactions are queued
 	Lifetime        time.Duration // Maximum amount of time non-executable transaction are queued
 	ReorgFrequency  time.Duration // Frequency of reorgs outside of new head events
 }
@@ -205,6 +212,7 @@ var DefaultTxPoolConfig = TxPoolConfig{
 	AccountQueue:    3,
 	GlobalQueue:     20048,
 	QiPoolSize:      10024,
+	QiTxLifetime:    30 * time.Minute,
 	Lifetime:        3 * time.Hour,
 	ReorgFrequency:  1 * time.Second,
 }
@@ -269,6 +277,13 @@ func (config *TxPoolConfig) sanitize(logger *log.Logger) TxPoolConfig {
 		}).Warn("Sanitizing invalid txpool Qi pool size")
 		conf.QiPoolSize = DefaultTxPoolConfig.QiPoolSize
 	}
+	if conf.QiTxLifetime < time.Second {
+		logger.WithFields(log.Fields{
+			"provided": conf.QiTxLifetime,
+			"updated":  DefaultTxPoolConfig.QiTxLifetime,
+		}).Warn("Sanitizing invalid txpool Qi transaction lifetime")
+		conf.QiTxLifetime = DefaultTxPoolConfig.QiTxLifetime
+	}
 	if conf.Lifetime < 1 {
 		logger.WithFields(log.Fields{
 			"provided": conf.Lifetime,
@@ -302,13 +317,15 @@ type TxPool struct {
 	signer      types.Signer
 	mu          sync.RWMutex
 
-	currentState  *state.StateDB // Current state in the blockchain head
-	pendingNonces *txNoncer      // Pending state tracking virtual nonces
-	currentMaxGas uint64         // Current gas limit for transaction caps
+	currentState       *state.StateDB // Current state in the blockchain head
+	qiGasScalingFactor float64
+	db                 ethdb.Reader
+	pendingNonces      *txNoncer // Pending state tracking virtual nonces
+	currentMaxGas      uint64    // Current gas limit for transaction caps
 
 	locals         *accountSet                                     // Set of local transaction to exempt from eviction rules
 	journal        *txJournal                                      // Journal of local transaction to back up to disk
-	qiPool         map[common.Hash]*types.TxWithMinerFee           // Qi pool to store Qi transactions
+	qiPool         *lru.Cache[common.Hash, *types.TxWithMinerFee]  // Qi pool to store Qi transactions
 	qiTxFees       *lru.Cache[[16]byte, *big.Int]                  // Recent Qi transaction fees (hash is truncated to 16 bytes to save space)
 	pending        map[common.InternalAddress]*txList              // All currently processable transactions
 	queue          map[common.InternalAddress]*txList              // Queued but non-processable transactions
@@ -356,7 +373,7 @@ type newFee struct {
 
 // NewTxPool creates a new transaction pool to gather, sort and filter inbound
 // transactions from the network.
-func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, chain blockChain, logger *log.Logger) *TxPool {
+func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, chain blockChain, logger *log.Logger, db ethdb.Reader) *TxPool {
 	// Pending pool metrics
 	pendingDiscardMeter.Set(0)
 	pendingReplaceMeter.Set(0)
@@ -391,7 +408,6 @@ func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, chain block
 		chain:           chain,
 		signer:          types.LatestSigner(chainconfig),
 		pending:         make(map[common.InternalAddress]*txList),
-		qiPool:          make(map[common.Hash]*types.TxWithMinerFee),
 		queue:           make(map[common.InternalAddress]*txList),
 		beats:           make(map[common.InternalAddress]time.Time),
 		sendersCh:       make(chan newSender, config.SendersChBuffer),
@@ -399,21 +415,32 @@ func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, chain block
 		invalidQiTxsCh:  make(chan []*common.Hash, config.SendersChBuffer),
 		all:             newTxLookup(),
 		chainHeadCh:     make(chan ChainHeadEvent, chainHeadChanSize),
-		reqResetCh:      make(chan *txpoolResetRequest),
-		reqPromoteCh:    make(chan *accountSet),
-		queueTxEventCh:  make(chan *types.Transaction),
+		reqResetCh:      make(chan *txpoolResetRequest, chainHeadChanSize),
+		reqPromoteCh:    make(chan *accountSet, chainHeadChanSize),
+		queueTxEventCh:  make(chan *types.Transaction, chainHeadChanSize),
 		broadcastSet:    make(types.Transactions, 0),
-		reorgDoneCh:     make(chan chan struct{}),
+		reorgDoneCh:     make(chan chan struct{}, chainHeadChanSize),
 		reorgShutdownCh: make(chan struct{}),
 		gasPrice:        new(big.Int).SetUint64(config.PriceLimit),
 		localTxsCount:   0,
 		remoteTxsCount:  0,
 		reOrgCounter:    0,
 		logger:          logger,
+		db:              db,
 	}
-	pool.senders, _ = lru.New[common.Hash, common.InternalAddress](int(config.MaxSenders))
-	pool.qiTxFees, _ = lru.New[[16]byte, *big.Int](int(config.MaxFeesCached))
-	pool.broadcastSetCache, _ = lru.New[common.Hash, types.Transactions](c_broadcastSetCacheSize)
+
+	qiPool, _ := lru.New[common.Hash, *types.TxWithMinerFee](int(config.QiPoolSize))
+	pool.qiPool = qiPool
+
+	senders, _ := lru.New[common.Hash, common.InternalAddress](int(config.MaxSenders))
+	pool.senders = senders
+
+	qiTxFees, _ := lru.New[[16]byte, *big.Int](int(config.MaxFeesCached))
+	pool.qiTxFees = qiTxFees
+
+	broadcastSetCache, _ := lru.New[common.Hash, types.Transactions](c_broadcastSetCacheSize)
+	pool.broadcastSetCache = broadcastSetCache
+
 	pool.locals = newAccountSet(pool.signer)
 	for _, addr := range config.Locals {
 		logger.WithField("address", addr).Debug("Setting new local account")
@@ -448,6 +475,7 @@ func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, chain block
 	go pool.poolLimiterGoroutine()
 	go pool.feesGoroutine()
 	go pool.invalidQiTxGoroutine()
+	go pool.qiTxExpirationGoroutine()
 	return pool
 }
 
@@ -455,7 +483,6 @@ func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, chain block
 // outside blockchain events as well as for various reporting and transaction
 // eviction events.
 func (pool *TxPool) loop() {
-	defer pool.wg.Done()
 	defer func() {
 		if r := recover(); r != nil {
 			pool.logger.WithFields(log.Fields{
@@ -464,6 +491,7 @@ func (pool *TxPool) loop() {
 			}).Error("Go-Quai Panicked")
 		}
 	}()
+	defer pool.wg.Done()
 
 	var (
 		// Start the stats reporting and transaction eviction tickers
@@ -582,6 +610,20 @@ func (pool *TxPool) SetGasPrice(price *big.Int) {
 	pool.logger.WithField("price", price).Info("Transaction pool price threshold updated")
 }
 
+func (pool *TxPool) GetMinGasPrice() *big.Int {
+	currentHeader := pool.chain.CurrentBlock()
+	if currentHeader == nil {
+		return big.NewInt(0)
+	}
+	baseFeeMin := pool.chain.CalcMinBaseFee(currentHeader)
+
+	// Increase this estimate by ~10% so that we account for the difficulty adjustment
+	baseFeeMin = new(big.Int).Mul(baseFeeMin, big.NewInt(100))
+	baseFeeMin = new(big.Int).Div(baseFeeMin, big.NewInt(90))
+
+	return baseFeeMin
+}
+
 // Nonce returns the next nonce of an account, with all transactions executable
 // by the pool already applied on top.
 func (pool *TxPool) Nonce(addr common.InternalAddress) uint64 {
@@ -611,7 +653,7 @@ func (pool *TxPool) stats() (int, int, int) {
 	for _, list := range pool.queue {
 		queued += list.Len()
 	}
-	return pending, queued, len(pool.qiPool)
+	return pending, queued, pool.qiPool.Len()
 }
 
 // Content retrieves the data content of the transaction pool, returning all the
@@ -648,15 +690,10 @@ func (pool *TxPool) ContentFrom(addr common.InternalAddress) (types.Transactions
 	return pending, queued
 }
 
-func (pool *TxPool) QiPoolPending() map[common.Hash]*types.TxWithMinerFee {
+func (pool *TxPool) QiPoolPending() []*types.TxWithMinerFee {
 	pool.mu.RLock()
 	defer pool.mu.RUnlock()
-	// Return a copy of the pool because it is not safe to access the pool pointer directly
-	qiTxs := make(map[common.Hash]*types.TxWithMinerFee)
-	for hash, qiTx := range pool.qiPool {
-		qiTxs[hash] = qiTx
-	}
-	return qiTxs
+	return pool.qiPool.Values()
 }
 
 func (pool *TxPool) GetTxsFromBroadcastSet(hash common.Hash) (types.Transactions, error) {
@@ -682,19 +719,19 @@ func (pool *TxPool) TxPoolPending(enforceTips bool) (map[common.AddressBytes]typ
 	for addr, list := range pool.pending {
 		txs := list.Flatten()
 
-		// If the miner requests tip enforcement, cap the lists now
-		if enforceTips && !pool.locals.contains(addr) {
-			for i, tx := range txs {
-				if tx.EffectiveGasTipIntCmp(pool.gasPrice, pool.priced.urgent.baseFee) < 0 {
-					pool.logger.WithFields(log.Fields{
-						"tx":           tx.Hash().String(),
-						"gasTipCap":    tx.GasTipCap().String(),
-						"poolGasPrice": pool.gasPrice.String(),
-						"baseFee":      pool.priced.urgent.baseFee.String(),
-					}).Debug("TX has incorrect or low miner tip")
-					txs = txs[:i]
-					break
-				}
+		for i, tx := range txs {
+			// make sure that the tx has atleast min base fee as the gas
+			// price
+			currentBlock := pool.chain.CurrentBlock()
+			minBaseFee := pool.chain.CalcMinBaseFee(currentBlock)
+			if minBaseFee.Cmp(tx.GasPrice()) > 0 {
+				pool.logger.WithFields(log.Fields{
+					"tx":         tx.Hash().String(),
+					"gasPrice":   tx.GasPrice().String(),
+					"minBaseFee": minBaseFee.String(),
+				}).Debug("TX has incorrect or low gas price")
+				txs = txs[:i]
+				break
 			}
 		}
 		if len(txs) > 0 {
@@ -745,15 +782,11 @@ func (pool *TxPool) validateTx(tx *types.Transaction) error {
 		return ErrGasLimit(tx.Gas(), pool.currentMaxGas)
 	}
 	// Sanity check for extremely large numbers
-	if tx.GasFeeCap().BitLen() > 256 {
+	if tx.GasPrice().BitLen() > 256 {
 		return ErrFeeCapVeryHigh
 	}
-	if tx.GasTipCap().BitLen() > 256 {
+	if tx.MinerTip().BitLen() > 256 {
 		return ErrTipVeryHigh
-	}
-	// Ensure gasFeeCap is greater than or equal to gasTipCap.
-	if tx.GasFeeCapIntCmp(tx.GasTipCap()) < 0 {
-		return ErrTipAboveFeeCap
 	}
 	var internal common.InternalAddress
 	addToCache := true
@@ -770,6 +803,7 @@ func (pool *TxPool) validateTx(tx *types.Transaction) error {
 		// Make sure the transaction is signed properly.
 		from, err := types.Sender(pool.signer, tx)
 		if err != nil {
+			pool.logger.WithField("err", err).Error("Error calculating the Sender in validateTx")
 			return ErrInvalidSender
 		}
 		internal, err = from.InternalAndQuaiAddress()
@@ -777,9 +811,19 @@ func (pool *TxPool) validateTx(tx *types.Transaction) error {
 			return err
 		}
 	}
+	currentBlock := pool.chain.CurrentBlock()
+	minBaseFee := pool.chain.CalcMinBaseFee(currentBlock)
+	if minBaseFee.Cmp(tx.GasPrice()) > 0 {
+		pool.logger.WithFields(log.Fields{
+			"tx":         tx.Hash().String(),
+			"gasPrice":   tx.GasPrice().String(),
+			"minBaseFee": minBaseFee.String(),
+		}).Debug("TX has incorrect or low gas price")
+		return fmt.Errorf("tx has incorrect or low gas price, have %s, want %s", tx.GasPrice().String(), minBaseFee.String())
+	}
 
 	// Drop non-local transactions under our own minimal accepted gas price or tip
-	if tx.GasTipCapIntCmp(pool.gasPrice) < 0 {
+	if tx.CompareFee(pool.gasPrice) < 0 {
 		return ErrUnderpriced
 	}
 	// Ensure the transaction adheres to nonce ordering
@@ -848,9 +892,9 @@ func (pool *TxPool) add(tx *types.Transaction, local bool) (replaced bool, err e
 		// If the new transaction is underpriced, don't accept it
 		if pool.priced.Underpriced(tx) {
 			pool.logger.WithFields(log.Fields{
-				"hash":      hash,
-				"gasTipCap": tx.GasTipCap(),
-				"gasFeeCap": tx.GasFeeCap(),
+				"hash":     hash,
+				"gasPrice": tx.GasPrice(),
+				"minerTip": tx.MinerTip(),
 			}).Trace("Discarding underpriced transaction")
 			underpricedTxMeter.Add(1)
 			return false, ErrUnderpriced
@@ -869,9 +913,9 @@ func (pool *TxPool) add(tx *types.Transaction, local bool) (replaced bool, err e
 		// Kick out the underpriced remote transactions.
 		for _, tx := range drop {
 			pool.logger.WithFields(log.Fields{
-				"hash":      tx.Hash(),
-				"gasTipCap": tx.GasTipCap(),
-				"gasFeeCap": tx.GasFeeCap(),
+				"hash":     tx.Hash(),
+				"gasPrice": tx.GasPrice(),
+				"minerTip": tx.MinerTip(),
 			}).Trace("Discarding freshly underpriced transaction")
 			pendingDiscardMeter.Add(1)
 			pool.removeTx(tx.Hash(), false)
@@ -1110,7 +1154,7 @@ func (pool *TxPool) addTxs(txs []*types.Transaction, local, sync bool) []error {
 			continue
 		}
 		if tx.Type() == types.QiTxType {
-			if _, hasTx := pool.qiPool[tx.Hash()]; hasTx {
+			if _, hasTx := pool.qiPool.Get(tx.Hash()); hasTx {
 				errs[i] = ErrAlreadyKnown
 				continue
 			}
@@ -1151,9 +1195,7 @@ func (pool *TxPool) addTxs(txs []*types.Transaction, local, sync bool) []error {
 		// Accumulate all unknown transactions for deeper processing
 		news = append(news, tx)
 	}
-	if len(qiNews) > 0 && uint64(len(pool.qiPool)+1) > pool.config.QiPoolSize {
-		errs[0] = ErrTxPoolOverflow
-	} else if len(qiNews) > 0 {
+	if len(qiNews) > 0 {
 		qiErrs := pool.addQiTxs(qiNews)
 		var nilSlot = 0
 		for _, err := range qiErrs {
@@ -1203,7 +1245,7 @@ func (pool *TxPool) addQiTxs(txs types.Transactions) []error {
 	transactionsWithoutErrors := make([]*types.TxWithMinerFee, 0, len(txs))
 	for _, tx := range txs {
 
-		totalQitIn, err := ValidateQiTxInputs(tx, pool.chain, pool.currentState, currentBlock, pool.signer, pool.chainconfig.Location, *pool.chainconfig.ChainID)
+		totalQitIn, err := ValidateQiTxInputs(tx, pool.chain, pool.db, currentBlock, pool.signer, pool.chainconfig.Location, *pool.chainconfig.ChainID)
 		if err != nil {
 			pool.logger.WithFields(logrus.Fields{
 				"tx":  tx.Hash().String(),
@@ -1212,7 +1254,7 @@ func (pool *TxPool) addQiTxs(txs types.Transactions) []error {
 			errs = append(errs, err)
 			continue
 		}
-		fee, err := ValidateQiTxOutputsAndSignature(tx, pool.chain, totalQitIn, currentBlock, pool.signer, pool.chainconfig.Location, *pool.chainconfig.ChainID, etxRLimit, etxPLimit)
+		txFee, err := ValidateQiTxOutputsAndSignature(tx, pool.chain, totalQitIn, currentBlock, pool.signer, pool.chainconfig.Location, *pool.chainconfig.ChainID, pool.qiGasScalingFactor, etxRLimit, etxPLimit)
 		if err != nil {
 			pool.logger.WithFields(logrus.Fields{
 				"tx":  tx.Hash().String(),
@@ -1221,7 +1263,7 @@ func (pool *TxPool) addQiTxs(txs types.Transactions) []error {
 			errs = append(errs, err)
 			continue
 		}
-		txWithMinerFee, err := types.NewTxWithMinerFee(tx, nil, fee)
+		txWithMinerFee, err := types.NewTxWithMinerFee(tx, txFee, time.Now())
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -1231,18 +1273,7 @@ func (pool *TxPool) addQiTxs(txs types.Transactions) []error {
 	for _, txWithFee := range transactionsWithoutErrors {
 
 		txHash := txWithFee.Tx().Hash()
-		if uint64(len(pool.qiPool))+1 > pool.config.QiPoolSize {
-			// If the pool is full, don't accept the transaction (and any others)
-			errs = append(errs, ErrTxPoolOverflow)
-			if txPoolFullErrs%1000 == 0 {
-				pool.logger.WithFields(logrus.Fields{
-					"tx": txHash.String(),
-				}).Error("Qi tx pool is full")
-			}
-			txPoolFullErrs++
-			break
-		}
-		pool.qiPool[txHash] = txWithFee
+		pool.qiPool.Add(txHash, txWithFee)
 		pool.queueTxEvent(txWithFee.Tx())
 		select {
 		case pool.sendersCh <- newSender{txHash, common.InternalAddress{}}: // There is no "sender" for Qi transactions, but the sig is good
@@ -1266,9 +1297,10 @@ func (pool *TxPool) addQiTxs(txs types.Transactions) []error {
 func (pool *TxPool) addQiTxsWithoutValidationLocked(txs types.Transactions) {
 	for _, tx := range txs {
 		hash := tx.Hash()
-		if _, exists := pool.qiPool[hash]; exists {
+		if _, exists := pool.qiPool.Get(hash); exists {
 			continue
 		}
+		currentBlock := pool.chain.CurrentBlock()
 		hash16 := [16]byte(hash[:])
 		fee, exists := pool.qiTxFees.Get(hash16)
 		if fee == nil || !exists { // this should almost never happen
@@ -1278,7 +1310,6 @@ func (pool *TxPool) addQiTxsWithoutValidationLocked(txs types.Transactions) {
 			} else {
 				pool.logger.Debugf("Fee is nil or doesn't exist in cache for tx %s", tx.Hash().String())
 			}
-			currentBlock := pool.chain.CurrentBlock()
 			etxRLimit := len(currentBlock.Transactions()) / params.ETXRegionMaxFraction
 			if etxRLimit < params.ETXRLimitMin {
 				etxRLimit = params.ETXRLimitMin
@@ -1287,7 +1318,7 @@ func (pool *TxPool) addQiTxsWithoutValidationLocked(txs types.Transactions) {
 			if etxPLimit < params.ETXPLimitMin {
 				etxPLimit = params.ETXPLimitMin
 			}
-			totalQitIn, err := ValidateQiTxInputs(tx, pool.chain, pool.currentState, currentBlock, pool.signer, pool.chainconfig.Location, *pool.chainconfig.ChainID)
+			totalQitIn, err := ValidateQiTxInputs(tx, pool.chain, pool.db, currentBlock, pool.signer, pool.chainconfig.Location, *pool.chainconfig.ChainID)
 			if err != nil {
 				pool.logger.WithFields(logrus.Fields{
 					"tx":  tx.Hash().String(),
@@ -1295,7 +1326,7 @@ func (pool *TxPool) addQiTxsWithoutValidationLocked(txs types.Transactions) {
 				}).Debug("Invalid Qi transaction, skipping re-inject")
 				continue
 			}
-			fee, err = ValidateQiTxOutputsAndSignature(tx, pool.chain, totalQitIn, currentBlock, pool.signer, pool.chainconfig.Location, *pool.chainconfig.ChainID, etxRLimit, etxPLimit)
+			fee, err = ValidateQiTxOutputsAndSignature(tx, pool.chain, totalQitIn, currentBlock, pool.signer, pool.chainconfig.Location, *pool.chainconfig.ChainID, pool.qiGasScalingFactor, etxRLimit, etxPLimit)
 			if err != nil {
 				pool.logger.WithFields(logrus.Fields{
 					"tx":  tx.Hash().String(),
@@ -1309,12 +1340,12 @@ func (pool *TxPool) addQiTxsWithoutValidationLocked(txs types.Transactions) {
 				pool.logger.Error("feesCh is full, skipping until there is room")
 			}
 		}
-		txWithMinerFee, err := types.NewTxWithMinerFee(tx, nil, fee)
+		txWithMinerFee, err := types.NewTxWithMinerFee(tx, fee, time.Now())
 		if err != nil {
 			pool.logger.Error("Error creating txWithMinerFee: " + err.Error())
 			continue
 		}
-		pool.qiPool[tx.Hash()] = txWithMinerFee
+		pool.qiPool.Add(tx.Hash(), txWithMinerFee)
 		select {
 		case pool.sendersCh <- newSender{tx.Hash(), common.InternalAddress{}}: // There is no "sender" for Qi transactions, but the sig is good
 		default:
@@ -1332,8 +1363,8 @@ func (pool *TxPool) RemoveQiTxs(txs []*common.Hash) {
 	txsRemoved := 0
 	pool.mu.Lock()
 	for _, tx := range txs {
-		if _, exists := pool.qiPool[*tx]; exists {
-			delete(pool.qiPool, *tx)
+		if _, exists := pool.qiPool.Get(*tx); exists {
+			pool.qiPool.Remove(*tx)
 			txsRemoved++
 		}
 	}
@@ -1345,8 +1376,8 @@ func (pool *TxPool) RemoveQiTxs(txs []*common.Hash) {
 func (pool *TxPool) removeQiTxsLocked(txs []*types.Transaction) {
 	txsRemoved := 0
 	for _, tx := range txs {
-		if _, exists := pool.qiPool[tx.Hash()]; exists {
-			delete(pool.qiPool, tx.Hash())
+		if _, exists := pool.qiPool.Get(tx.Hash()); exists {
+			pool.qiPool.Remove(tx.Hash())
 			txsRemoved++
 		}
 	}
@@ -1391,10 +1422,12 @@ func (pool *TxPool) Status(hashes []common.Hash) []TxStatus {
 		}
 		from, err := types.Sender(pool.signer, tx) // already validated
 		if err != nil {
+			pool.logger.WithField("err", err).Error("Error calculating sender in txpool Status")
 			continue
 		}
 		internal, err := from.InternalAndQuaiAddress()
 		if err != nil {
+			pool.logger.WithField("err", err).Error("Error calculating internal address in txpool Status")
 			continue
 		}
 		pool.mu.RLock()
@@ -1431,10 +1464,12 @@ func (pool *TxPool) removeTx(hash common.Hash, outofbound bool) {
 	}
 	addr, err := types.Sender(pool.signer, tx) // already validated during insertion
 	if err != nil {
+		pool.logger.WithField("err", err).Error("Error calculating Sender in removeTx")
 		return
 	}
 	internal, err := addr.InternalAndQuaiAddress()
 	if err != nil {
+		pool.logger.WithField("err", err).Error("Error calculating InternalAddress in removeTx")
 		return
 	}
 	// Remove it from the list of known transactions
@@ -1511,7 +1546,6 @@ func (pool *TxPool) queueTxEvent(tx *types.Transaction) {
 // call those methods directly, but request them being run using requestReset and
 // requestPromoteExecutables instead.
 func (pool *TxPool) scheduleReorgLoop() {
-	defer pool.wg.Done()
 	defer func() {
 		if r := recover(); r != nil {
 			pool.logger.WithFields(log.Fields{
@@ -1520,6 +1554,8 @@ func (pool *TxPool) scheduleReorgLoop() {
 			}).Error("Go-Quai Panicked")
 		}
 	}()
+	defer pool.wg.Done()
+
 	var (
 		curDone        chan struct{} // non-nil while runReorg is active
 		nextDone       = make(chan struct{})
@@ -1580,6 +1616,7 @@ func (pool *TxPool) scheduleReorgLoop() {
 			} else {
 				addr, err := types.Sender(pool.signer, tx)
 				if err != nil {
+					pool.logger.WithField("err", err).Error("Error calculating the sender in scheduleReorgLoop")
 					continue
 				}
 				internal, err := addr.InternalAndQuaiAddress()
@@ -1609,7 +1646,6 @@ func (pool *TxPool) scheduleReorgLoop() {
 
 // runReorg runs reset and promoteExecutables on behalf of scheduleReorgLoop.
 func (pool *TxPool) runReorg(done chan struct{}, cancel chan struct{}, reset *txpoolResetRequest, dirtyAccounts *accountSet, events map[common.InternalAddress]*txSortedMap, queuedQiTxs []*types.Transaction) {
-	defer close(done)
 	defer func() {
 		if r := recover(); r != nil {
 			pool.logger.WithFields(log.Fields{
@@ -1618,6 +1654,7 @@ func (pool *TxPool) runReorg(done chan struct{}, cancel chan struct{}, reset *tx
 			}).Error("Go-Quai Panicked")
 		}
 	}()
+	defer close(done)
 
 	for {
 		select {
@@ -1664,7 +1701,7 @@ func (pool *TxPool) runReorg(done chan struct{}, cancel chan struct{}, reset *tx
 			if reset != nil {
 				pool.demoteUnexecutables()
 				if reset.newHead != nil {
-					pendingBaseFee := misc.CalcBaseFee(pool.chainconfig, reset.newHead)
+					pendingBaseFee := pool.chain.CurrentBlock().BaseFee()
 					pool.priced.SetBaseFee(pendingBaseFee)
 				}
 			}
@@ -1686,6 +1723,7 @@ func (pool *TxPool) runReorg(done chan struct{}, cancel chan struct{}, reset *tx
 				}
 				addr, err := types.Sender(pool.signer, tx)
 				if err != nil {
+					pool.logger.WithField("err", err).Error("Error calculating the sender in runreorg")
 					continue
 				}
 				internal, err := addr.InternalAndQuaiAddress()
@@ -1828,21 +1866,25 @@ func (pool *TxPool) reset(oldHead, newHead *types.WorkObject) {
 	}
 
 	evmRoot := newHead.EVMRoot()
-	utxoRoot := newHead.UTXORoot()
 	etxRoot := newHead.EtxSetRoot()
+	quaiStateSize := newHead.QuaiStateSize()
 	if pool.chain.IsGenesisHash(newHead.Hash()) {
 		evmRoot = types.EmptyRootHash
-		utxoRoot = types.EmptyRootHash
 		etxRoot = types.EmptyRootHash
+		quaiStateSize = big.NewInt(0)
 	}
-	statedb, err := pool.chain.StateAt(evmRoot, utxoRoot, etxRoot)
+	statedb, err := pool.chain.StateAt(evmRoot, etxRoot, quaiStateSize)
 	if err != nil {
 		pool.logger.WithField("err", err).Error("Failed to reset txpool state")
 		return
 	}
 	pool.currentState = statedb
+	pool.qiGasScalingFactor = math.Log(float64(rawdb.ReadUTXOSetSize(pool.db, newHead.Hash())))
 	pool.pendingNonces = newTxNoncer(statedb)
 	pool.currentMaxGas = newHead.GasLimit()
+	if pool.currentMaxGas == 0 {
+		pool.currentMaxGas = params.GenesisGasLimit
+	}
 
 	// Inject any transactions discarded due to reorgs
 	pool.logger.WithField("count", len(reinject)).Debug("Reinjecting stale transactions")
@@ -1857,6 +1899,14 @@ func (pool *TxPool) reset(oldHead, newHead *types.WorkObject) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				pool.logger.WithFields(log.Fields{
+					"error":      r,
+					"stacktrace": string(debug.Stack()),
+				}).Error("Go-Quai Panicked")
+			}
+		}()
 		if len(reinject) > 0 {
 			pool.addTxsLocked(reinject, false)
 		}
@@ -1864,6 +1914,14 @@ func (pool *TxPool) reset(oldHead, newHead *types.WorkObject) {
 	}()
 	wg.Add(1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				pool.logger.WithFields(log.Fields{
+					"error":      r,
+					"stacktrace": string(debug.Stack()),
+				}).Error("Go-Quai Panicked")
+			}
+		}()
 		if len(qiTxs) > 0 {
 			pool.addQiTxsWithoutValidationLocked(qiTxs)
 		}
@@ -1929,7 +1987,6 @@ func (pool *TxPool) promoteExecutables(accounts []common.InternalAddress) []*typ
 		queuedRateLimitMeter.Add(float64(len(caps)))
 		// Mark all the items dropped as removed
 		pool.priced.Removed(len(forwards) + len(drops) + len(caps))
-		queuedRateLimitMeter.Sub(float64(len(forwards) + len(drops) + len(caps)))
 		if pool.locals.contains(addr) {
 			localTxGauge.Sub(float64(len(forwards) + len(drops) + len(caps)))
 		}
@@ -2267,7 +2324,7 @@ func (pool *TxPool) poolLimiterGoroutine() {
 				pending += uint64(list.Len())
 			}
 			pool.mu.RUnlock()
-			pool.logger.Infof("PoolSize: Pending: %d, Queued: %d, Number of accounts in queue: %d, Qi Pool: %d", pending, queued, len(pool.queue), len(pool.qiPool))
+			pool.logger.Infof("PoolSize: Pending: %d, Queued: %d, Number of accounts in queue: %d, Qi Pool: %d", pending, queued, len(pool.queue), pool.qiPool.Len())
 			pendingTxGauge.Set(float64(pending))
 			queuedGauge.Set(float64(queued))
 			if queued > pool.config.GlobalQueue {
@@ -2339,6 +2396,33 @@ func (pool *TxPool) invalidQiTxGoroutine() {
 			return
 		case invalidTxHashes := <-pool.invalidQiTxsCh:
 			pool.RemoveQiTxs(invalidTxHashes)
+		}
+	}
+}
+
+func (pool *TxPool) qiTxExpirationGoroutine() {
+	defer func() {
+		if r := recover(); r != nil {
+			pool.logger.WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Error("Go-Quai Panicked")
+		}
+	}()
+	ticker := time.NewTicker(qiExpirationCheckInterval)
+	for {
+		select {
+		case <-pool.reorgShutdownCh:
+			return
+		case <-ticker.C:
+			// Remove expired QiTxs
+			// Grabbing lock is not necessary as LRU already has lock internally
+			for i := 0; i < pool.qiPool.Len()/qiExpirationCheckDivisor; i++ {
+				_, oldestTx, _ := pool.qiPool.GetOldest()
+				if time.Since(oldestTx.Received()) > pool.config.QiTxLifetime {
+					pool.qiPool.Remove(oldestTx.Tx().Hash())
+				}
+			}
 		}
 	}
 }
@@ -2603,7 +2687,7 @@ func (t *txLookup) RemoteToLocals(locals *accountSet) int {
 func (t *txLookup) RemotesBelowTip(threshold *big.Int) types.Transactions {
 	found := make(types.Transactions, 0, 128)
 	t.Range(func(hash common.Hash, tx *types.Transaction, local bool) bool {
-		if tx.GasTipCapIntCmp(threshold) < 0 {
+		if tx.CompareFee(threshold) < 0 {
 			found = append(found, tx)
 		}
 		return true

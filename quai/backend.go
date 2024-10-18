@@ -39,7 +39,6 @@ import (
 	"github.com/dominant-strategies/go-quai/node"
 	"github.com/dominant-strategies/go-quai/params"
 	"github.com/dominant-strategies/go-quai/quai/filters"
-	"github.com/dominant-strategies/go-quai/quai/gasprice"
 	"github.com/dominant-strategies/go-quai/quai/quaiconfig"
 	"github.com/dominant-strategies/go-quai/rpc"
 )
@@ -71,17 +70,20 @@ type Quai struct {
 
 	APIBackend *QuaiAPIBackend
 
-	gasPrice  *big.Int
-	etherbase common.Address
+	quaiCoinbase common.Address
+	qiCoinbase   common.Address
+
+	gasPrice *big.Int
 
 	lock sync.RWMutex // Protects the variadic fields (e.g. gas price and etherbase)
 
-	logger *log.Logger
+	logger    *log.Logger
+	maxWsSubs int
 }
 
 // New creates a new Quai object (including the
 // initialisation of the common Quai object)
-func New(stack *node.Node, p2p NetworkingAPI, config *quaiconfig.Config, nodeCtx int, currentExpansionNumber uint8, startingExpansionNumber uint64, genesisBlock *types.WorkObject, logger *log.Logger) (*Quai, error) {
+func New(stack *node.Node, p2p NetworkingAPI, config *quaiconfig.Config, nodeCtx int, currentExpansionNumber uint8, startingExpansionNumber uint64, genesisBlock *types.WorkObject, logger *log.Logger, maxWsSubs int) (*Quai, error) {
 	// Ensure configuration values are compatible and sane
 	if config.Miner.GasPrice == nil || config.Miner.GasPrice.Cmp(common.Big0) <= 0 {
 		logger.WithFields(log.Fields{
@@ -115,7 +117,7 @@ func New(stack *node.Node, p2p NetworkingAPI, config *quaiconfig.Config, nodeCtx
 	// different expansion number is only to run experiments
 	if startingExpansionNumber > 0 {
 		var genesisErr error
-		chainConfig, _, genesisErr = core.SetupGenesisBlockWithOverride(chainDb, config.Genesis, config.NodeLocation, startingExpansionNumber, logger)
+		chainConfig, _, genesisErr = core.SetupGenesisBlockWithOverride(chainDb, config.Genesis, config.GenesisNonce, config.NodeLocation, startingExpansionNumber, logger)
 		if genesisErr != nil {
 			return nil, genesisErr
 		}
@@ -124,7 +126,7 @@ func New(stack *node.Node, p2p NetworkingAPI, config *quaiconfig.Config, nodeCtx
 			(config.NodeLocation.Region() == 0 && nodeCtx == common.REGION_CTX) ||
 			(bytes.Equal(config.NodeLocation, common.Location{0, 0}) && nodeCtx == common.ZONE_CTX) {
 			var genesisErr error
-			chainConfig, _, genesisErr = core.SetupGenesisBlockWithOverride(chainDb, config.Genesis, config.NodeLocation, startingExpansionNumber, logger)
+			chainConfig, _, genesisErr = core.SetupGenesisBlockWithOverride(chainDb, config.Genesis, config.GenesisNonce, config.NodeLocation, startingExpansionNumber, logger)
 			if genesisErr != nil {
 				return nil, genesisErr
 			}
@@ -158,9 +160,11 @@ func New(stack *node.Node, p2p NetworkingAPI, config *quaiconfig.Config, nodeCtx
 		eventMux:          stack.EventMux(),
 		closeBloomHandler: make(chan struct{}),
 		gasPrice:          config.Miner.GasPrice,
-		etherbase:         config.Miner.Etherbase,
+		quaiCoinbase:      config.Miner.QuaiCoinbase,
+		qiCoinbase:        config.Miner.QiCoinbase,
 		bloomRequests:     make(chan chan *bloombits.Retrieval),
 		logger:            logger,
+		maxWsSubs:         maxWsSubs,
 	}
 
 	// Copy the chainConfig
@@ -187,7 +191,7 @@ func New(stack *node.Node, p2p NetworkingAPI, config *quaiconfig.Config, nodeCtx
 		blake3Config := config.Blake3Pow
 		blake3Config.NotifyFull = config.Miner.NotifyFull
 		blake3Config.NodeLocation = config.NodeLocation
-		quai.engine = quaiconfig.CreateBlake3ConsensusEngine(stack, config.NodeLocation, &blake3Config, config.Miner.Notify, config.Miner.Noverify, chainDb, logger)
+		quai.engine = quaiconfig.CreateBlake3ConsensusEngine(stack, config.NodeLocation, &blake3Config, config.Miner.Notify, config.Miner.Noverify, config.Miner.WorkShareThreshold, chainDb, logger)
 	} else {
 		// Transfer mining-related config to the progpow config.
 		progpowConfig := config.Progpow
@@ -226,16 +230,15 @@ func New(stack *node.Node, p2p NetworkingAPI, config *quaiconfig.Config, nodeCtx
 			EnablePreimageRecording: config.EnablePreimageRecording,
 		}
 		cacheConfig = &core.CacheConfig{
-			TrieCleanLimit:       config.TrieCleanCache,
-			TrieCleanJournal:     stack.ResolvePath(config.TrieCleanCacheJournal),
-			UTXOTrieCleanJournal: stack.ResolvePath(config.UTXOTrieCleanCacheJournal),
-			ETXTrieCleanJournal:  stack.ResolvePath(config.ETXTrieCleanCacheJournal),
-			TrieCleanRejournal:   config.TrieCleanCacheRejournal,
-			TrieCleanNoPrefetch:  config.NoPrefetch,
-			TrieDirtyLimit:       config.TrieDirtyCache,
-			TrieTimeLimit:        config.TrieTimeout,
-			SnapshotLimit:        config.SnapshotCache,
-			Preimages:            config.Preimages,
+			TrieCleanLimit:      config.TrieCleanCache,
+			TrieCleanJournal:    stack.ResolvePath(config.TrieCleanCacheJournal),
+			ETXTrieCleanJournal: stack.ResolvePath(config.ETXTrieCleanCacheJournal),
+			TrieCleanRejournal:  config.TrieCleanCacheRejournal,
+			TrieCleanNoPrefetch: config.NoPrefetch,
+			TrieDirtyLimit:      config.TrieDirtyCache,
+			TrieTimeLimit:       config.TrieTimeout,
+			SnapshotLimit:       config.SnapshotCache,
+			Preimages:           config.Preimages,
 		}
 	)
 
@@ -261,15 +264,7 @@ func New(stack *node.Node, p2p NetworkingAPI, config *quaiconfig.Config, nodeCtx
 	// Start the handler
 	quai.handler.Start()
 
-	quai.APIBackend = &QuaiAPIBackend{stack.Config().ExtRPCEnabled(), quai, nil}
-	// Gasprice oracle is only initiated in zone chains
-	if nodeCtx == common.ZONE_CTX && quai.core.ProcessingState() {
-		gpoParams := config.GPO
-		if gpoParams.Default == nil {
-			gpoParams.Default = config.Miner.GasPrice
-		}
-		quai.APIBackend.gpo = gasprice.NewOracle(quai.APIBackend, gpoParams, logger)
-	}
+	quai.APIBackend = &QuaiAPIBackend{stack.Config().ExtRPCEnabled(), quai}
 
 	// Register the backend on the node
 	stack.RegisterAPIs(quai.APIs())
@@ -303,12 +298,12 @@ func (s *Quai) APIs() []rpc.API {
 		}, {
 			Namespace: "eth",
 			Version:   "1.0",
-			Service:   filters.NewPublicFilterAPI(s.APIBackend, 5*time.Minute),
+			Service:   filters.NewPublicFilterAPI(s.APIBackend, 5*time.Minute, s.maxWsSubs),
 			Public:    true,
 		}, {
 			Namespace: "quai",
 			Version:   "1.0",
-			Service:   filters.NewPublicFilterAPI(s.APIBackend, 5*time.Minute),
+			Service:   filters.NewPublicFilterAPI(s.APIBackend, 5*time.Minute, s.maxWsSubs),
 			Public:    true,
 		}, {
 			Namespace: "admin",
@@ -325,18 +320,6 @@ func (s *Quai) APIs() []rpc.API {
 			Service:   NewPrivateDebugAPI(s),
 		},
 	}...)
-}
-
-func (s *Quai) Etherbase() (eb common.Address, err error) {
-	s.lock.RLock()
-	etherbase := s.etherbase
-	s.lock.RUnlock()
-
-	if !etherbase.Equal(common.Zero) {
-		return etherbase, nil
-	}
-
-	return common.Zero, fmt.Errorf("etherbase must be explicitly specified")
 }
 
 // isLocalBlock checks whether the specified block is mined
@@ -356,9 +339,10 @@ func (s *Quai) isLocalBlock(header *types.WorkObject) bool {
 	}
 	// Check whether the given address is etherbase.
 	s.lock.RLock()
-	etherbase := s.etherbase
+	quaiBase := s.quaiCoinbase
+	qiBase := s.qiCoinbase
 	s.lock.RUnlock()
-	if author.Equal(etherbase) {
+	if author.Equal(quaiBase) || author.Equal(qiBase) {
 		return true
 	}
 	internal, err := author.InternalAddress()
@@ -411,10 +395,10 @@ func (s *Quai) Stop() error {
 		s.bloomIndexer.Close()
 		close(s.closeBloomHandler)
 	}
+	s.handler.Stop()
 	s.core.Stop()
 	s.chainDb.Close()
 	s.eventMux.Stop()
-	s.handler.Stop()
 
 	return nil
 }

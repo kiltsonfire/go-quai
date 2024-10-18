@@ -17,24 +17,26 @@
 package params
 
 import (
+	"math"
 	"math/big"
 
 	"github.com/dominant-strategies/go-quai/common"
 )
 
 const (
-	GasLimitBoundDivisor            uint64 = 1024 // The bound divisor of the gas limit, used in update calculations.
-	PercentGasUsedThreshold         uint64 = 50   // Percent Gas used threshold at which the gas limit adjusts
-	GasLimitStepOneBlockThreshold   uint64 = 150000
-	GasLimitStepTwoBlockThreshold   uint64 = 300000
-	GasLimitStepThreeBlockThreshold uint64 = 450000
-	MinGasLimit                     uint64 = 40000000 // Minimum the gas limit may ever be.
-	GenesisGasLimit                 uint64 = 5000000  // Gas limit of the Genesis block.
+	GasLimitBoundDivisor    uint64 = 1024    // The bound divisor of the gas limit, used in update calculations.
+	PercentGasUsedThreshold uint64 = 90      // Percent Gas used threshold at which the gas limit adjusts
+	MinGasLimit             uint64 = 5000000 // Minimum the gas limit may ever be.
+	GenesisGasLimit         uint64 = 5000000 // Gas limit of the Genesis block.
+
+	StateCeil                 uint64 = 20000000 // Maximum the StateCeil may ever be
+	StateLimitBoundDivisor    uint64 = 1024     // The bound divisor of the gas limit, used in update calculations.
+	PercentStateUsedThreshold uint64 = 90       // Percent Gas used threshold at which the gas limit adjusts
+
+	EtxStateUsed uint64 = 10000 // state used by a simple etx
 
 	MaximumExtraDataSize  uint64 = 32    // Maximum size extra data may be after Genesis.
-	ExpByteGas            uint64 = 10    // Times ceil(log256(exponent)) for the EXP instruction.
 	CallValueTransferGas  uint64 = 9000  // Paid for CALL when the value transfer is non-zero.
-	CallNewAccountGas     uint64 = 25000 // Paid for CALL when the destination address didn't exist prior.
 	TxGas                 uint64 = 21000 // Per transaction not creating a contract. NOTE: Not payable on data of calls between transactions.
 	TxGasContractCreation uint64 = 53000 // Per transaction that creates a contract. NOTE: Not payable on data of calls between transactions.
 	TxDataZeroGas         uint64 = 4     // Per byte of data attached to a transaction that equals zero. NOTE: Not payable on data of calls between transactions.
@@ -51,30 +53,6 @@ const (
 
 	Sha3Gas     uint64 = 30 // Once per SHA3 operation.
 	Sha3WordGas uint64 = 6  // Once per word of the SHA3 operation's data.
-
-	SstoreClearGas  uint64 = 5000  // Once per SSTORE operation if the zeroness doesn't change.
-	SstoreRefundGas uint64 = 15000 // Once per SSTORE operation if the zeroness changes to zero.
-
-	NetSstoreNoopGas  uint64 = 200   // Once per SSTORE operation if the value doesn't change.
-	NetSstoreInitGas  uint64 = 20000 // Once per SSTORE operation from clean zero.
-	NetSstoreCleanGas uint64 = 5000  // Once per SSTORE operation from clean non-zero.
-	NetSstoreDirtyGas uint64 = 200   // Once per SSTORE operation from dirty.
-
-	NetSstoreClearRefund      uint64 = 15000 // Once per SSTORE operation for clearing an originally existing storage slot
-	NetSstoreResetRefund      uint64 = 4800  // Once per SSTORE operation for resetting to the original non-zero value
-	NetSstoreResetClearRefund uint64 = 19800 // Once per SSTORE operation for resetting to the original zero value
-
-	SstoreSentryGas uint64 = 2300  // Minimum gas required to be present for an SSTORE call, not consumed
-	SstoreSetGas    uint64 = 20000 // Once per SSTORE operation from clean zero to non-zero
-	SstoreResetGas  uint64 = 5000  // Once per SSTORE operation from clean non-zero to something else
-
-	ColdAccountAccessCost = uint64(2600) // COLD_ACCOUNT_ACCESS_COST
-	ColdSloadCost         = uint64(2100) // COLD_SLOAD_COST
-	WarmStorageReadCost   = uint64(100)  // WARM_STORAGE_READ_COST
-
-	// SSTORE_CLEARS_SCHEDULE is defined as SSTORE_RESET_GAS + ACCESS_LIST_STORAGE_KEY_COST
-	// Which becomes: 5000 - 2100 + 1900 = 4800
-	SstoreClearsScheduleRefund uint64 = SstoreResetGas - ColdSloadCost + TxAccessListStorageKeyGas // Once per SSTORE operation for clearing an originally existing storage slot
 
 	JumpdestGas   uint64 = 1     // Once per JUMPDEST operation.
 	EpochDuration uint64 = 30000 // Duration between proof-of-work epochs.
@@ -97,11 +75,7 @@ const (
 	TxAccessListStorageKeyGas uint64 = 1900 // Per storage key specified in access list
 
 	// These have been changed during the course of the chain
-	CallGas         uint64 = 700 // Static portion of gas for CALL-derivates
-	BalanceGas      uint64 = 700 // The cost of a BALANCE operation
-	ExtcodeSizeGas  uint64 = 700 // Cost of EXTCODESIZE
-	SloadGas        uint64 = 800
-	ExtcodeHashGas  uint64 = 700  // Cost of EXTCODEHASH
+	SloadGas        uint64 = 800  // This is only used in the Qi tx processing
 	SelfdestructGas uint64 = 5000 // Cost of SELFDESTRUCT
 
 	// EXP has a dynamic portion depending on the size of the exponent
@@ -117,8 +91,9 @@ const (
 
 	BaseFeeChangeDenominator = 8          // Bounds the amount the base fee can change between blocks.
 	ElasticityMultiplier     = 2          // Bounds the maximum gas limit a block may have.
-	InitialBaseFee           = 1 * GWei   // Initial base fee for blocks.
+	InitialBaseFee           = 1 * Wei    // Initial base fee for blocks.
 	MaxBaseFee               = 100 * GWei // Maximum base fee for blocks.
+	InitialStateLimit        = 5000000    // Initial state fee for blocks.
 
 	MaxCodeSize = 24576 // Maximum bytecode to permit for a contract
 
@@ -143,6 +118,8 @@ const (
 	MaxAddressGrindAttempts int = 1000 // Maximum number of attempts to grind an address to a valid one
 	MinimumEtxGasDivisor        = 5    // The divisor for the minimum gas for inbound ETXs (Block gas limit / MinimumEtxGasDivisor)
 	MaximumEtxGasMultiplier     = 2    // Multiplied with the minimum ETX gas for inbound ETXs (Block gas limit / MinimumEtxGasDivisor) * MaximumEtxGasMultiplier
+	MinEtxCount                 = 50   // These counts are used in the case where tx is not eligible to be started
+	MaxEtxCount                 = 100
 
 	// Dynamic Expansion parameters
 
@@ -151,7 +128,7 @@ const (
 	// 	chosen high enough to not be easily triggered by minor changes in node
 	// 	operating behavior, but not so high that the security efficiency becomes
 	// 	unacceptably low.
-	TREE_EXPANSION_THRESHOLD uint16 = 15
+	TREE_EXPANSION_THRESHOLD uint16 = math.MaxUint16
 
 	// This is the smoothing factor (range 0-10) used by each zone in its low-pass
 	// filter to gather a long running average of the zone's security efficiency
@@ -172,36 +149,61 @@ const (
 	// infrastructure, if needed, to account for the upcoming network change.
 	TREE_EXPANSION_WAIT_COUNT = 1024
 
-	ConversionLockPeriod          int64 = 10 // The number of zone blocks that a conversion output is locked for
-	MinQiConversionDenomination         = 1
-	ConversionConfirmationContext       = common.PRIME_CTX // A conversion requires a single coincident Dom confirmation
+	ConversionLockPeriod          uint64 = 10 // The number of zone blocks that a conversion output is locked for
+	MinQiConversionDenomination          = 10
+	ConversionConfirmationContext        = common.PRIME_CTX // A conversion requires a single coincident Dom confirmation
+	SoftMaxUTXOSetSize                   = 10000000         // The soft maximum number of UTXOs that can be stored in the UTXO set
+	MinimumTrimDepth                     = math.MaxInt      // The minimum block depth of the chain to begin trimming
+	QiToQuaiConversionGas                = 100000           // The gas used to convert Qi to Quai
 )
 
 var (
-	GasCeil                    uint64 = 20000000
-	ColosseumGasCeil           uint64 = 70000000
-	GardenGasCeil              uint64 = 160000000
-	OrchardGasCeil             uint64 = 50000000
-	LighthouseGasCeil          uint64 = 160000000
-	LocalGasCeil               uint64 = 20000000
-	DifficultyBoundDivisor            = big.NewInt(2048)  // The bound divisor of the difficulty, used in the update calculations.
-	ZoneMinDifficulty                 = big.NewInt(1000)  // The minimum difficulty in a zone. Prime & regions should be multiples of this value
-	MinimumDifficulty                 = ZoneMinDifficulty // The minimum that the difficulty may ever be.
-	GenesisDifficulty                 = ZoneMinDifficulty // Difficulty of the Genesis block.
-	DurationLimit                     = big.NewInt(12)    // The decision boundary on the blocktime duration used to determine whether difficulty should go up or not.
-	GardenDurationLimit               = big.NewInt(7)     // The decision boundary on the blocktime duration used to determine whether difficulty should go up or not.
-	OrchardDurationLimit              = big.NewInt(12)    // The decision boundary on the blocktime duration used to determine whether difficulty should go up or not.
-	LighthouseDurationLimit           = big.NewInt(7)     // The decision boundary on the blocktime duration used to determine whether difficulty should go up or not.
-	LocalDurationLimit                = big.NewInt(2)     // The decision boundary on the blocktime duration used to determine whether difficulty should go up or not.
-	TimeToStartTx              uint64 = 0 * BlocksPerDay
+	MaxGossipsubPacketSize            = 3 << 20
+	GasCeil                    uint64 = 30000000
+	ColosseumGasCeil           uint64 = 30000000
+	GardenGasCeil              uint64 = 30000000
+	OrchardGasCeil             uint64 = 30000000
+	LighthouseGasCeil          uint64 = 30000000
+	LocalGasCeil               uint64 = 30000000
+	DurationLimit                     = big.NewInt(5) // The decision boundary on the blocktime duration used to determine whether difficulty should go up or not.
+	GardenDurationLimit               = big.NewInt(5) // The decision boundary on the blocktime duration used to determine whether difficulty should go up or not.
+	OrchardDurationLimit              = big.NewInt(5) // The decision boundary on the blocktime duration used to determine whether difficulty should go up or not.
+	LighthouseDurationLimit           = big.NewInt(5) // The decision boundary on the blocktime duration used to determine whether difficulty should go up or not.
+	LocalDurationLimit                = big.NewInt(1) // The decision boundary on the blocktime duration used to determine whether difficulty should go up or not.
+	TimeToStartTx              uint64 = 5 * BlocksPerDay
 	BlocksPerDay               uint64 = new(big.Int).Div(big.NewInt(86400), DurationLimit).Uint64() // BlocksPerDay is the number of blocks per day assuming 12 second block time
-	DifficultyAdjustmentPeriod        = big.NewInt(360)                                             // This is the number of blocks over which the average has to be taken
+	DifficultyAdjustmentPeriod        = big.NewInt(720)                                             // This is the number of blocks over which the average has to be taken
 	DifficultyAdjustmentFactor int64  = 40                                                          // This is the factor that divides the log of the change in the difficulty
-	MinQuaiConversionAmount           = new(big.Int).Mul(big.NewInt(1), big.NewInt(GWei))           // 0.000000001 Quai
+	MinQuaiConversionAmount           = new(big.Int).Mul(big.NewInt(10000000000), big.NewInt(GWei)) // 0.000000001 Quai
 	MaxWorkShareCount                 = 16
 	WorkSharesThresholdDiff           = 3 // Number of bits lower than the target that the default consensus engine uses
 	WorkSharesInclusionDepth          = 3 // Number of blocks upto which the work shares can be referenced and this is protocol enforced
+	LockupByteToBlockDepth            = make(map[uint8]uint64)
+	LockupByteToRewardsRatio          = make(map[uint8]*big.Int)
+	ExchangeRate                      = big.NewInt(86196385918997143) // This is the initial exchange rate in Qi per Quai in Its/Qit // Garden = big.NewInt(166666666666666667)
+	// These numbers should be "equivalent" to the initial conversion rate
+	QuaiToQiConversionBase          = big.NewInt(10000000) // UNUSED Is the starting "historical conversion" in Qits for 10,000 Quai we need 10,000*1e3
+	QiToQuaiConversionBase          = big.NewInt(10000000) // UNUSED Is the starting "historical conversion" in Qits for 10,000 Qi we need 10,000*1e3
+	OneOverKqi                      = big.NewInt(30000000) // This is the number of hashes need to get 1 Qit. 3e9 is ~$0.001 // = big.NewInt(500)
+	MaxTimeDiffBetweenBlocks int64  = 100                  // Max time difference between the blocks to 100 secs
+	OneOverAlpha                    = big.NewInt(200)      // The alpha value for the quai to qi conversion
+	ControllerKickInBlock    uint64 = 1000000000
+
+	MinBaseFeeInQits              = big.NewInt(5)
+	OneOverBaseFeeControllerAlpha = big.NewInt(100)
+	BaseFeeMultiplier             = big.NewInt(50)
 )
+
+func init() {
+	LockupByteToBlockDepth[0] = ConversionLockPeriod // minimum lockup period
+	LockupByteToBlockDepth[1] = 30240                // 1.75 days
+	LockupByteToBlockDepth[2] = 60480                // 3.5 days
+	LockupByteToBlockDepth[3] = 120960               // 7 days
+
+	LockupByteToRewardsRatio[1] = big.NewInt(24) // additional 16% WPY
+	LockupByteToRewardsRatio[2] = big.NewInt(10) // additional 20% WPY
+	LockupByteToRewardsRatio[3] = big.NewInt(4)  // additional 25% WPY
+}
 
 // This is TimeFactor*TimeFactor*common.NumZonesInRegion*common.NumRegionsInPrime
 func PrimeEntropyTarget(expansionNum uint8) *big.Int {
@@ -217,4 +219,69 @@ func RegionEntropyTarget(expansionNum uint8) *big.Int {
 	_, numZones := common.GetHierarchySizeForExpansionNumber(expansionNum)
 	timeFactor := int64(max(numZones, 2))
 	return new(big.Int).Mul(big.NewInt(timeFactor), new(big.Int).SetUint64(numZones))
+}
+
+// Gas calculation functions
+
+func SstoreSetGas(stateSize, contractSize *big.Int) uint64 {
+	return CalculateGasWithStateScaling(stateSize, contractSize, 20000) // Once per SSTORE operation from clean zero to non-zero
+}
+
+func SstoreSentryGas(stateSize, contractSize *big.Int) uint64 {
+	return CalculateGasWithStateScaling(stateSize, contractSize, 2300) // Minimum gas required to be present for an SSTORE call, not consumed
+}
+
+func ColdAccountAccessCost(stateSize, contractSize *big.Int) uint64 {
+	return CalculateGasWithStateScaling(stateSize, contractSize, 2600) // COLD_ACCOUNT_ACCESS_COST
+}
+
+func WarmStorageReadCost(stateSize, contractSize *big.Int) uint64 {
+	return CalculateGasWithStateScaling(stateSize, contractSize, 100) // WARM_STORAGE_READ_COST
+}
+
+func ColdSloadCost(stateSize, contractSize *big.Int) uint64 {
+	return CalculateGasWithStateScaling(stateSize, contractSize, 2100) // COLD_SLOAD_COST
+}
+
+func SstoreResetGas(stateSize, contractSize *big.Int) uint64 {
+	return CalculateGasWithStateScaling(stateSize, contractSize, 5000) // Once per SSTORE operation from clean non-zero to something else
+}
+
+func CallNewAccountGas(stateSize *big.Int) uint64 {
+	return CalculateGasWithStateScaling(stateSize, big.NewInt(0), 25000) // Paid for CALL when the destination address didn't exist prior.
+}
+
+// SSTORE_CLEARS_SCHEDULE is defined as SSTORE_RESET_GAS + ACCESS_LIST_STORAGE_KEY_COST
+// Which becomes: 5000 - 2100 + 1900 = 4800
+func SstoreClearsScheduleRefund(stateSize, contractSize *big.Int) uint64 {
+	return SstoreResetGas(stateSize, contractSize) - ColdSloadCost(stateSize, contractSize) + TxAccessListStorageKeyGas // Once per SSTORE operation for clearing an originally existing storage slot
+}
+
+func CalculateGasWithStateScaling(stateSize, contractSize *big.Int, baseRate uint64) uint64 {
+	var scalingFactor *big.Int
+	if stateSize.Sign() != 0 {
+		scalingFactor = common.LogBig(stateSize)
+	}
+	if contractSize.Sign() != 0 {
+		logContractSize := common.LogBig(contractSize)
+		scalingFactor = new(big.Int).Add(scalingFactor, logContractSize)
+	}
+	// If we can assume that the gas price constants is correct for level 4 trie
+	num := new(big.Int).Mul(scalingFactor, big.NewInt(int64(baseRate)))
+	den := new(big.Int).Mul(big.NewInt(4), common.Big2e64)
+	return new(big.Int).Div(num, den).Uint64()
+}
+
+func CalculateCoinbaseValueWithLockup(value *big.Int, lockupByte uint8) *big.Int {
+	if lockupByte == 0 {
+		return value
+	}
+	return new(big.Int).Add(value, new(big.Int).Div(value, LockupByteToRewardsRatio[lockupByte]))
+}
+
+func CalculateQiGasWithUTXOSetSizeScalingFactor(scalingFactor float64, baseRate uint64) uint64 {
+	if scalingFactor < 15 {
+		return baseRate
+	}
+	return uint64(scalingFactor*float64(baseRate)) / 15
 }

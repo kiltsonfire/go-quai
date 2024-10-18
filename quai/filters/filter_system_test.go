@@ -18,6 +18,7 @@ package filters
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"math/rand"
@@ -58,6 +59,10 @@ func (b *testBackend) ChainDb() ethdb.Database {
 	return b.db
 }
 
+func (b *testBackend) GetBlock(hash common.Hash, number uint64) (*types.WorkObject, error) {
+	return rawdb.ReadWorkObject(b.db, number, hash, types.WorkObjectView(0)), nil
+}
+
 func (b *testBackend) HeaderByNumber(ctx context.Context, blockNr rpc.BlockNumber) (*types.WorkObject, error) {
 	var (
 		hash common.Hash
@@ -74,11 +79,15 @@ func (b *testBackend) HeaderByNumber(ctx context.Context, blockNr rpc.BlockNumbe
 		num = uint64(blockNr)
 		hash = rawdb.ReadCanonicalHash(b.db, num)
 	}
-	return rawdb.ReadHeader(b.db, hash), nil
+	return rawdb.ReadHeader(b.db, num, hash), nil
 }
 
 func (b *testBackend) HeaderByHash(ctx context.Context, hash common.Hash) (*types.WorkObject, error) {
-	return rawdb.ReadHeader(b.db, hash), nil
+	number := rawdb.ReadHeaderNumber(b.db, hash)
+	if number == nil {
+		return nil, errors.New("could not read the header number")
+	}
+	return rawdb.ReadHeader(b.db, *number, hash), nil
 }
 
 func (b *testBackend) GetReceipts(ctx context.Context, hash common.Hash) (types.Receipts, error) {
@@ -180,7 +189,7 @@ func TestPendingTxFilter(t *testing.T) {
 	var (
 		db      = rawdb.NewMemoryDatabase(log.Global)
 		backend = &testBackend{db: db}
-		api     = NewPublicFilterAPI(backend, deadline)
+		api     = NewPublicFilterAPI(backend, deadline, 1)
 
 		to = common.HexToAddress("0x0094f5ea0ba39494ce83a213fffba74279579268", common.Location{0, 0})
 
@@ -188,8 +197,8 @@ func TestPendingTxFilter(t *testing.T) {
 			types.NewTx(&types.QuaiTx{
 				ChainID:    new(big.Int).SetUint64(1),
 				Nonce:      uint64(0),
-				GasTipCap:  new(big.Int).SetUint64(0),
-				GasFeeCap:  new(big.Int).SetUint64(0),
+				MinerTip:   new(big.Int).SetUint64(0),
+				GasPrice:   new(big.Int).SetUint64(0),
 				Gas:        uint64(0),
 				To:         &to,
 				Value:      new(big.Int).SetUint64(0),
@@ -202,8 +211,8 @@ func TestPendingTxFilter(t *testing.T) {
 			types.NewTx(&types.QuaiTx{
 				ChainID:    new(big.Int).SetUint64(1),
 				Nonce:      uint64(1),
-				GasTipCap:  new(big.Int).SetUint64(0),
-				GasFeeCap:  new(big.Int).SetUint64(0),
+				MinerTip:   new(big.Int).SetUint64(0),
+				GasPrice:   new(big.Int).SetUint64(0),
 				Gas:        uint64(0),
 				To:         &to,
 				Value:      new(big.Int).SetUint64(0),
@@ -216,8 +225,8 @@ func TestPendingTxFilter(t *testing.T) {
 			types.NewTx(&types.QuaiTx{
 				ChainID:    new(big.Int).SetUint64(1),
 				Nonce:      uint64(2),
-				GasTipCap:  new(big.Int).SetUint64(0),
-				GasFeeCap:  new(big.Int).SetUint64(0),
+				MinerTip:   new(big.Int).SetUint64(0),
+				GasPrice:   new(big.Int).SetUint64(0),
 				Gas:        uint64(0),
 				To:         &to,
 				Value:      new(big.Int).SetUint64(0),
@@ -230,8 +239,8 @@ func TestPendingTxFilter(t *testing.T) {
 			types.NewTx(&types.QuaiTx{
 				ChainID:    new(big.Int).SetUint64(1),
 				Nonce:      uint64(3),
-				GasTipCap:  new(big.Int).SetUint64(0),
-				GasFeeCap:  new(big.Int).SetUint64(0),
+				MinerTip:   new(big.Int).SetUint64(0),
+				GasPrice:   new(big.Int).SetUint64(0),
 				Gas:        uint64(0),
 				To:         &to,
 				Value:      new(big.Int).SetUint64(0),
@@ -244,8 +253,8 @@ func TestPendingTxFilter(t *testing.T) {
 			types.NewTx(&types.QuaiTx{
 				ChainID:    new(big.Int).SetUint64(1),
 				Nonce:      uint64(4),
-				GasTipCap:  new(big.Int).SetUint64(0),
-				GasFeeCap:  new(big.Int).SetUint64(0),
+				MinerTip:   new(big.Int).SetUint64(0),
+				GasPrice:   new(big.Int).SetUint64(0),
 				Gas:        uint64(0),
 				To:         &to,
 				Value:      new(big.Int).SetUint64(0),
@@ -302,7 +311,7 @@ func TestLogFilterCreation(t *testing.T) {
 	var (
 		db      = rawdb.NewMemoryDatabase(log.Global)
 		backend = &testBackend{db: db}
-		api     = NewPublicFilterAPI(backend, deadline)
+		api     = NewPublicFilterAPI(backend, deadline, 1)
 
 		testCases = []struct {
 			crit    FilterCriteria
@@ -345,7 +354,7 @@ func TestInvalidLogFilterCreation(t *testing.T) {
 	var (
 		db      = rawdb.NewMemoryDatabase(log.Global)
 		backend = &testBackend{db: db}
-		api     = NewPublicFilterAPI(backend, deadline)
+		api     = NewPublicFilterAPI(backend, deadline, 1)
 	)
 
 	// different situations where log filter creation should fail.
@@ -367,7 +376,7 @@ func TestInvalidGetLogsRequest(t *testing.T) {
 	var (
 		db        = rawdb.NewMemoryDatabase(log.Global)
 		backend   = &testBackend{db: db}
-		api       = NewPublicFilterAPI(backend, deadline)
+		api       = NewPublicFilterAPI(backend, deadline, 1)
 		blockHash = common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
 	)
 
@@ -392,23 +401,23 @@ func TestLogFilter(t *testing.T) {
 	var (
 		db      = rawdb.NewMemoryDatabase(log.Global)
 		backend = &testBackend{db: db}
-		api     = NewPublicFilterAPI(backend, deadline)
+		api     = NewPublicFilterAPI(backend, deadline, 1)
 
-		firstAddr      = common.HexToAddress("0x0011111111111111111111111111111111111111", common.Location{0, 0})
-		secondAddr     = common.HexToAddress("0x0022222222222222222222222222222222222222", common.Location{0, 0})
-		thirdAddress   = common.HexToAddress("0x0033333333333333333333333333333333333333", common.Location{0, 0})
-		notUsedAddress = common.HexToAddress("0x0099999999999999999999999999999999999999", common.Location{0, 0})
+		firstAddr      = common.HexToAddressBytes("0x0011111111111111111111111111111111111111")
+		secondAddr     = common.HexToAddressBytes("0x0022222222222222222222222222222222222222")
+		thirdAddress   = common.HexToAddressBytes("0x0033333333333333333333333333333333333333")
+		notUsedAddress = common.HexToAddressBytes("0x0099999999999999999999999999999999999999")
 		firstTopic     = common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
 		secondTopic    = common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222")
 		notUsedTopic   = common.HexToHash("0x9999999999999999999999999999999999999999999999999999999999999999")
 
 		// posted twice, once as regular logs and once as pending logs.
 		allLogs = []*types.Log{
-			{Address: firstAddr},
-			{Address: firstAddr, Topics: []common.Hash{firstTopic}, BlockNumber: 1},
-			{Address: secondAddr, Topics: []common.Hash{firstTopic}, BlockNumber: 1},
-			{Address: thirdAddress, Topics: []common.Hash{secondTopic}, BlockNumber: 2},
-			{Address: thirdAddress, Topics: []common.Hash{secondTopic}, BlockNumber: 3},
+			{Address: common.Bytes20ToAddress(firstAddr, common.Location{0, 0})},
+			{Address: common.Bytes20ToAddress(firstAddr, common.Location{0, 0}), Topics: []common.Hash{firstTopic}, BlockNumber: 1},
+			{Address: common.Bytes20ToAddress(secondAddr, common.Location{0, 0}), Topics: []common.Hash{firstTopic}, BlockNumber: 1},
+			{Address: common.Bytes20ToAddress(thirdAddress, common.Location{0, 0}), Topics: []common.Hash{secondTopic}, BlockNumber: 2},
+			{Address: common.Bytes20ToAddress(thirdAddress, common.Location{0, 0}), Topics: []common.Hash{secondTopic}, BlockNumber: 3},
 		}
 
 		expectedCase7  = []*types.Log{allLogs[3], allLogs[4], allLogs[0], allLogs[1], allLogs[2], allLogs[3], allLogs[4]}
@@ -422,17 +431,17 @@ func TestLogFilter(t *testing.T) {
 			// match all
 			0: {FilterCriteria{}, allLogs, ""},
 			// match none due to no matching addresses
-			1: {FilterCriteria{Addresses: []common.Address{{}, notUsedAddress}, Topics: [][]common.Hash{nil}}, []*types.Log{}, ""},
+			1: {FilterCriteria{Addresses: []common.AddressBytes{{}, notUsedAddress}, Topics: [][]common.Hash{nil}}, []*types.Log{}, ""},
 			// match logs based on addresses, ignore topics
-			2: {FilterCriteria{Addresses: []common.Address{firstAddr}}, allLogs[:2], ""},
+			2: {FilterCriteria{Addresses: []common.AddressBytes{firstAddr}}, allLogs[:2], ""},
 			// match none due to no matching topics (match with address)
-			3: {FilterCriteria{Addresses: []common.Address{secondAddr}, Topics: [][]common.Hash{{notUsedTopic}}}, []*types.Log{}, ""},
+			3: {FilterCriteria{Addresses: []common.AddressBytes{secondAddr}, Topics: [][]common.Hash{{notUsedTopic}}}, []*types.Log{}, ""},
 			// match logs based on addresses and topics
-			4: {FilterCriteria{Addresses: []common.Address{thirdAddress}, Topics: [][]common.Hash{{firstTopic, secondTopic}}}, allLogs[3:5], ""},
+			4: {FilterCriteria{Addresses: []common.AddressBytes{thirdAddress}, Topics: [][]common.Hash{{firstTopic, secondTopic}}}, allLogs[3:5], ""},
 			// match logs based on multiple addresses and "or" topics
-			5: {FilterCriteria{Addresses: []common.Address{secondAddr, thirdAddress}, Topics: [][]common.Hash{{firstTopic, secondTopic}}}, allLogs[2:5], ""},
+			5: {FilterCriteria{Addresses: []common.AddressBytes{secondAddr, thirdAddress}, Topics: [][]common.Hash{{firstTopic, secondTopic}}}, allLogs[2:5], ""},
 			// logs in the pending block
-			6: {FilterCriteria{Addresses: []common.Address{firstAddr}, FromBlock: big.NewInt(rpc.PendingBlockNumber.Int64()), ToBlock: big.NewInt(rpc.PendingBlockNumber.Int64())}, allLogs[:2], ""},
+			6: {FilterCriteria{Addresses: []common.AddressBytes{firstAddr}, FromBlock: big.NewInt(rpc.PendingBlockNumber.Int64()), ToBlock: big.NewInt(rpc.PendingBlockNumber.Int64())}, allLogs[:2], ""},
 			// mined logs with block num >= 2 or pending logs
 			7: {FilterCriteria{FromBlock: big.NewInt(2), ToBlock: big.NewInt(rpc.PendingBlockNumber.Int64())}, expectedCase7, ""},
 			// all "mined" logs with block num >= 2
@@ -505,29 +514,28 @@ func TestPendingLogsSubscription(t *testing.T) {
 	var (
 		db      = rawdb.NewMemoryDatabase(log.Global)
 		backend = &testBackend{db: db}
-		api     = NewPublicFilterAPI(backend, deadline)
+		api     = NewPublicFilterAPI(backend, deadline, 1)
 
-		firstAddr      = common.HexToAddress("0x0011111111111111111111111111111111111111", common.Location{0, 0})
-		secondAddr     = common.HexToAddress("0x0022222222222222222222222222222222222222", common.Location{0, 0})
-		thirdAddress   = common.HexToAddress("0x0033333333333333333333333333333333333333", common.Location{0, 0})
-		notUsedAddress = common.HexToAddress("0x0099999999999999999999999999999999999999", common.Location{0, 0})
-		firstTopic     = common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
-		secondTopic    = common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222")
-		thirdTopic     = common.HexToHash("0x3333333333333333333333333333333333333333333333333333333333333333")
-		fourthTopic    = common.HexToHash("0x4444444444444444444444444444444444444444444444444444444444444444")
-		notUsedTopic   = common.HexToHash("0x9999999999999999999999999999999999999999999999999999999999999999")
+		firstAddr    = common.HexToAddressBytes("0x0011111111111111111111111111111111111111")
+		secondAddr   = common.HexToAddressBytes("0x0022222222222222222222222222222222222222")
+		thirdAddress = common.HexToAddressBytes("0x0033333333333333333333333333333333333333")
+		firstTopic   = common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
+		secondTopic  = common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222")
+		thirdTopic   = common.HexToHash("0x3333333333333333333333333333333333333333333333333333333333333333")
+		fourthTopic  = common.HexToHash("0x4444444444444444444444444444444444444444444444444444444444444444")
+		notUsedTopic = common.HexToHash("0x9999999999999999999999999999999999999999999999999999999999999999")
 
 		allLogs = [][]*types.Log{
-			{{Address: firstAddr, Topics: []common.Hash{}, BlockNumber: 0}},
-			{{Address: firstAddr, Topics: []common.Hash{firstTopic}, BlockNumber: 1}},
-			{{Address: secondAddr, Topics: []common.Hash{firstTopic}, BlockNumber: 2}},
-			{{Address: thirdAddress, Topics: []common.Hash{secondTopic}, BlockNumber: 3}},
-			{{Address: thirdAddress, Topics: []common.Hash{secondTopic}, BlockNumber: 4}},
+			{{Address: common.Bytes20ToAddress(firstAddr, common.Location{0, 0}), Topics: []common.Hash{}, BlockNumber: 0}},
+			{{Address: common.Bytes20ToAddress(firstAddr, common.Location{0, 0}), Topics: []common.Hash{firstTopic}, BlockNumber: 1}},
+			{{Address: common.Bytes20ToAddress(secondAddr, common.Location{0, 0}), Topics: []common.Hash{firstTopic}, BlockNumber: 2}},
+			{{Address: common.Bytes20ToAddress(thirdAddress, common.Location{0, 0}), Topics: []common.Hash{secondTopic}, BlockNumber: 3}},
+			{{Address: common.Bytes20ToAddress(thirdAddress, common.Location{0, 0}), Topics: []common.Hash{secondTopic}, BlockNumber: 4}},
 			{
-				{Address: thirdAddress, Topics: []common.Hash{firstTopic}, BlockNumber: 5},
-				{Address: thirdAddress, Topics: []common.Hash{thirdTopic}, BlockNumber: 5},
-				{Address: thirdAddress, Topics: []common.Hash{fourthTopic}, BlockNumber: 5},
-				{Address: firstAddr, Topics: []common.Hash{firstTopic}, BlockNumber: 5},
+				{Address: common.Bytes20ToAddress(thirdAddress, common.Location{0, 0}), Topics: []common.Hash{firstTopic}, BlockNumber: 5},
+				{Address: common.Bytes20ToAddress(thirdAddress, common.Location{0.0}), Topics: []common.Hash{thirdTopic}, BlockNumber: 5},
+				{Address: common.Bytes20ToAddress(thirdAddress, common.Location{0, 0}), Topics: []common.Hash{fourthTopic}, BlockNumber: 5},
+				{Address: common.Bytes20ToAddress(firstAddr, common.Location{0, 0}), Topics: []common.Hash{firstTopic}, BlockNumber: 5},
 			},
 		}
 
@@ -544,43 +552,43 @@ func TestPendingLogsSubscription(t *testing.T) {
 			},
 			// match none due to no matching addresses
 			{
-				quai.FilterQuery{Addresses: []common.Address{{}, notUsedAddress}, Topics: [][]common.Hash{nil}},
+				quai.FilterQuery{Addresses: []common.AddressBytes{{}}, Topics: [][]common.Hash{nil}},
 				nil,
 				nil, nil,
 			},
 			// match logs based on addresses, ignore topics
 			{
-				quai.FilterQuery{Addresses: []common.Address{firstAddr}},
+				quai.FilterQuery{Addresses: []common.AddressBytes{firstAddr}},
 				append(flattenLogs(allLogs[:2]), allLogs[5][3]),
 				nil, nil,
 			},
 			// match none due to no matching topics (match with address)
 			{
-				quai.FilterQuery{Addresses: []common.Address{secondAddr}, Topics: [][]common.Hash{{notUsedTopic}}},
+				quai.FilterQuery{Addresses: []common.AddressBytes{secondAddr}, Topics: [][]common.Hash{{notUsedTopic}}},
 				nil, nil, nil,
 			},
 			// match logs based on addresses and topics
 			{
-				quai.FilterQuery{Addresses: []common.Address{thirdAddress}, Topics: [][]common.Hash{{firstTopic, secondTopic}}},
+				quai.FilterQuery{Addresses: []common.AddressBytes{thirdAddress}, Topics: [][]common.Hash{{firstTopic, secondTopic}}},
 				append(flattenLogs(allLogs[3:5]), allLogs[5][0]),
 				nil, nil,
 			},
 			// match logs based on multiple addresses and "or" topics
 			{
-				quai.FilterQuery{Addresses: []common.Address{secondAddr, thirdAddress}, Topics: [][]common.Hash{{firstTopic, secondTopic}}},
+				quai.FilterQuery{Addresses: []common.AddressBytes{secondAddr, thirdAddress}, Topics: [][]common.Hash{{firstTopic, secondTopic}}},
 				append(flattenLogs(allLogs[2:5]), allLogs[5][0]),
 				nil,
 				nil,
 			},
 			// block numbers are ignored for filters created with New***Filter, these return all logs that match the given criteria when the state changes
 			{
-				quai.FilterQuery{Addresses: []common.Address{firstAddr}, FromBlock: big.NewInt(2), ToBlock: big.NewInt(3)},
+				quai.FilterQuery{Addresses: []common.AddressBytes{firstAddr}, FromBlock: big.NewInt(2), ToBlock: big.NewInt(3)},
 				append(flattenLogs(allLogs[:2]), allLogs[5][3]),
 				nil, nil,
 			},
 			// multiple pending logs, should match only 2 topics from the logs in block 5
 			{
-				quai.FilterQuery{Addresses: []common.Address{thirdAddress}, Topics: [][]common.Hash{{firstTopic, fourthTopic}}},
+				quai.FilterQuery{Addresses: []common.AddressBytes{thirdAddress}, Topics: [][]common.Hash{{firstTopic, fourthTopic}}},
 				[]*types.Log{allLogs[5][0], allLogs[5][2]},
 				nil, nil,
 			},

@@ -33,6 +33,7 @@ import (
 	"github.com/dominant-strategies/go-quai/log"
 	"github.com/dominant-strategies/go-quai/params"
 	"github.com/dominant-strategies/go-quai/rpc"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 )
 
 // Backend interface provides the common API services (that are provided by
@@ -42,8 +43,6 @@ type Backend interface {
 	EventMux() *event.TypeMux
 
 	// General Quai API
-	SuggestGasTipCap(ctx context.Context) (*big.Int, error)
-	FeeHistory(ctx context.Context, blockCount int, lastBlock rpc.BlockNumber, rewardPercentiles []float64) (*big.Int, [][]*big.Int, []*big.Int, []float64, error)
 	ChainDb() ethdb.Database
 	ExtRPCEnabled() bool
 	RPCGasCap() uint64    // global gas cap for eth_call over rpc: DoS protection
@@ -58,7 +57,7 @@ type Backend interface {
 	CurrentHeader() *types.WorkObject
 	CurrentBlock() *types.WorkObject
 	CurrentLogEntropy() *big.Int
-	TotalLogS(header *types.WorkObject) *big.Int
+	TotalLogEntropy(header *types.WorkObject) *big.Int
 	CalcOrder(header *types.WorkObject) (*big.Int, int, error)
 	BlockByNumber(ctx context.Context, number rpc.BlockNumber) (*types.WorkObject, error)
 	BlockByHash(ctx context.Context, hash common.Hash) (*types.WorkObject, error)
@@ -75,13 +74,11 @@ type Backend interface {
 	SubscribeChainHeadEvent(ch chan<- core.ChainHeadEvent) event.Subscription
 	SubscribeChainSideEvent(ch chan<- core.ChainSideEvent) event.Subscription
 	WriteBlock(block *types.WorkObject)
-	Append(header *types.WorkObject, manifest types.BlockManifest, domPendingHeader *types.WorkObject, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.Transactions) (types.Transactions, bool, error)
+	Append(header *types.WorkObject, manifest types.BlockManifest, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.Transactions) (types.Transactions, error)
 	DownloadBlocksInManifest(hash common.Hash, manifest types.BlockManifest, entropy *big.Int)
 	ConstructLocalMinedBlock(header *types.WorkObject) (*types.WorkObject, error)
 	InsertBlock(ctx context.Context, block *types.WorkObject) (int, error)
 	PendingBlock() *types.WorkObject
-	SubRelayPendingHeader(pendingHeader types.PendingHeader, newEntropy *big.Int, location common.Location, subReorg bool, order int, updateDomLocation common.Location)
-	UpdateDom(oldDomReference common.Hash, pendingHeader *types.WorkObject, location common.Location)
 	RequestDomToAppendOrFetch(hash common.Hash, entropy *big.Int, order int)
 	NewGenesisPendingHeader(pendingHeader *types.WorkObject, domTerminus common.Hash, hash common.Hash) error
 	GetPendingHeader() (*types.WorkObject, error)
@@ -102,19 +99,32 @@ type Backend interface {
 	SubscribeExpansionEvent(ch chan<- core.ExpansionEvent) event.Subscription
 	WriteGenesisBlock(block *types.WorkObject, location common.Location)
 	SendWorkShare(workShare *types.WorkObjectHeader) error
-	CheckIfValidWorkShare(workShare *types.WorkObjectHeader) bool
+	CheckIfValidWorkShare(workShare *types.WorkObjectHeader) types.WorkShareValidity
 	SetDomInterface(domInterface core.CoreBackend)
 	BroadcastWorkShare(workShare *types.WorkObjectShareView, location common.Location) error
 	GetMaxTxInWorkShare() uint64
+	GetExpansionNumber() uint8
+	SuggestFinalityDepth(ctx context.Context, qiValue *big.Int, correlatedRisk *big.Int) (*big.Int, error)
+	WorkShareDistance(wo *types.WorkObject, ws *types.WorkObjectHeader) (*big.Int, error)
+	GeneratePendingHeader(block *types.WorkObject, fill bool) (*types.WorkObject, error)
+	MakeFullPendingHeader(primePh, regionPh, zonePh *types.WorkObject) *types.WorkObject
+	CheckInCalcOrderCache(hash common.Hash) (*big.Int, int, bool)
+	AddToCalcOrderCache(hash common.Hash, order int, intrinsicS *big.Int)
+	GetPrimeBlock(blockHash common.Hash) *types.WorkObject
+
+	consensus.ChainHeaderReader
+	TxMiningEnabled() bool
+	GetWorkShareThreshold() int
+	GetMinerEndpoints() []string
 
 	BadHashExistsInChain() bool
 	IsBlockHashABadHash(hash common.Hash) bool
-	consensus.ChainHeaderReader
 
 	// Validator methods that checks the sanity of the Body
 	SanityCheckWorkObjectBlockViewBody(wo *types.WorkObject) error
 	SanityCheckWorkObjectHeaderViewBody(wo *types.WorkObject) error
 	SanityCheckWorkObjectShareViewBody(wo *types.WorkObject) error
+	ApplyPoWFilter(wo *types.WorkObject) pubsub.ValidationResult
 
 	// Transaction pool API
 	SendTx(ctx context.Context, signedTx *types.Transaction) error
@@ -126,6 +136,8 @@ type Backend interface {
 	Stats() (pending int, queued int, qi int)
 	TxPoolContent() (map[common.InternalAddress]types.Transactions, map[common.InternalAddress]types.Transactions)
 	TxPoolContentFrom(addr common.Address) (types.Transactions, types.Transactions)
+	GetMinGasPrice() *big.Int
+	GetPoolGasPrice() *big.Int
 
 	// Filter API
 	BloomStatus() (uint64, uint64)
@@ -199,6 +211,12 @@ func GetAPIs(apiBackend Backend) []rpc.API {
 			Namespace: "txpool",
 			Version:   "1.0",
 			Service:   NewPublicTxPoolAPI(apiBackend),
+			Public:    true,
+		})
+		apis = append(apis, rpc.API{
+			Namespace: "workshare",
+			Version:   "1.0",
+			Service:   NewPublicWorkSharesAPI(apis[6].Service.(*PublicTransactionPoolAPI), apiBackend),
 			Public:    true,
 		})
 	}

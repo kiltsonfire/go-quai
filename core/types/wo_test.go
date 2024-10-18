@@ -19,9 +19,10 @@ func woTestData() (*WorkObject, common.Hash) {
 			txHash:              common.HexToHash("0x456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef3"),
 			location:            common.Location{0, 0},
 			mixHash:             common.HexToHash("0x56789abcdef0123456789abcdef0123456789abcdef0123456789abcdef4"),
-			coinbase:            common.HexToAddress("0x123456789abcdef0123456789abcdef0123456789", common.Location{0, 0}),
+			primaryCoinbase:     common.HexToAddress("0x123456789abcdef0123456789abcdef0123456789", common.Location{0, 0}),
 			time:                uint64(1),
 			nonce:               EncodeNonce(uint64(1)),
+			lock:                0,
 		},
 	}
 	return wo, wo.Hash()
@@ -29,7 +30,7 @@ func woTestData() (*WorkObject, common.Hash) {
 
 func TestWoHash(t *testing.T) {
 	_, actualHash := woTestData()
-	expectedHash := common.HexToHash("0xfa015af438af2a7a4c2af2aa8d982da52fb879288338d4e44464cae3723daf85")
+	expectedHash := common.HexToHash("0x572273f26629ca2a02c329cd21dc3def6e1d1934465ea11fca393c7a9ce3c89b")
 	require.Equal(t, expectedHash, actualHash, "Hash not equal to expected hash")
 }
 

@@ -31,7 +31,6 @@ import (
 	"github.com/dominant-strategies/go-quai/common"
 	"github.com/dominant-strategies/go-quai/common/hexutil"
 	"github.com/dominant-strategies/go-quai/common/math"
-	"github.com/dominant-strategies/go-quai/consensus/misc"
 	"github.com/dominant-strategies/go-quai/consensus/progpow"
 	"github.com/dominant-strategies/go-quai/core"
 	"github.com/dominant-strategies/go-quai/core/state"
@@ -58,57 +57,11 @@ func NewPublicQuaiAPI_Deprecated(b Backend) *PublicQuaiAPI_Deprecated {
 
 // GasPrice returns a suggestion for a gas price for legacy transactions.
 func (s *PublicQuaiAPI_Deprecated) GasPrice(ctx context.Context) (*hexutil.Big, error) {
-	tipcap, err := s.b.SuggestGasTipCap(ctx)
-	if err != nil {
-		return nil, err
-	}
+	tipcap := big.NewInt(0)
 	if head := s.b.CurrentHeader(); head.BaseFee() != nil {
 		tipcap.Add(tipcap, head.BaseFee())
 	}
-	return (*hexutil.Big)(tipcap), err
-}
-
-// MaxPriorityFeePerGas returns a suggestion for a gas tip cap for dynamic fee transactions.
-func (s *PublicQuaiAPI_Deprecated) MaxPriorityFeePerGas(ctx context.Context) (*hexutil.Big, error) {
-	tipcap, err := s.b.SuggestGasTipCap(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return (*hexutil.Big)(tipcap), err
-}
-
-type feeHistoryResult struct {
-	OldestBlock  *hexutil.Big     `json:"oldestBlock"`
-	Reward       [][]*hexutil.Big `json:"reward,omitempty"`
-	BaseFee      []*hexutil.Big   `json:"baseFeePerGas,omitempty"`
-	GasUsedRatio []float64        `json:"gasUsedRatio"`
-}
-
-func (s *PublicQuaiAPI_Deprecated) FeeHistory(ctx context.Context, blockCount rpc.DecimalOrHex, lastBlock rpc.BlockNumber, rewardPercentiles []float64) (*feeHistoryResult, error) {
-	oldest, reward, baseFee, gasUsed, err := s.b.FeeHistory(ctx, int(blockCount), lastBlock, rewardPercentiles)
-	if err != nil {
-		return nil, err
-	}
-	results := &feeHistoryResult{
-		OldestBlock:  (*hexutil.Big)(oldest),
-		GasUsedRatio: gasUsed,
-	}
-	if reward != nil {
-		results.Reward = make([][]*hexutil.Big, len(reward))
-		for i, w := range reward {
-			results.Reward[i] = make([]*hexutil.Big, len(w))
-			for j, v := range w {
-				results.Reward[i][j] = (*hexutil.Big)(v)
-			}
-		}
-	}
-	if baseFee != nil {
-		results.BaseFee = make([]*hexutil.Big, len(baseFee))
-		for i, v := range baseFee {
-			results.BaseFee[i] = (*hexutil.Big)(v)
-		}
-	}
-	return results, nil
+	return (*hexutil.Big)(tipcap), nil
 }
 
 // PublicTxPoolAPI offers and API for the transaction pool. It only operates on data that is non confidential.
@@ -297,13 +250,13 @@ func (s *PublicBlockChainAPI) GetOutpointsByAddressAtBlock(ctx context.Context, 
 
 // Result structs for GetProof
 type AccountResult struct {
-	Address      common.Address  `json:"address"`
-	AccountProof []string        `json:"accountProof"`
-	Balance      *hexutil.Big    `json:"balance"`
-	CodeHash     common.Hash     `json:"codeHash"`
-	Nonce        hexutil.Uint64  `json:"nonce"`
-	StorageHash  common.Hash     `json:"storageHash"`
-	StorageProof []StorageResult `json:"storageProof"`
+	Address      common.MixedcaseAddress `json:"address"`
+	AccountProof []string                `json:"accountProof"`
+	Balance      *hexutil.Big            `json:"balance"`
+	CodeHash     common.Hash             `json:"codeHash"`
+	Nonce        hexutil.Uint64          `json:"nonce"`
+	StorageHash  common.Hash             `json:"storageHash"`
+	StorageProof []StorageResult         `json:"storageProof"`
 }
 
 type StorageResult struct {
@@ -362,7 +315,7 @@ func (s *PublicBlockChainAPI) GetProof(ctx context.Context, address common.Addre
 	}
 
 	return &AccountResult{
-		Address:      address,
+		Address:      address.MixedcaseAddress(),
 		AccountProof: toHexSlice(accountProof),
 		Balance:      (*hexutil.Big)(state.GetBalance(internal)),
 		CodeHash:     codeHash,
@@ -646,7 +599,8 @@ func DoCall(ctx context.Context, b Backend, args TransactionArgs, blockNrOrHash 
 	if err != nil {
 		return nil, err
 	}
-	evm, vmError, err := b.GetEVM(ctx, msg, state, header, parent, &vm.Config{NoBaseFee: true})
+	tracer := vm.NewAccessListTracer(types.AccessList{}, common.ZeroAddress(b.NodeLocation()), common.ZeroAddress(b.NodeLocation()), vm.ActivePrecompiles(b.ChainConfig().Rules(header.Number(nodeCtx)), b.NodeLocation()))
+	evm, vmError, err := b.GetEVM(ctx, msg, state, header, parent, &vm.Config{Tracer: tracer, NoBaseFee: true, Debug: true})
 	if err != nil {
 		return nil, err
 	}
@@ -768,15 +722,16 @@ func DoEstimateGas(ctx context.Context, b Backend, args TransactionArgs, blockNr
 			return 0, errors.New("block not found")
 		}
 		hi = block.GasLimit()
+		if hi == 0 {
+			hi = params.GasCeil
+		}
 	}
 	// Normalize the max fee per gas the call is willing to spend.
 	var feeCap *big.Int
-	if args.GasPrice != nil && (args.MaxFeePerGas != nil || args.MaxPriorityFeePerGas != nil) {
-		return 0, errors.New("both gasPrice and (maxFeePerGas or maxPriorityFeePerGas) specified")
-	} else if args.GasPrice != nil {
+	if args.GasPrice != nil {
 		feeCap = args.GasPrice.ToInt()
-	} else if args.MaxFeePerGas != nil {
-		feeCap = args.MaxFeePerGas.ToInt()
+	} else if args.MinerTip != nil {
+		feeCap = args.MinerTip.ToInt()
 	} else {
 		feeCap = common.Big0
 	}
@@ -873,6 +828,8 @@ func DoEstimateGas(ctx context.Context, b Backend, args TransactionArgs, blockNr
 			return 0, fmt.Errorf("gas required exceeds allowance (%d)", cap)
 		}
 	}
+	// Add 10% to the final gas estimate
+	hi = hi + hi/10
 	return hexutil.Uint64(hi), nil
 }
 
@@ -960,7 +917,7 @@ func RPCMarshalETHHeader(head *types.Header) map[string]interface{} {
 		"number":           (*hexutil.Big)(head.Number(common.ZONE_CTX)),
 		"hash":             head.Hash(),
 		"parentHash":       head.ParentHash,
-		"sha3Uncles":       head.UncleHash,
+		"uncleHash":        head.UncleHash,
 		"evmRoot":          head.EVMRoot,
 		"extraData":        hexutil.Bytes(head.Extra()),
 		"size":             hexutil.Uint64(head.Size()),
@@ -1014,7 +971,7 @@ func RPCMarshalETHBlock(block *types.WorkObject, inclTx bool, fullTx bool, nodeL
 // a `PublicBlockchainAPI`.
 func (s *PublicBlockChainAPI) rpcMarshalHeader(ctx context.Context, header *types.WorkObject) map[string]interface{} {
 	fields := RPCMarshalETHHeader(header.Header())
-	fields["totalEntropy"] = (*hexutil.Big)(s.b.TotalLogS(header))
+	fields["totalEntropy"] = (*hexutil.Big)(s.b.TotalLogEntropy(header))
 	return fields
 }
 
@@ -1025,38 +982,36 @@ func (s *PublicBlockChainAPI) rpcMarshalBlock(ctx context.Context, b *types.Work
 	if err != nil {
 		return nil, err
 	}
-	fields["totalEntropy"] = (*hexutil.Big)(s.b.TotalLogS(b))
+	fields["totalEntropy"] = (*hexutil.Big)(s.b.TotalLogEntropy(b))
 	return fields, err
 }
 
 // RPCTransaction represents a transaction that will serialize to the RPC representation of a transaction
 type RPCTransaction struct {
-	BlockHash         *common.Hash      `json:"blockHash"`
-	BlockNumber       *hexutil.Big      `json:"blockNumber"`
-	From              *common.Address   `json:"from,omitempty"`
-	Gas               hexutil.Uint64    `json:"gas"`
-	GasFeeCap         *hexutil.Big      `json:"maxFeePerGas,omitempty"`
-	GasTipCap         *hexutil.Big      `json:"maxPriorityFeePerGas,omitempty"`
-	Hash              common.Hash       `json:"hash"`
-	Input             hexutil.Bytes     `json:"input"`
-	Nonce             hexutil.Uint64    `json:"nonce"`
-	To                *common.Address   `json:"to,omitempty"`
-	TransactionIndex  *hexutil.Uint64   `json:"transactionIndex"`
-	Value             *hexutil.Big      `json:"value,omitempty"`
-	Type              hexutil.Uint64    `json:"type"`
-	Accesses          *types.AccessList `json:"accessList,omitempty"`
-	ChainID           *hexutil.Big      `json:"chainId,omitempty"`
-	V                 *hexutil.Big      `json:"v,omitempty"`
-	R                 *hexutil.Big      `json:"r,omitempty"`
-	S                 *hexutil.Big      `json:"s,omitempty"`
-	TxIn              []RPCTxIn         `json:"inputs,omitempty"`
-	TxOut             []RPCTxOut        `json:"outputs,omitempty"`
-	UTXOSignature     hexutil.Bytes     `json:"utxoSignature,omitempty"`
-	OriginatingTxHash *common.Hash      `json:"originatingTxHash,omitempty"`
-	ETXIndex          *hexutil.Uint64   `json:"etxIndex,omitempty"`
-	IsCoinbase        *hexutil.Uint64   `json:"isCoinbase,omitempty"`
-	// Optional fields only present for external transactions
-	Sender *common.Address `json:"sender,omitempty"`
+	BlockHash         *common.Hash             `json:"blockHash"`
+	BlockNumber       *hexutil.Big             `json:"blockNumber"`
+	From              *common.MixedcaseAddress `json:"from,omitempty"`
+	Gas               hexutil.Uint64           `json:"gas,omitempty"`
+	MinerTip          *hexutil.Big             `json:"minerTip,omitempty"`
+	GasPrice          *hexutil.Big             `json:"gasPrice,omitempty"`
+	Hash              common.Hash              `json:"hash,omitempty"`
+	Input             hexutil.Bytes            `json:"input"`
+	Nonce             hexutil.Uint64           `json:"nonce"`
+	To                *common.MixedcaseAddress `json:"to,omitempty"`
+	TransactionIndex  *hexutil.Uint64          `json:"transactionIndex"`
+	Value             *hexutil.Big             `json:"value,omitempty"`
+	Type              hexutil.Uint64           `json:"type"`
+	Accesses          *types.AccessList        `json:"accessList,omitempty"`
+	ChainID           *hexutil.Big             `json:"chainId,omitempty"`
+	V                 *hexutil.Big             `json:"v,omitempty"`
+	R                 *hexutil.Big             `json:"r,omitempty"`
+	S                 *hexutil.Big             `json:"s,omitempty"`
+	TxIn              []RPCTxIn                `json:"inputs,omitempty"`
+	TxOut             []RPCTxOut               `json:"outputs,omitempty"`
+	UTXOSignature     hexutil.Bytes            `json:"utxoSignature,omitempty"`
+	OriginatingTxHash *common.Hash             `json:"originatingTxHash,omitempty"`
+	ETXIndex          *hexutil.Uint64          `json:"etxIndex,omitempty"`
+	ETxType           *hexutil.Uint64          `json:"etxType,omitempty"`
 }
 
 type RPCTxIn struct {
@@ -1093,6 +1048,11 @@ func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber
 		for _, txout := range tx.TxOut() {
 			result.TxOut = append(result.TxOut, RPCTxOut{Denomination: hexutil.Uint(txout.Denomination), Address: hexutil.Bytes(txout.Address), Lock: (*hexutil.Big)(txout.Lock)})
 		}
+		if blockHash != (common.Hash{}) {
+			result.BlockHash = &blockHash
+			result.BlockNumber = (*hexutil.Big)(new(big.Int).SetUint64(blockNumber))
+			result.TransactionIndex = (*hexutil.Uint64)(&index)
+		}
 		return result
 	}
 
@@ -1105,17 +1065,19 @@ func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber
 		signer := types.LatestSignerForChainID(tx.ChainId(), nodeLocation)
 		from, _ := types.Sender(signer, tx)
 		result = &RPCTransaction{
-			Type:      hexutil.Uint64(tx.Type()),
-			From:      &from,
-			Gas:       hexutil.Uint64(tx.Gas()),
-			Hash:      tx.Hash(),
-			Input:     hexutil.Bytes(tx.Data()),
-			Nonce:     hexutil.Uint64(tx.Nonce()),
-			To:        tx.To(),
-			Value:     (*hexutil.Big)(tx.Value()),
-			ChainID:   (*hexutil.Big)(tx.ChainId()),
-			GasFeeCap: (*hexutil.Big)(tx.GasFeeCap()),
-			GasTipCap: (*hexutil.Big)(tx.GasTipCap()),
+			Type:     hexutil.Uint64(tx.Type()),
+			From:     from.MixedcaseAddressPtr(),
+			Gas:      hexutil.Uint64(tx.Gas()),
+			Hash:     tx.Hash(),
+			Input:    hexutil.Bytes(tx.Data()),
+			Nonce:    hexutil.Uint64(tx.Nonce()),
+			Value:    (*hexutil.Big)(tx.Value()),
+			ChainID:  (*hexutil.Big)(tx.ChainId()),
+			GasPrice: (*hexutil.Big)(tx.GasPrice()),
+			MinerTip: (*hexutil.Big)(tx.MinerTip()),
+		}
+		if tx.To() != nil {
+			result.To = tx.To().MixedcaseAddressPtr()
 		}
 	case types.ExternalTxType:
 		result = &RPCTransaction{
@@ -1123,22 +1085,17 @@ func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber
 			Gas:   hexutil.Uint64(tx.Gas()),
 			Hash:  tx.Hash(),
 			Input: hexutil.Bytes(tx.Data()),
-			To:    tx.To(),
+			To:    tx.To().MixedcaseAddressPtr(),
 			Value: (*hexutil.Big)(tx.Value()),
 		}
 		originatingTxHash := tx.OriginatingTxHash()
 		etxIndex := uint64(tx.ETXIndex())
 		sender := tx.ETXSender()
 		result.OriginatingTxHash = &originatingTxHash
-		result.Sender = &sender
+		result.From = sender.MixedcaseAddressPtr()
 		result.ETXIndex = (*hexutil.Uint64)(&etxIndex)
-		if tx.IsCoinbase() {
-			isCoinbase := uint64(1)
-			result.IsCoinbase = (*hexutil.Uint64)(&isCoinbase)
-		} else {
-			isCoinbase := uint64(0)
-			result.IsCoinbase = (*hexutil.Uint64)(&isCoinbase)
-		}
+		etxType := tx.EtxType()
+		result.ETxType = (*hexutil.Uint64)(&etxType)
 	}
 	if blockHash != (common.Hash{}) {
 		result.BlockHash = &blockHash
@@ -1160,7 +1117,7 @@ func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber
 func newRPCPendingTransaction(tx *types.Transaction, current *types.WorkObject, config *params.ChainConfig) *RPCTransaction {
 	var baseFee *big.Int
 	if current != nil {
-		baseFee = misc.CalcBaseFee(config, current)
+		baseFee = current.BaseFee()
 	}
 	return newRPCTransaction(tx, common.Hash{}, 0, 0, baseFee, config.Location)
 }
@@ -1170,7 +1127,7 @@ func newRPCTransactionFromBlockIndex(b *types.WorkObject, index uint64, etxs boo
 	nodeCtx := nodeLocation.Context()
 	var txs types.Transactions
 	if etxs {
-		txs = b.ExtTransactions()
+		txs = b.OutboundEtxs()
 	} else {
 		txs = b.Transactions()
 	}
@@ -1193,7 +1150,7 @@ func newRPCRawTransactionFromBlockIndex(b *types.WorkObject, index uint64) hexut
 // newRPCTransactionFromBlockHash returns a transaction that will serialize to the RPC representation.
 func newRPCTransactionFromBlockHash(b *types.WorkObject, hash common.Hash, etxs bool, nodeLocation common.Location) *RPCTransaction {
 	if etxs {
-		for idx, tx := range b.ExtTransactions() {
+		for idx, tx := range b.OutboundEtxs() {
 			if tx.Hash() == hash {
 				return newRPCTransactionFromBlockIndex(b, uint64(idx), true, nodeLocation)
 			}
@@ -1211,9 +1168,9 @@ func newRPCTransactionFromBlockHash(b *types.WorkObject, hash common.Hash, etxs 
 // Its the result of the `debug_createAccessList` RPC call.
 // It contains an error if the transaction itself failed.
 type accessListResult struct {
-	Accesslist *types.AccessList `json:"accessList"`
-	Error      string            `json:"error,omitempty"`
-	GasUsed    hexutil.Uint64    `json:"gasUsed"`
+	Accesslist *types.MixedAccessList `json:"accessList"`
+	Error      string                 `json:"error,omitempty"`
+	GasUsed    hexutil.Uint64         `json:"gasUsed"`
 }
 
 // CreateAccessList creates an AccessList for the given transaction.
@@ -1234,7 +1191,7 @@ func (s *PublicBlockChainAPI) CreateAccessList(ctx context.Context, args Transac
 	if err != nil {
 		return nil, err
 	}
-	result := &accessListResult{Accesslist: &acl, GasUsed: hexutil.Uint64(gasUsed)}
+	result := &accessListResult{Accesslist: acl.ConvertToMixedCase(), GasUsed: hexutil.Uint64(gasUsed)}
 	if vmerr != nil {
 		result.Error = vmerr.Error()
 	}
@@ -1271,6 +1228,12 @@ func AccessList(ctx context.Context, b Backend, blockNrOrHash rpc.BlockNumberOrH
 		to = *args.To
 	} else {
 		to = crypto.CreateAddress(args.from(nodeLocation), uint64(*args.Nonce), *args.Data, nodeLocation)
+		if _, err := to.InternalAndQuaiAddress(); err != nil {
+			to, _, err = vm.GrindContract(args.from(nodeLocation), uint64(*args.Nonce), math.MaxUint64, 0, crypto.Keccak256Hash(*args.Data), nodeLocation)
+			if err != nil {
+				return nil, 0, nil, err
+			}
+		}
 	}
 	// Retrieve the precompiles since they don't need to be added to the access list
 	precompiles := vm.ActivePrecompiles(b.ChainConfig().Rules(header.Number(nodeCtx)), nodeLocation)
@@ -1284,7 +1247,8 @@ func AccessList(ctx context.Context, b Backend, blockNrOrHash rpc.BlockNumberOrH
 		// Retrieve the current access list to expand
 		accessList := prevTracer.AccessList(nodeLocation)
 		b.Logger().WithField("accessList", accessList).Debug("Creating access list")
-
+		// Set the accesslist to the last al
+		args.AccessList = &accessList
 		// If no gas amount was specified, each unique access list needs it's own
 		// gas calculation. This is quite expensive, but we need to be accurate
 		// and it's convered by the sender only anyway.
@@ -1296,8 +1260,7 @@ func AccessList(ctx context.Context, b Backend, blockNrOrHash rpc.BlockNumberOrH
 		}
 		// Copy the original db so we don't modify it
 		statedb := db.Copy()
-		// Set the accesslist to the last al
-		args.AccessList = &accessList
+
 		msg, err := args.ToMessage(b.RPCGasCap(), header.BaseFee(), nodeLocation)
 		if err != nil {
 			return nil, 0, nil, err
@@ -1420,10 +1383,7 @@ func (s *PublicTransactionPoolAPI) GetTransactionCount(ctx context.Context, addr
 // GetTransactionByHash returns the transaction for the given hash
 func (s *PublicTransactionPoolAPI) GetTransactionByHash(ctx context.Context, hash common.Hash) (*RPCTransaction, error) {
 	// Try to return an already finalized transaction
-	tx, blockHash, blockNumber, index, err := s.b.GetTransaction(ctx, hash)
-	if err != nil {
-		return nil, err
-	}
+	tx, blockHash, blockNumber, index, _ := s.b.GetTransaction(ctx, hash)
 	if tx != nil {
 		header, err := s.b.HeaderByHash(ctx, blockHash)
 		if err != nil {
@@ -1487,22 +1447,37 @@ func (s *PublicTransactionPoolAPI) GetTransactionReceipt(ctx context.Context, ha
 		"blockNumber":       hexutil.Uint64(blockNumber),
 		"transactionHash":   hash,
 		"transactionIndex":  hexutil.Uint64(index),
-		"from":              from,
-		"to":                tx.To(),
+		"from":              from.Hex(),
 		"gasUsed":           hexutil.Uint64(receipt.GasUsed),
 		"cumulativeGasUsed": hexutil.Uint64(receipt.CumulativeGasUsed),
 		"contractAddress":   nil,
 		"logs":              receipt.Logs,
-		"etxs":              receipt.Etxs,
 		"logsBloom":         receipt.Bloom,
 		"type":              hexutil.Uint(tx.Type()),
+	}
+
+	if to := tx.To(); to != nil {
+		fields["to"] = to.Hex()
+	}
+
+	if tx.Type() == types.ExternalTxType {
+		fields["originatingTxHash"] = tx.OriginatingTxHash()
+		fields["etxType"] = hexutil.Uint(tx.EtxType())
+	}
+
+	var outBoundEtxs []*RPCTransaction
+	for _, tx := range receipt.OutboundEtxs {
+		outBoundEtxs = append(outBoundEtxs, newRPCTransaction(tx, blockHash, blockNumber, index, big.NewInt(0), s.b.NodeLocation()))
+	}
+	if len(receipt.OutboundEtxs) > 0 {
+		fields["outboundEtxs"] = outBoundEtxs
 	}
 	// Assign the effective gas price paid
 	header, err := s.b.HeaderByHash(ctx, blockHash)
 	if err != nil {
 		return nil, err
 	}
-	gasPrice := new(big.Int).Add(header.BaseFee(), tx.EffectiveGasTipValue(header.BaseFee()))
+	gasPrice := new(big.Int).Add(header.BaseFee(), tx.MinerTip())
 	fields["effectiveGasPrice"] = hexutil.Uint64(gasPrice.Uint64())
 
 	// Assign receipt status or post state.
@@ -1516,7 +1491,7 @@ func (s *PublicTransactionPoolAPI) GetTransactionReceipt(ctx context.Context, ha
 	}
 	// If the ContractAddress is 20 0x0 bytes, assume it is not a contract creation
 	if !receipt.ContractAddress.Equal(common.Zero) && !receipt.ContractAddress.Equal(common.Address{}) {
-		fields["contractAddress"] = receipt.ContractAddress
+		fields["contractAddress"] = receipt.ContractAddress.Hex()
 	}
 	return fields, nil
 }
@@ -1707,4 +1682,94 @@ func toHexSlice(b [][]byte) []string {
 		r[i] = hexutil.Encode(b[i])
 	}
 	return r
+}
+
+type PublicWorkSharesAPI struct {
+	b        Backend
+	txPool   *PublicTransactionPoolAPI
+	txWorker *TxWorker
+}
+
+// NewPublicWorkSharesAPI creates a new RPC service with methods specific for the transaction pool.
+func NewPublicWorkSharesAPI(txpoolAPi *PublicTransactionPoolAPI, b Backend) *PublicWorkSharesAPI {
+	api := &PublicWorkSharesAPI{
+		b,
+		txpoolAPi,
+		nil,
+	}
+	if b.TxMiningEnabled() {
+		// Start WorkShare workers
+		worker := StartTxWorker(b.Engine(), b.GetMinerEndpoints(), b.NodeLocation(), api, b.GetWorkShareThreshold())
+		api.txWorker = worker
+	}
+
+	return api
+}
+
+// GetWork returns the current workObjectHeader and the workThreshold to recognize a share
+func (s *PublicWorkSharesAPI) GetWork(ctx context.Context) (hexutil.Bytes, int, error) {
+	header := s.b.CurrentHeader()
+
+	protoWo, err := header.WorkObjectHeader().ProtoEncode()
+	if err != nil {
+		return nil, -1, err
+	}
+
+	protoBytes, err := proto.Marshal(protoWo)
+	if err != nil {
+		return nil, -1, err
+	}
+
+	return protoBytes, s.b.GetWorkShareThreshold(), nil
+}
+
+// GetWorkShareThreshold returns the minimal WorkShareThreshold that this node will accept
+func (s *PublicWorkSharesAPI) GetWorkShareThreshold(ctx context.Context) (int, error) {
+	return s.b.GetWorkShareThreshold(), nil
+}
+
+// SendWorkedTransaction will check that the transaction in the form of a worked WorkObject
+// fufills the work threshold before adding it to the transaction pool.
+func (s *PublicWorkSharesAPI) SendUnworkedTransaction(ctx context.Context, input hexutil.Bytes) (common.Hash, error) {
+	tx := new(types.Transaction)
+	protoTransaction := new(types.ProtoTransaction)
+	err := proto.Unmarshal(input, protoTransaction)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	err = tx.ProtoDecode(protoTransaction, s.b.NodeLocation())
+	if err != nil {
+		return common.Hash{}, err
+	}
+	return tx.Hash(), s.txWorker.AddTransaction(tx)
+}
+
+func (s *PublicWorkSharesAPI) ReceiveSubWorkshare(ctx context.Context, input hexutil.Bytes) error {
+	protoSubWorkshare := &types.ProtoWorkObject{}
+	err := proto.Unmarshal(input, protoSubWorkshare)
+	if err != nil {
+		return err
+	}
+
+	workShare := &types.WorkObject{}
+	workShare.ProtoDecode(protoSubWorkshare, s.b.NodeLocation(), types.WorkShareTxObject)
+
+	// check if the workshare is valid before broadcasting as a sanity
+	workShareValidity := s.b.CheckIfValidWorkShare(workShare.WorkObjectHeader())
+	if workShareValidity == types.Valid {
+		s.b.Logger().WithField("number", workShare.WorkObjectHeader().NumberU64()).Info("Received Work Share")
+		shareView := workShare.ConvertToWorkObjectShareView(workShare.Transactions())
+		err = s.b.BroadcastWorkShare(shareView, s.b.NodeLocation())
+		if err != nil {
+			s.b.Logger().WithField("err", err).Error("Error broadcasting work share")
+		}
+		txEgressCounter.Add(float64(len(shareView.WorkObject.Transactions())))
+		s.b.Logger().WithFields(log.Fields{"tx count": len(workShare.Transactions())}).Info("Broadcasted workshares with txs")
+		return nil
+	} else if workShareValidity == types.Sub {
+		tx := workShare.Tx()
+		return s.b.SendTx(ctx, tx)
+	} else {
+		return errors.New("work share is invalid")
+	}
 }

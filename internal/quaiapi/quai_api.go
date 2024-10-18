@@ -19,6 +19,8 @@ package quaiapi
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math"
 	"math/big"
 	"time"
 
@@ -26,6 +28,7 @@ import (
 	"github.com/dominant-strategies/go-quai/common/hexutil"
 	"github.com/dominant-strategies/go-quai/consensus/misc"
 	"github.com/dominant-strategies/go-quai/core"
+	"github.com/dominant-strategies/go-quai/core/rawdb"
 	"github.com/dominant-strategies/go-quai/core/types"
 	"github.com/dominant-strategies/go-quai/crypto"
 	"github.com/dominant-strategies/go-quai/log"
@@ -53,50 +56,12 @@ func NewPublicQuaiAPI(b Backend) *PublicQuaiAPI {
 
 // GasPrice returns a suggestion for a gas price for legacy transactions.
 func (s *PublicQuaiAPI) GasPrice(ctx context.Context) (*hexutil.Big, error) {
-	tipcap, err := s.b.SuggestGasTipCap(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if head := s.b.CurrentHeader(); head.BaseFee() != nil {
-		tipcap.Add(tipcap, head.BaseFee())
-	}
-	return (*hexutil.Big)(tipcap), err
+	return (*hexutil.Big)(s.b.GetMinGasPrice()), nil
 }
 
-// MaxPriorityFeePerGas returns a suggestion for a gas tip cap for dynamic fee transactions.
-func (s *PublicQuaiAPI) MaxPriorityFeePerGas(ctx context.Context) (*hexutil.Big, error) {
-	tipcap, err := s.b.SuggestGasTipCap(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return (*hexutil.Big)(tipcap), err
-}
-
-func (s *PublicQuaiAPI) FeeHistory(ctx context.Context, blockCount rpc.DecimalOrHex, lastBlock rpc.BlockNumber, rewardPercentiles []float64) (*feeHistoryResult, error) {
-	oldest, reward, baseFee, gasUsed, err := s.b.FeeHistory(ctx, int(blockCount), lastBlock, rewardPercentiles)
-	if err != nil {
-		return nil, err
-	}
-	results := &feeHistoryResult{
-		OldestBlock:  (*hexutil.Big)(oldest),
-		GasUsedRatio: gasUsed,
-	}
-	if reward != nil {
-		results.Reward = make([][]*hexutil.Big, len(reward))
-		for i, w := range reward {
-			results.Reward[i] = make([]*hexutil.Big, len(w))
-			for j, v := range w {
-				results.Reward[i][j] = (*hexutil.Big)(v)
-			}
-		}
-	}
-	if baseFee != nil {
-		results.BaseFee = make([]*hexutil.Big, len(baseFee))
-		for i, v := range baseFee {
-			results.BaseFee[i] = (*hexutil.Big)(v)
-		}
-	}
-	return results, nil
+// MinerTip returns the gas price of the pool
+func (s *PublicQuaiAPI) MinerTip(ctx context.Context) *hexutil.Big {
+	return (*hexutil.Big)(s.b.GetPoolGasPrice())
 }
 
 // PublicBlockChainQuaiAPI provides an API to access the Quai blockchain.
@@ -242,7 +207,7 @@ func (s *PublicBlockChainQuaiAPI) GetProof(ctx context.Context, address common.A
 	}
 
 	return &AccountResult{
-		Address:      address,
+		Address:      address.MixedcaseAddress(),
 		AccountProof: toHexSlice(accountProof),
 		Balance:      (*hexutil.Big)(state.GetBalance(internal)),
 		CodeHash:     codeHash,
@@ -258,10 +223,10 @@ func (s *PublicBlockChainQuaiAPI) GetProof(ctx context.Context, address common.A
 func (s *PublicBlockChainQuaiAPI) GetHeaderByNumber(ctx context.Context, number rpc.BlockNumber) (map[string]interface{}, error) {
 	header, err := s.b.HeaderByNumber(ctx, number)
 	if header != nil && err == nil {
-		response := header.RPCMarshalWorkObject()
+		response := header.RPCMarshalHeader()
 		if number == rpc.PendingBlockNumber {
 			// Pending header need to nil out a few fields
-			for _, field := range []string{"hash", "nonce", "miner"} {
+			for _, field := range []string{"hash", "nonce", "coinbase"} {
 				response[field] = nil
 			}
 		}
@@ -271,19 +236,10 @@ func (s *PublicBlockChainQuaiAPI) GetHeaderByNumber(ctx context.Context, number 
 }
 
 // GetHeaderByHash returns the requested header by hash.
-func (s *PublicBlockChainQuaiAPI) GetHeaderHashByNumber(ctx context.Context, number rpc.BlockNumber) common.Hash {
-	header, err := s.b.HeaderByNumber(ctx, number)
-	if err != nil {
-		return common.Hash{}
-	}
-	return header.Hash()
-}
-
-// GetHeaderByHash returns the requested header by hash.
 func (s *PublicBlockChainQuaiAPI) GetHeaderByHash(ctx context.Context, hash common.Hash) map[string]interface{} {
 	header, _ := s.b.HeaderByHash(ctx, hash)
 	if header != nil {
-		return header.RPCMarshalWorkObject()
+		return header.RPCMarshalHeader()
 	}
 	return nil
 }
@@ -299,7 +255,7 @@ func (s *PublicBlockChainQuaiAPI) GetBlockByNumber(ctx context.Context, number r
 		response, err := s.rpcMarshalBlock(ctx, block, true, fullTx)
 		if err == nil && number == rpc.PendingBlockNumber {
 			// Pending blocks need to nil out a few fields
-			for _, field := range []string{"hash", "nonce", "miner"} {
+			for _, field := range []string{"hash", "nonce", "coinbase"} {
 				response[field] = nil
 			}
 		}
@@ -322,11 +278,10 @@ func (s *PublicBlockChainQuaiAPI) GetBlockByHash(ctx context.Context, hash commo
 }
 
 func (s *PublicBlockChainQuaiAPI) GetBlockOrCandidateByHash(ctx context.Context, hash common.Hash, fullTx bool) (map[string]interface{}, error) {
-	block := s.b.BlockOrCandidateByHash(hash)
-	if block != nil {
+	if block := s.b.BlockOrCandidateByHash(hash); block != nil {
 		return s.rpcMarshalBlock(ctx, block, true, fullTx)
 	}
-	return nil, errors.New("block not found")
+	return nil, nil
 }
 
 // GetUncleByBlockNumberAndIndex returns the uncle block for the given block hash and index. When fullTx is true
@@ -482,7 +437,15 @@ func (s *PublicBlockChainQuaiAPI) EstimateGas(ctx context.Context, args Transact
 	}
 	switch args.TxType {
 	case types.QiTxType:
-		return args.CalculateQiTxGas(s.b.NodeLocation())
+		block, err := s.b.BlockByNumberOrHash(ctx, bNrOrHash)
+		if err != nil {
+			return 0, err
+		}
+		if block == nil {
+			return 0, errors.New("block not found: " + fmt.Sprintf("%v", bNrOrHash))
+		}
+		scalingFactor := math.Log(float64(rawdb.ReadUTXOSetSize(s.b.Database(), block.Hash())))
+		return args.CalculateQiTxGas(scalingFactor, s.b.NodeLocation())
 	case types.QuaiTxType:
 		return DoEstimateGas(ctx, s.b, args, bNrOrHash, s.b.RPCGasCap())
 	default:
@@ -490,10 +453,28 @@ func (s *PublicBlockChainQuaiAPI) EstimateGas(ctx context.Context, args Transact
 	}
 }
 
+// GetContractSize gives the size of the contract at the block hash or number
+func (s *PublicBlockChainQuaiAPI) GetContractSize(ctx context.Context, address common.AddressBytes, blockNrOrHash rpc.BlockNumberOrHash) (*hexutil.Big, error) {
+	addr := common.Bytes20ToAddress(address, s.b.NodeLocation())
+	if addr.IsInQuaiLedgerScope() {
+		state, _, err := s.b.StateAndHeaderByNumberOrHash(ctx, blockNrOrHash)
+		if state == nil || err != nil {
+			return nil, err
+		}
+		internal, err := addr.InternalAndQuaiAddress()
+		if err != nil {
+			return nil, err
+		}
+		return (*hexutil.Big)(state.GetSize(internal)), state.Error()
+	} else {
+		return nil, errors.New("getContractSize cannot be called on a Qi Address")
+	}
+}
+
 // BaseFee returns the base fee for a tx to be included in the next block.
 // If txType is set to "true" returns the Quai base fee in units of Wei.
 // If txType is set to "false" returns the Qi base fee in units of Qit.
-func (s *PublicBlockChainQuaiAPI) BaseFee(ctx context.Context, txType bool) (*big.Int, error) {
+func (s *PublicBlockChainQuaiAPI) BaseFee(ctx context.Context, txType bool) (*hexutil.Big, error) {
 	header := s.b.CurrentBlock()
 	if header == nil {
 		return nil, errors.New("no header available")
@@ -505,32 +486,22 @@ func (s *PublicBlockChainQuaiAPI) BaseFee(ctx context.Context, txType bool) (*bi
 	}
 
 	if txType {
-		return misc.CalcBaseFee(chainCfg, header), nil
+		return (*hexutil.Big)(s.b.CurrentBlock().BaseFee()), nil
 	} else {
-		// Use the prime terminus if we have it
-		lastPrime, err := s.b.HeaderByHash(ctx, header.PrimeTerminus())
-		if lastPrime == nil || err != nil {
-			lastPrime = header
-		}
-		quaiBaseFee := misc.CalcBaseFee(chainCfg, header)
-		qiBaseFee := misc.QuaiToQi(lastPrime.WorkObjectHeader(), quaiBaseFee)
+		quaiBaseFee := s.b.CurrentBlock().BaseFee()
+		qiBaseFee := misc.QuaiToQi(header, quaiBaseFee)
 		if qiBaseFee.Cmp(big.NewInt(0)) == 0 {
 			// Minimum base fee is 1 qit or smallest unit
-			return types.Denominations[0], nil
+			return (*hexutil.Big)(types.Denominations[0]), nil
 		} else {
-			return qiBaseFee, nil
+			return (*hexutil.Big)(qiBaseFee), nil
 		}
 	}
 }
 
 // EstimateFeeForQi returns an estimate of the amount of Qi in qits needed to execute the
 // given transaction against the current pending block.
-func (s *PublicBlockChainQuaiAPI) EstimateFeeForQi(ctx context.Context, args TransactionArgs) (*big.Int, error) {
-	// Estimate the gas
-	gas, err := args.CalculateQiTxGas(s.b.NodeLocation())
-	if err != nil {
-		return nil, err
-	}
+func (s *PublicBlockChainQuaiAPI) EstimateFeeForQi(ctx context.Context, args TransactionArgs) (*hexutil.Big, error) {
 	header := s.b.CurrentBlock()
 	if header == nil {
 		return nil, errors.New("no header available")
@@ -540,20 +511,27 @@ func (s *PublicBlockChainQuaiAPI) EstimateFeeForQi(ctx context.Context, args Tra
 	if chainCfg == nil {
 		return nil, errors.New("no chain config available")
 	}
-	// Calculate the base fee
-	quaiBaseFee := misc.CalcBaseFee(chainCfg, header)
-	feeInQuai := new(big.Int).Mul(new(big.Int).SetUint64(uint64(gas)), quaiBaseFee)
-	// Use the prime terminus if we have it
-	lastPrime, err := s.b.HeaderByHash(ctx, header.PrimeTerminus())
-	if lastPrime == nil || err != nil {
-		lastPrime = header
+	scalingFactor := math.Log(float64(rawdb.ReadUTXOSetSize(s.b.Database(), header.Hash())))
+	// Estimate the gas
+	gas, err := args.CalculateQiTxGas(scalingFactor, s.b.NodeLocation())
+	if err != nil {
+		return nil, err
 	}
-	feeInQi := misc.QuaiToQi(lastPrime.WorkObjectHeader(), feeInQuai)
+
+	// Calculate the base fee
+	minGasPrice := s.b.GetMinGasPrice()
+	feeInQuai := new(big.Int).Mul(new(big.Int).SetUint64(uint64(gas)), minGasPrice)
+	feeInQi := misc.QuaiToQi(header, feeInQuai)
 	if feeInQi.Cmp(big.NewInt(0)) == 0 {
 		// Minimum fee is 1 qit or smallest unit
-		return types.Denominations[0], nil
+		return (*hexutil.Big)(types.Denominations[0]), nil
 	}
-	return feeInQi, nil
+	log.Global.Infof("Estimated fee: %s\n", feeInQi.String())
+	return (*hexutil.Big)(feeInQi), nil
+}
+
+func (s *PublicBlockChainQuaiAPI) GetLatestUTXOSetSize(ctx context.Context) (hexutil.Uint64, error) {
+	return hexutil.Uint64(rawdb.ReadUTXOSetSize(s.b.Database(), s.b.CurrentBlock().Hash())), nil
 }
 
 // RPCMarshalBlock converts the given block to the RPC output which depends on fullTx. If inclTx is true transactions are
@@ -589,50 +567,32 @@ func RPCMarshalBlock(backend Backend, block *types.WorkObject, inclTx bool, full
 			}
 		}
 		fields["transactions"] = transactions
-		etxs := block.ExtTransactions()
-		extTransactions := make([]interface{}, len(etxs))
+		etxs := block.OutboundEtxs()
+		formatEtxs := make([]interface{}, len(etxs))
 		for i, etx := range etxs {
-			if extTransactions[i], err = formatEtx(etx); err != nil {
+			if formatEtxs[i], err = formatEtx(etx); err != nil {
 				return nil, err
 			}
 		}
-		fields["extTransactions"] = extTransactions
+		fields["outboundEtxs"] = formatEtxs
 	}
 
-	var marshalUncles []map[string]interface{}
+	marshalUncles := make([]map[string]interface{}, 0)
+	marshalWorkShares := make([]map[string]interface{}, 0)
 	for _, uncle := range block.Uncles() {
 		rpcMarshalUncle := uncle.RPCMarshalWorkObjectHeader()
 		_, err := backend.Engine().VerifySeal(uncle)
 		if err != nil {
-			rpcMarshalUncle["workShare"] = true
+			marshalWorkShares = append(marshalWorkShares, rpcMarshalUncle)
 		} else {
-			rpcMarshalUncle["workShare"] = false
+			marshalUncles = append(marshalUncles, rpcMarshalUncle)
 		}
-		marshalUncles = append(marshalUncles, rpcMarshalUncle)
 	}
 	fields["uncles"] = marshalUncles
+	fields["workshares"] = marshalWorkShares
 	fields["subManifest"] = block.Manifest()
 	fields["interlinkHashes"] = block.InterlinkHashes()
 
-	return fields, nil
-}
-
-// rpcMarshalReOrgData converts the reOrgData obtained to the right header format
-func RPCMarshalReOrgData(header *types.Header, newHeaders []*types.Header, oldHeaders []*types.Header) (map[string]interface{}, error) {
-	fields := map[string]interface{}{"header": header.RPCMarshalHeader()}
-
-	fieldNewHeaders := make([]interface{}, len(newHeaders))
-	for i, newHeader := range newHeaders {
-		fieldNewHeaders[i] = newHeader.RPCMarshalHeader()
-	}
-
-	fieldOldHeaders := make([]interface{}, len(oldHeaders))
-	for i, oldHeader := range oldHeaders {
-		fieldOldHeaders[i] = oldHeader.RPCMarshalHeader()
-	}
-
-	fields["newHeaders"] = fieldNewHeaders
-	fields["oldHeaders"] = fieldOldHeaders
 	return fields, nil
 }
 
@@ -642,14 +602,6 @@ func RPCMarshalHash(hash common.Hash) (map[string]interface{}, error) {
 	return fields, nil
 }
 
-// rpcMarshalHeader uses the generalized output filler, then adds the total difficulty field, which requires
-// a `PublicBlockchainQuaiAPI`.
-func (s *PublicBlockChainQuaiAPI) rpcMarshalHeader(ctx context.Context, header *types.WorkObject) map[string]interface{} {
-	fields := header.RPCMarshalWorkObject()
-	fields["totalEntropy"] = (*hexutil.Big)(s.b.TotalLogS(header))
-	return fields
-}
-
 // rpcMarshalBlock uses the generalized output filler, then adds the total difficulty field, which requires
 // a `PublicBlockchainAPI`.
 func (s *PublicBlockChainQuaiAPI) rpcMarshalBlock(ctx context.Context, b *types.WorkObject, inclTx bool, fullTx bool) (map[string]interface{}, error) {
@@ -657,12 +609,7 @@ func (s *PublicBlockChainQuaiAPI) rpcMarshalBlock(ctx context.Context, b *types.
 	if err != nil {
 		return nil, err
 	}
-	_, order, err := s.b.CalcOrder(b)
-	if err != nil {
-		return nil, err
-	}
-	fields["order"] = order
-	fields["totalEntropy"] = (*hexutil.Big)(s.b.TotalLogS(b))
+	fields["totalEntropy"] = (*hexutil.Big)(s.b.TotalLogEntropy(b))
 	return fields, err
 }
 
@@ -676,7 +623,7 @@ func (s *PublicBlockChainQuaiAPI) CreateAccessList(ctx context.Context, args Tra
 	if !s.b.ProcessingState() {
 		return nil, errors.New("createAccessList call can only be made on chain processing the state")
 	}
-	bNrOrHash := rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber)
+	bNrOrHash := rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber)
 	if blockNrOrHash != nil {
 		bNrOrHash = *blockNrOrHash
 	}
@@ -684,7 +631,7 @@ func (s *PublicBlockChainQuaiAPI) CreateAccessList(ctx context.Context, args Tra
 	if err != nil {
 		return nil, err
 	}
-	result := &accessListResult{Accesslist: &acl, GasUsed: hexutil.Uint64(gasUsed)}
+	result := &accessListResult{Accesslist: acl.ConvertToMixedCase(), GasUsed: hexutil.Uint64(gasUsed)}
 	if vmerr != nil {
 		result.Error = vmerr.Error()
 	}
@@ -720,7 +667,7 @@ func (s *PublicBlockChainQuaiAPI) fillSubordinateManifest(b *types.WorkObject) (
 		if subManifest == nil || b.ManifestHash(nodeCtx+1) != types.DeriveSha(subManifest, trie.NewStackTrie(nil)) {
 			return nil, errors.New("reconstructed sub manifest does not match manifest hash")
 		}
-		return types.NewWorkObjectWithHeaderAndTx(b.WorkObjectHeader(), b.Tx()).WithBody(b.Header(), b.Transactions(), b.ExtTransactions(), b.Uncles(), subManifest, b.InterlinkHashes()), nil
+		return types.NewWorkObjectWithHeaderAndTx(b.WorkObjectHeader(), b.Tx()).WithBody(b.Header(), b.Transactions(), b.OutboundEtxs(), b.Uncles(), subManifest, b.InterlinkHashes()), nil
 	}
 }
 
@@ -774,7 +721,7 @@ func (s *PublicBlockChainQuaiAPI) ReceiveMinedHeader(ctx context.Context, raw he
 	return nil
 }
 
-func (s *PublicBlockChainQuaiAPI) ReceiveWorkShare(ctx context.Context, raw hexutil.Bytes) error {
+func (s *PublicBlockChainQuaiAPI) ReceiveRawWorkShare(ctx context.Context, raw hexutil.Bytes) error {
 	nodeCtx := s.b.NodeCtx()
 	if nodeCtx != common.ZONE_CTX {
 		return errors.New("work shares cannot be broadcasted in non-zone chain")
@@ -791,9 +738,14 @@ func (s *PublicBlockChainQuaiAPI) ReceiveWorkShare(ctx context.Context, raw hexu
 		return err
 	}
 
+	return s.ReceiveWorkShare(ctx, workShare)
+}
+
+func (s *PublicBlockChainQuaiAPI) ReceiveWorkShare(ctx context.Context, workShare *types.WorkObjectHeader) error {
 	if workShare != nil {
 		// check if the workshare is valid before broadcasting as a sanity
-		if !s.b.CheckIfValidWorkShare(workShare) {
+		workShareValidity := s.b.CheckIfValidWorkShare(workShare)
+		if workShareValidity != types.Valid {
 			return errors.New("work share is invalid")
 		}
 
@@ -817,11 +769,7 @@ func (s *PublicBlockChainQuaiAPI) ReceiveWorkShare(ctx context.Context, raw hexu
 			s.b.Logger().WithField("err", err).Error("Error broadcasting work share")
 		}
 		txEgressCounter.Add(float64(len(shareView.WorkObject.Transactions())))
-		powHash, err := s.b.Engine().ComputePowHash(workShare)
-		if err != nil {
-			s.b.Logger().Error("Error computing the powhash of the workshare")
-		}
-		s.b.Logger().WithFields(log.Fields{"powHash": powHash, "tx count": len(txs)}).Info("Broadcasted workshares with txs")
+		s.b.Logger().WithFields(log.Fields{"tx count": len(txs)}).Info("Broadcasted workshares with txs")
 	}
 	return nil
 }
@@ -855,43 +803,44 @@ func (s *PublicBlockChainQuaiAPI) ListRunningChains() []common.Location {
 	return s.b.GetSlicesRunning()
 }
 
-func (s *PublicBlockChainQuaiAPI) GetProtocolExpansionNumber() int {
-	// TODO: Implement this
-	return 0
+func (s *PublicBlockChainQuaiAPI) GetProtocolExpansionNumber() hexutil.Uint {
+	return hexutil.Uint(s.b.GetExpansionNumber())
 }
 
 // Calculate the amount of Quai that Qi can be converted to. Expect the current Header and the Qi amount in "qits", returns the quai amount in "its"
-func (s *PublicBlockChainQuaiAPI) QiRateAtBlock(ctx context.Context, blockRef interface{}, qiAmount uint64) *big.Int {
+func (s *PublicBlockChainQuaiAPI) QiRateAtBlock(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash, qiAmount uint64) *hexutil.Big {
 	var header *types.WorkObject
 	var err error
-	switch b := blockRef.(type) {
-	case common.Hash:
-		header, err = s.b.HeaderByHash(ctx, b)
-	case uint64:
-		header, err = s.b.HeaderByNumber(ctx, rpc.BlockNumber(b))
-	}
-	if err != nil {
+	if blockNr, ok := blockNrOrHash.Number(); ok {
+		header, err = s.b.HeaderByNumber(ctx, rpc.BlockNumber(blockNr))
+	} else if hash, ok := blockNrOrHash.Hash(); ok {
+		header, err = s.b.HeaderByHash(ctx, hash)
+	} else {
 		return nil
 	}
-
-	return misc.QiToQuai(header.WorkObjectHeader(), new(big.Int).SetUint64(qiAmount))
+	if err != nil {
+		s.b.Logger().WithField("err", err).Error("Error calculating QiRateAtBlock")
+		return nil
+	}
+	return (*hexutil.Big)(misc.QiToQuai(header, new(big.Int).SetUint64(qiAmount)))
 }
 
 // Calculate the amount of Qi that Quai can be converted to. Expect the current Header and the Quai amount in "its", returns the Qi amount in "qits"
-func (s *PublicBlockChainQuaiAPI) QuaiRateAtBlock(ctx context.Context, blockRef interface{}, quaiAmount uint64) *big.Int {
+func (s *PublicBlockChainQuaiAPI) QuaiRateAtBlock(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash, quaiAmount uint64) *hexutil.Big {
 	var header *types.WorkObject
 	var err error
-	switch b := blockRef.(type) {
-	case common.Hash:
-		header, err = s.b.HeaderByHash(ctx, b)
-	case uint64:
-		header, err = s.b.HeaderByNumber(ctx, rpc.BlockNumber(b))
-	}
-	if err != nil {
+	if blockNr, ok := blockNrOrHash.Number(); ok {
+		header, err = s.b.HeaderByNumber(ctx, rpc.BlockNumber(blockNr))
+	} else if hash, ok := blockNrOrHash.Hash(); ok {
+		header, err = s.b.HeaderByHash(ctx, hash)
+	} else {
 		return nil
 	}
-
-	return misc.QuaiToQi(header.WorkObjectHeader(), new(big.Int).SetUint64(quaiAmount))
+	if err != nil {
+		s.b.Logger().WithField("err", err).Error("Error calculating QuaiRateAtBlock")
+		return nil
+	}
+	return (*hexutil.Big)(misc.QuaiToQi(header, new(big.Int).SetUint64(quaiAmount)))
 }
 
 func (s *PublicBlockChainQuaiAPI) CalcOrder(ctx context.Context, raw hexutil.Bytes) (hexutil.Uint, error) {
@@ -908,7 +857,15 @@ func (s *PublicBlockChainQuaiAPI) CalcOrder(ctx context.Context, raw hexutil.Byt
 	}
 	_, order, err := s.b.CalcOrder(woHeader)
 	if err != nil {
-		return 0, errors.New("cannot calculate prime terminus order")
+		return 0, fmt.Errorf("cannot calculate prime terminus order: %v", err)
 	}
 	return hexutil.Uint(order), nil
+}
+func (s *PublicBlockChainQuaiAPI) SuggestFinalityDepth(ctx context.Context, qiValue hexutil.Uint64, correlatedRisk hexutil.Uint64) (hexutil.Uint64, error) {
+
+	depth, err := s.b.SuggestFinalityDepth(ctx, big.NewInt(int64(qiValue)), big.NewInt(int64(correlatedRisk)))
+	if err != nil {
+		return 0, err
+	}
+	return hexutil.Uint64(depth.Uint64()), nil
 }

@@ -1,7 +1,6 @@
 package quai
 
 import (
-	"context"
 	"math/big"
 
 	"github.com/dominant-strategies/go-quai/common"
@@ -10,9 +9,7 @@ import (
 	"github.com/dominant-strategies/go-quai/internal/quaiapi"
 
 	"github.com/dominant-strategies/go-quai/trie"
-	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core"
-	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 // The consensus backend will implement the following interface to provide information to the networking backend.
@@ -25,14 +22,13 @@ type ConsensusAPI interface {
 	// Return true if this data should be relayed to peers. False if it should be ignored.
 	OnNewBroadcast(core.PeerID, string, string, interface{}, common.Location) bool
 
-	// Creates the function that will be used to determine if a message should be propagated.
-	ValidatorFunc() func(ctx context.Context, id peer.ID, msg *pubsub.Message, location common.Location) pubsub.ValidationResult
-
 	// Asks the consensus backend to lookup a block by hash and location.
 	// If the block is found, it should be returned. Otherwise, nil should be returned.
 	LookupBlock(common.Hash, common.Location) *types.WorkObject
 
 	LookupBlockHashByNumber(*big.Int, common.Location) *common.Hash
+
+	LookupBlockByNumber(*big.Int, common.Location) *types.WorkObject
 
 	// Asks the consensus backend to lookup a trie node by hash and location,
 	// and return the data in the trie node.
@@ -86,16 +82,13 @@ type NetworkingAPI interface {
 	// Specify location, data hash, and data type to request
 	Request(location common.Location, requestData interface{}, responseDataType interface{}) chan interface{}
 
-	// Methods to report a peer to the P2PClient as behaving maliciously
-	// Should be called whenever a peer sends us data that is acceptably lively
-	MarkLivelyPeer(peerID core.PeerID, topic string)
-	// Should be called whenever a peer sends us data that is stale or latent
-	MarkLatentPeer(peerID core.PeerID, topic string)
+	// Adjust a peer's quality score
+	AdjustPeerQuality(core.PeerID, string, func(int) int)
 
 	// Protects the peer's connection from being pruned
 	ProtectPeer(core.PeerID)
 	// Remove protection from the peer's connection
 	UnprotectPeer(core.PeerID)
-	// Ban will close the connection and prevent future connections with this peer
+	// BanPeer will close the connection and prevent future connections with this peer
 	BanPeer(core.PeerID)
 }

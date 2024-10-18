@@ -22,12 +22,12 @@ import (
 	"errors"
 	"io"
 	"math/big"
+	"sort"
 	"sync/atomic"
 	"time"
 
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/dominant-strategies/go-quai/common"
-	"github.com/dominant-strategies/go-quai/common/math"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dominant-strategies/go-quai/crypto"
@@ -39,7 +39,6 @@ var (
 	ErrInvalidSchnorrSig  = errors.New("invalid transaction scnhorr signature")
 	ErrExpectedProtection = errors.New("transaction signature is not protected")
 	ErrTxTypeNotSupported = errors.New("transaction type not supported")
-	ErrGasFeeCapTooLow    = errors.New("fee cap less than base fee")
 	errEmptyTypedTx       = errors.New("empty typed transaction bytes")
 )
 
@@ -48,6 +47,17 @@ const (
 	QuaiTxType = iota
 	ExternalTxType
 	QiTxType
+)
+
+// ETX types
+const (
+	DefaultType = iota
+	CoinbaseType
+	ConversionType
+)
+
+const (
+	c_MaxTxForSorting = 1500
 )
 
 // Transaction is a Quai transaction.
@@ -72,6 +82,25 @@ func NewTx(inner TxData) *Transaction {
 	return tx
 }
 
+func NewEmptyTx() *Transaction {
+	to := common.BytesToAddress([]byte{0x01}, common.Location{0, 0})
+	inner := &QuaiTx{
+		ChainID:    new(big.Int).SetUint64(1),
+		Nonce:      1,
+		MinerTip:   new(big.Int).SetUint64(0),
+		GasPrice:   new(big.Int).SetUint64(0),
+		Gas:        uint64(0),
+		To:         &to,
+		Value:      new(big.Int).SetUint64(0),
+		Data:       []byte{},
+		AccessList: AccessList{},
+		V:          new(big.Int).SetUint64(0),
+		R:          new(big.Int).SetUint64(0),
+		S:          new(big.Int).SetUint64(0),
+	}
+	return NewTx(inner)
+}
+
 func (tx *Transaction) SetInner(inner TxData) {
 	tx.setDecoded(inner, 0)
 }
@@ -88,8 +117,8 @@ type TxData interface {
 	data() []byte
 	gas() uint64
 	gasPrice() *big.Int
-	gasTipCap() *big.Int
-	gasFeeCap() *big.Int
+	minerTip() *big.Int
+	etxType() uint64
 	value() *big.Int
 	nonce() uint64
 	to() *common.Address
@@ -101,10 +130,10 @@ type TxData interface {
 	getEcdsaSignatureValues() (v, r, s *big.Int)
 	setEcdsaSignatureValues(chainID, v, r, s *big.Int)
 	setTo(to common.Address)
+	setValue(value *big.Int)
 	parentHash() *common.Hash
 	mixHash() *common.Hash
 	workNonce() *BlockNonce
-	isCoinbase() bool
 	// Schnorr segregated sigs
 	getSchnorrSignature() *schnorr.Signature
 }
@@ -136,8 +165,8 @@ func (tx *Transaction) ProtoEncode() (*ProtoTransaction, error) {
 		if tx.To() != nil {
 			protoTx.To = tx.To().Bytes()
 		}
-		protoTx.GasFeeCap = tx.GasFeeCap().Bytes()
-		protoTx.GasTipCap = tx.GasTipCap().Bytes()
+		protoTx.MinerTip = tx.MinerTip().Bytes()
+		protoTx.GasPrice = tx.GasPrice().Bytes()
 		V, R, S := tx.GetEcdsaSignatureValues()
 		protoTx.V = V.Bytes()
 		protoTx.R = R.Bytes()
@@ -168,8 +197,8 @@ func (tx *Transaction) ProtoEncode() (*ProtoTransaction, error) {
 		etxIndex := uint32(tx.ETXIndex())
 		protoTx.EtxIndex = &etxIndex
 		protoTx.EtxSender = tx.ETXSender().Bytes()
-		isCoinbase := tx.IsCoinbase()
-		protoTx.IsCoinbase = &isCoinbase
+		etxType := tx.EtxType()
+		protoTx.EtxType = &etxType
 	case QiTxType:
 		var err error
 		protoTx.TxIns, err = tx.TxIn().ProtoEncode()
@@ -219,11 +248,11 @@ func (tx *Transaction) ProtoDecode(protoTx *ProtoTransaction, location common.Lo
 		if protoTx.Value == nil {
 			return errors.New("missing required field 'Value' in ProtoTransaction")
 		}
-		if protoTx.GasFeeCap == nil {
-			return errors.New("missing required field 'GasFeeCap' in ProtoTransaction")
+		if protoTx.MinerTip == nil {
+			return errors.New("missing required field 'MinerTip' in ProtoTransaction")
 		}
-		if protoTx.GasTipCap == nil {
-			return errors.New("missing required field 'GasTipCap' in ProtoTransaction")
+		if protoTx.GasPrice == nil {
+			return errors.New("missing required field 'GasPrice' in ProtoTransaction")
 		}
 		if protoTx.Data == nil {
 			return errors.New("missing required field 'Data' in ProtoTransaction")
@@ -242,8 +271,8 @@ func (tx *Transaction) ProtoDecode(protoTx *ProtoTransaction, location common.Lo
 		}
 		quaiTx.ChainID = new(big.Int).SetBytes(protoTx.GetChainId())
 		quaiTx.Nonce = protoTx.GetNonce()
-		quaiTx.GasTipCap = new(big.Int).SetBytes(protoTx.GetGasTipCap())
-		quaiTx.GasFeeCap = new(big.Int).SetBytes(protoTx.GetGasFeeCap())
+		quaiTx.MinerTip = new(big.Int).SetBytes(protoTx.GetMinerTip())
+		quaiTx.GasPrice = new(big.Int).SetBytes(protoTx.GetGasPrice())
 		quaiTx.Gas = protoTx.GetGas()
 		if len(protoTx.GetValue()) == 0 {
 			quaiTx.Value = common.Big0
@@ -311,8 +340,8 @@ func (tx *Transaction) ProtoDecode(protoTx *ProtoTransaction, location common.Lo
 		if protoTx.EtxIndex == nil {
 			return errors.New("missing required field 'EtxIndex' in ProtoTransaction")
 		}
-		if protoTx.IsCoinbase == nil {
-			return errors.New("missing required field 'IsCoinbase in ProtoTransaction")
+		if protoTx.EtxType == nil {
+			return errors.New("missing required field 'EtxType' in ProtoTransaction")
 		}
 
 		var etx ExternalTx
@@ -326,7 +355,7 @@ func (tx *Transaction) ProtoDecode(protoTx *ProtoTransaction, location common.Lo
 		to := common.BytesToAddress(protoTx.GetTo(), location)
 		etx.To = &to
 		etx.Value = new(big.Int).SetBytes(protoTx.GetValue())
-		etx.IsCoinbase = protoTx.GetIsCoinbase()
+		etx.EtxType = protoTx.GetEtxType()
 
 		tx.SetInner(&etx)
 
@@ -414,8 +443,8 @@ func (tx *Transaction) ProtoEncodeTxSigningData() *ProtoTransaction {
 		if tx.To() != nil {
 			protoTxSigningData.To = tx.To().Bytes()
 		}
-		protoTxSigningData.GasFeeCap = tx.GasFeeCap().Bytes()
-		protoTxSigningData.GasTipCap = tx.GasTipCap().Bytes()
+		protoTxSigningData.MinerTip = tx.MinerTip().Bytes()
+		protoTxSigningData.GasPrice = tx.GasPrice().Bytes()
 	case 1:
 		return protoTxSigningData
 	case 2:
@@ -554,11 +583,11 @@ func (tx *Transaction) Gas() uint64 { return tx.inner.gas() }
 // GasPrice returns the gas price of the transaction.
 func (tx *Transaction) GasPrice() *big.Int { return new(big.Int).Set(tx.inner.gasPrice()) }
 
-// GasTipCap returns the gasTipCap per gas of the transaction.
-func (tx *Transaction) GasTipCap() *big.Int { return new(big.Int).Set(tx.inner.gasTipCap()) }
+// MinerTip returns the minerTip per gas of the transaction.
+func (tx *Transaction) MinerTip() *big.Int { return new(big.Int).Set(tx.inner.minerTip()) }
 
-// GasFeeCap returns the fee cap per gas of the transaction.
-func (tx *Transaction) GasFeeCap() *big.Int { return new(big.Int).Set(tx.inner.gasFeeCap()) }
+// EtxType returns the type of etx
+func (tx *Transaction) EtxType() uint64 { return tx.inner.etxType() }
 
 // Value returns the ether amount of the transaction.
 func (tx *Transaction) Value() *big.Int { return new(big.Int).Set(tx.inner.value()) }
@@ -567,8 +596,6 @@ func (tx *Transaction) Value() *big.Int { return new(big.Int).Set(tx.inner.value
 func (tx *Transaction) Nonce() uint64                  { return tx.inner.nonce() }
 func (tx *Transaction) ETXSender() common.Address      { return tx.inner.etxSender() }
 func (tx *Transaction) OriginatingTxHash() common.Hash { return tx.inner.originatingTxHash() }
-
-func (tx *Transaction) IsCoinbase() bool { return tx.inner.isCoinbase() }
 
 func (tx *Transaction) ETXIndex() uint16 { return tx.inner.etxIndex() }
 
@@ -595,6 +622,10 @@ func (tx *Transaction) From(nodeLocation common.Location) *common.Address {
 	}
 }
 
+func (tx *Transaction) SetFrom(from common.Address, signer Signer) {
+	tx.from.Store(sigCache{signer, from.Bytes20()})
+}
+
 // To returns the recipient address of the transaction.
 // For contract-creation transactions, To returns nil.
 func (tx *Transaction) To() *common.Address {
@@ -603,6 +634,10 @@ func (tx *Transaction) To() *common.Address {
 
 func (tx *Transaction) SetTo(addr common.Address) {
 	tx.inner.setTo(addr)
+}
+
+func (tx *Transaction) SetValue(value *big.Int) {
+	tx.inner.setValue(value)
 }
 
 // Cost returns gas * gasPrice + value.
@@ -616,64 +651,6 @@ func (tx *Transaction) Cost() *big.Int {
 // The return values should not be modified by the caller.
 func (tx *Transaction) GetEcdsaSignatureValues() (v, r, s *big.Int) {
 	return tx.inner.getEcdsaSignatureValues()
-}
-
-// GasFeeCapCmp compares the fee cap of two transactions.
-func (tx *Transaction) GasFeeCapCmp(other *Transaction) int {
-	return tx.inner.gasFeeCap().Cmp(other.inner.gasFeeCap())
-}
-
-// GasFeeCapIntCmp compares the fee cap of the transaction against the given fee cap.
-func (tx *Transaction) GasFeeCapIntCmp(other *big.Int) int {
-	return tx.inner.gasFeeCap().Cmp(other)
-}
-
-// GasTipCapCmp compares the gasTipCap of two transactions.
-func (tx *Transaction) GasTipCapCmp(other *Transaction) int {
-	return tx.inner.gasTipCap().Cmp(other.inner.gasTipCap())
-}
-
-// GasTipCapIntCmp compares the gasTipCap of the transaction against the given gasTipCap.
-func (tx *Transaction) GasTipCapIntCmp(other *big.Int) int {
-	return tx.inner.gasTipCap().Cmp(other)
-}
-
-// EffectiveGasTip returns the effective miner gasTipCap for the given base fee.
-// Note: if the effective gasTipCap is negative, this method returns both error
-// the actual negative value, _and_ ErrGasFeeCapTooLow
-func (tx *Transaction) EffectiveGasTip(baseFee *big.Int) (*big.Int, error) {
-	if baseFee == nil {
-		return tx.GasTipCap(), nil
-	}
-	var err error
-	gasFeeCap := tx.GasFeeCap()
-	if gasFeeCap.Cmp(baseFee) == -1 {
-		err = ErrGasFeeCapTooLow
-	}
-	return math.BigMin(tx.GasTipCap(), gasFeeCap.Sub(gasFeeCap, baseFee)), err
-}
-
-// EffectiveGasTipValue is identical to EffectiveGasTip, but does not return an
-// error in case the effective gasTipCap is negative
-func (tx *Transaction) EffectiveGasTipValue(baseFee *big.Int) *big.Int {
-	effectiveTip, _ := tx.EffectiveGasTip(baseFee)
-	return effectiveTip
-}
-
-// EffectiveGasTipCmp compares the effective gasTipCap of two transactions assuming the given base fee.
-func (tx *Transaction) EffectiveGasTipCmp(other *Transaction, baseFee *big.Int) int {
-	if baseFee == nil {
-		return tx.GasTipCapCmp(other)
-	}
-	return tx.EffectiveGasTipValue(baseFee).Cmp(other.EffectiveGasTipValue(baseFee))
-}
-
-// EffectiveGasTipIntCmp compares the effective gasTipCap of a transaction to the given gasTipCap.
-func (tx *Transaction) EffectiveGasTipIntCmp(other *big.Int, baseFee *big.Int) int {
-	if baseFee == nil {
-		return tx.GasTipCapIntCmp(other)
-	}
-	return tx.EffectiveGasTipValue(baseFee).Cmp(other)
 }
 
 func (tx *Transaction) IsLocal() bool {
@@ -733,7 +710,7 @@ func (tx *Transaction) Hash(location ...byte) (h common.Hash) {
 		}
 	case QiTxType:
 		// the origin of this tx is the *destination* of the utxos being spent
-		origin := tx.TxIn()[0].PreviousOutPoint.TxHash[1]
+		origin := tx.TxIn()[0].PreviousOutPoint.TxHash[2]
 		h[0] = origin
 		h[1] |= 0x80 // 10000000 in binary (set first bit to 1)
 		h[2] = origin
@@ -822,6 +799,7 @@ func (s Transactions) ProtoEncode() (*ProtoTransactions, error) {
 
 // ProtoDecode decodes the ProtoTransactions into the Transactions format
 func (s *Transactions) ProtoDecode(transactions *ProtoTransactions, location common.Location) error {
+	*s = make(Transactions, 0, len(transactions.Transactions))
 	for _, protoTx := range transactions.Transactions {
 		tx := &Transaction{}
 		err := tx.ProtoDecode(protoTx, location)
@@ -929,25 +907,26 @@ func (s TxByNonce) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 type TxWithMinerFee struct {
 	tx       *Transaction
 	minerFee *big.Int
+	received time.Time
 }
 
-func (tx *TxWithMinerFee) Tx() *Transaction   { return tx.tx }
-func (tx *TxWithMinerFee) MinerFee() *big.Int { return tx.minerFee }
+func (tx *TxWithMinerFee) Tx() *Transaction    { return tx.tx }
+func (tx *TxWithMinerFee) MinerFee() *big.Int  { return tx.minerFee }
+func (tx *TxWithMinerFee) Received() time.Time { return tx.received }
 
 // NewTxWithMinerFee creates a wrapped transaction, calculating the effective
 // miner gasTipCap if a base fee is provided.
 // Returns error in case of a negative effective miner gasTipCap.
-func NewTxWithMinerFee(tx *Transaction, baseFee *big.Int, qiTxFee *big.Int) (*TxWithMinerFee, error) {
+func NewTxWithMinerFee(tx *Transaction, qiTxFee *big.Int, received time.Time) (*TxWithMinerFee, error) {
 	if tx.Type() == QiTxType {
 		return &TxWithMinerFee{
 			tx:       tx,
 			minerFee: qiTxFee,
+			received: received,
 		}, nil
 	}
-	minerFee, err := tx.EffectiveGasTip(baseFee)
-	if err != nil {
-		return nil, err
-	}
+	// minerFee is now the baseFee and minerTip
+	minerFee := tx.GasPrice()
 	return &TxWithMinerFee{
 		tx:       tx,
 		minerFee: minerFee,
@@ -986,10 +965,9 @@ func (s *TxByPriceAndTime) Pop() interface{} {
 // transactions in a profit-maximizing sorted order, while supporting removing
 // entire batches of transactions for non-executable accounts.
 type TransactionsByPriceAndNonce struct {
-	txs     map[common.AddressBytes]Transactions // Per account nonce-sorted list of transactions
-	heads   TxByPriceAndTime                     // Next transaction for each unique account (price heap)
-	signer  Signer                               // Signer for the set of transactions
-	baseFee *big.Int                             // Current base fee
+	txs    map[common.AddressBytes]Transactions // Per account nonce-sorted list of transactions
+	heads  TxByPriceAndTime                     // Next transaction for each unique account (price heap)
+	signer Signer                               // Signer for the set of transactions
 }
 
 // NewTransactionsByPriceAndNonce creates a transaction set that can retrieve
@@ -997,37 +975,50 @@ type TransactionsByPriceAndNonce struct {
 //
 // Note, the input map is reowned so the caller should not interact any more with
 // if after providing it to the constructor.
-func NewTransactionsByPriceAndNonce(signer Signer, qiTxs map[common.Hash]*TxWithMinerFee, txs map[common.AddressBytes]Transactions, baseFee *big.Int, sort bool) *TransactionsByPriceAndNonce {
+func NewTransactionsByPriceAndNonce(signer Signer, qiTxs []*TxWithMinerFee, txs map[common.AddressBytes]Transactions, sortTx bool) *TransactionsByPriceAndNonce {
 	// Initialize a price and received time based heap with the head transactions
 	heads := make(TxByPriceAndTime, 0, len(txs))
 
+	quaiTxCount := 0
 	for from, accTxs := range txs {
 		acc, err := Sender(signer, accTxs[0])
 		if err != nil {
 			continue
 		}
-		wrapped, err := NewTxWithMinerFee(accTxs[0], baseFee, nil)
+		wrapped, err := NewTxWithMinerFee(accTxs[0], nil, time.Time{})
 		// Remove transaction if sender doesn't match from, or if wrapping fails.
 		if acc.Bytes20() != from || err != nil {
 			delete(txs, from)
 			continue
 		}
+		quaiTxCount++
 		heads = append(heads, wrapped)
 		txs[from] = accTxs[1:]
+		if quaiTxCount > c_MaxTxForSorting {
+			break
+		}
 	}
+	qiTxCount := 0
 	for _, qiTx := range qiTxs {
+		qiTxCount++
 		heads = append(heads, qiTx)
+		if qiTxCount > c_MaxTxForSorting {
+			break
+		}
 	}
-	if sort {
-		heap.Init(&heads)
+
+	if sortTx {
+		// Sort Eligible Transactions by Gas Used in Descending Order
+		sort.Slice(heads, func(i, j int) bool {
+			return heads[i].MinerFee().Cmp(heads[j].MinerFee()) > 0
+		})
 	}
 
 	// Assemble and return the transaction set
 	return &TransactionsByPriceAndNonce{
-		txs:     txs,
-		heads:   heads,
-		signer:  signer,
-		baseFee: baseFee,
+		txs:    txs,
+		heads:  heads,
+		signer: signer,
 	}
 }
 
@@ -1037,6 +1028,13 @@ func (t *TransactionsByPriceAndNonce) Peek() *Transaction {
 		return nil
 	}
 	return t.heads[0].tx
+}
+
+func (t *TransactionsByPriceAndNonce) PeekAndGetFee() *TxWithMinerFee {
+	if len(t.heads) == 0 {
+		return nil
+	}
+	return t.heads[0]
 }
 
 func (t *TransactionsByPriceAndNonce) GetFee() *big.Int {
@@ -1049,7 +1047,7 @@ func (t *TransactionsByPriceAndNonce) GetFee() *big.Int {
 // Shift replaces the current best head with the next one from the same account.
 func (t *TransactionsByPriceAndNonce) Shift(acc common.AddressBytes, sort bool) {
 	if txs, ok := t.txs[acc]; ok && len(txs) > 0 {
-		if wrapped, err := NewTxWithMinerFee(txs[0], t.baseFee, nil); err == nil {
+		if wrapped, err := NewTxWithMinerFee(txs[0], nil, time.Time{}); err == nil {
 			t.heads[0], t.txs[acc] = wrapped, txs[1:]
 			if sort {
 				heap.Fix(&t.heads, 0)
@@ -1076,6 +1074,25 @@ func (t *TransactionsByPriceAndNonce) PopNoSort() {
 	}
 }
 
+func (t *TransactionsByPriceAndNonce) Last(i int) *TransactionsByPriceAndNonce {
+	if t.Peek() != nil {
+		if len(t.heads) < i {
+			return nil
+		}
+		return &TransactionsByPriceAndNonce{
+			txs:    nil,
+			heads:  t.heads[len(t.heads)-i : len(t.heads)-i+1],
+			signer: t.signer,
+		}
+	} else {
+		return nil
+	}
+}
+
+func (t *TransactionsByPriceAndNonce) SetHead(txs TxByPriceAndTime) {
+	t.heads = txs
+}
+
 // Pop removes the best transaction, *not* replacing it with the next one from
 // the same account. This should be used when a transaction cannot be executed
 // and hence all subsequent ones should be discarded from the same account.
@@ -1093,8 +1110,7 @@ type Message struct {
 	amount     *big.Int
 	gasLimit   uint64
 	gasPrice   *big.Int
-	gasFeeCap  *big.Int
-	gasTipCap  *big.Int
+	minerTip   *big.Int
 	data       []byte
 	accessList AccessList
 	isETX      bool
@@ -1104,7 +1120,7 @@ type Message struct {
 	lock       *big.Int
 }
 
-func NewMessage(from common.Address, to *common.Address, nonce uint64, amount *big.Int, gasLimit uint64, gasPrice, gasFeeCap, gasTipCap *big.Int, data []byte, accessList AccessList, isETX bool) Message {
+func NewMessage(from common.Address, to *common.Address, nonce uint64, amount *big.Int, gasLimit uint64, gasPrice, minerTip *big.Int, data []byte, accessList AccessList, isETX bool) Message {
 	return Message{
 		from:       from,
 		to:         to,
@@ -1112,8 +1128,7 @@ func NewMessage(from common.Address, to *common.Address, nonce uint64, amount *b
 		amount:     amount,
 		gasLimit:   gasLimit,
 		gasPrice:   gasPrice,
-		gasFeeCap:  gasFeeCap,
-		gasTipCap:  gasTipCap,
+		minerTip:   minerTip,
 		data:       data,
 		accessList: accessList,
 		isETX:      isETX,
@@ -1126,8 +1141,7 @@ func (tx *Transaction) AsMessage(s Signer, baseFee *big.Int) (Message, error) {
 	msg := Message{
 		gasLimit:   tx.Gas(),
 		gasPrice:   new(big.Int).Set(tx.GasPrice()),
-		gasFeeCap:  new(big.Int).Set(tx.GasFeeCap()),
-		gasTipCap:  new(big.Int).Set(tx.GasTipCap()),
+		minerTip:   new(big.Int).Set(tx.MinerTip()),
 		to:         tx.To(),
 		amount:     tx.Value(),
 		data:       tx.Data(),
@@ -1135,10 +1149,6 @@ func (tx *Transaction) AsMessage(s Signer, baseFee *big.Int) (Message, error) {
 		isETX:      false,
 		txtype:     tx.Type(),
 		hash:       tx.Hash(),
-	}
-	// If baseFee provided, set gasPrice to effectiveGasPrice.
-	if baseFee != nil {
-		msg.gasPrice = math.BigMin(msg.gasPrice.Add(msg.gasTipCap, baseFee), msg.gasFeeCap)
 	}
 	var err error
 	if tx.Type() == ExternalTxType {
@@ -1157,8 +1167,7 @@ func (tx *Transaction) AsMessageWithSender(s Signer, baseFee *big.Int, sender *c
 	msg := Message{
 		gasLimit:   tx.Gas(),
 		gasPrice:   new(big.Int).Set(tx.GasPrice()),
-		gasFeeCap:  new(big.Int).Set(tx.GasFeeCap()),
-		gasTipCap:  new(big.Int).Set(tx.GasTipCap()),
+		minerTip:   new(big.Int).Set(tx.MinerTip()),
 		to:         tx.To(),
 		amount:     tx.Value(),
 		data:       tx.Data(),
@@ -1167,10 +1176,6 @@ func (tx *Transaction) AsMessageWithSender(s Signer, baseFee *big.Int, sender *c
 		txtype:     tx.Type(),
 		hash:       tx.Hash(),
 		lock:       new(big.Int),
-	}
-	// If baseFee provided, set gasPrice to effectiveGasPrice.
-	if baseFee != nil {
-		msg.gasPrice = math.BigMin(msg.gasPrice.Add(msg.gasTipCap, baseFee), msg.gasFeeCap)
 	}
 	var err error
 	if tx.Type() == ExternalTxType {
@@ -1188,11 +1193,26 @@ func (tx *Transaction) AsMessageWithSender(s Signer, baseFee *big.Int, sender *c
 	return msg, err
 }
 
+// CompareFee compares new fee and the tx.Fee() two transactions and returns the output of
+// bigInt Cmp method
+func (tx *Transaction) CompareFee(newFee *big.Int) int {
+	if newFee == nil {
+		return -1 // cannot be compared, so return less than
+	}
+	oldTxFee := tx.GasPrice()
+	return oldTxFee.Cmp(newFee)
+}
+
+func CompareFeeBetweenTx(a, b *Transaction) int {
+	aTxFee := a.GasPrice()
+	bTxFee := b.GasPrice()
+	return aTxFee.Cmp(bTxFee)
+}
+
 func (m Message) From() common.Address      { return m.from }
 func (m Message) To() *common.Address       { return m.to }
 func (m Message) GasPrice() *big.Int        { return m.gasPrice }
-func (m Message) GasFeeCap() *big.Int       { return m.gasFeeCap }
-func (m Message) GasTipCap() *big.Int       { return m.gasTipCap }
+func (m Message) MinerTip() *big.Int        { return m.minerTip }
 func (m Message) Value() *big.Int           { return m.amount }
 func (m Message) Gas() uint64               { return m.gasLimit }
 func (m Message) Nonce() uint64             { return m.nonce }
@@ -1202,14 +1222,9 @@ func (m Message) IsETX() bool               { return m.isETX }
 func (m Message) ETXSender() common.Address { return m.etxsender }
 func (m Message) Type() byte                { return m.txtype }
 func (m Message) Hash() common.Hash         { return m.hash }
-func (m Message) Lock() *big.Int            { return m.lock }
 
 func (m *Message) SetValue(v *big.Int) {
 	m.amount = v
-}
-
-func (m *Message) SetLock(lock *big.Int) {
-	m.lock = lock
 }
 
 func (m *Message) SetData(data []byte) {
@@ -1219,10 +1234,18 @@ func (m *Message) SetData(data []byte) {
 // AccessList is an access list.
 type AccessList []AccessTuple
 
+// MixedAccessList is an access list of MixedCaseAddresses
+type MixedAccessList []MixedAccessTuple
+
 // AccessTuple is the element type of an access list.
 type AccessTuple struct {
 	Address     common.Address `json:"address"        gencodec:"required"`
 	StorageKeys []common.Hash  `json:"storageKeys"    gencodec:"required"`
+}
+
+type MixedAccessTuple struct {
+	Address     common.MixedcaseAddress `json:"address"        gencodec:"required"`
+	StorageKeys []common.Hash           `json:"storageKeys"    gencodec:"required"`
 }
 
 // StorageKeys returns the total number of storage keys in the access list.
@@ -1264,6 +1287,14 @@ func (al *AccessList) ProtoDecode(protoAccessList *ProtoAccessList, location com
 	return nil
 }
 
+func (al *AccessList) ConvertToMixedCase() *MixedAccessList {
+	MixedAccessList := make(MixedAccessList, 0, len(*al))
+	for _, tup := range *al {
+		MixedAccessList = append(MixedAccessList, MixedAccessTuple{tup.Address.MixedcaseAddress(), tup.StorageKeys})
+	}
+	return &MixedAccessList
+}
+
 // This function must only be used by tests
 func GetInnerForTesting(tx *Transaction) TxData {
 	return tx.inner
@@ -1274,9 +1305,5 @@ func IsConversionTx(tx *Transaction) bool {
 	if tx.Type() != ExternalTxType {
 		return false
 	}
-	if !tx.IsCoinbase() {
-		return tx.ETXSender().Location().Equal(*tx.To().Location())
-	} else {
-		return false
-	}
+	return tx.EtxType() == ConversionType
 }

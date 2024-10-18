@@ -32,19 +32,18 @@ type txJSON struct {
 	Type hexutil.Uint64 `json:"type"`
 
 	// Common transaction fields:
-	Nonce                *hexutil.Uint64 `json:"nonce"`
-	GasPrice             *hexutil.Big    `json:"gasPrice"`
-	MaxPriorityFeePerGas *hexutil.Big    `json:"maxPriorityFeePerGas"`
-	MaxFeePerGas         *hexutil.Big    `json:"maxFeePerGas"`
-	Gas                  *hexutil.Uint64 `json:"gas"`
-	Value                *hexutil.Big    `json:"value"`
-	Data                 *hexutil.Bytes  `json:"input"`
-	To                   *common.Address `json:"to"`
-	AccessList           *AccessList     `json:"accessList"`
-	TxIn                 []TxInJSON      `json:"inputs,omitempty"`
-	TxOut                []TxOutJSON     `json:"outputs,omitempty"`
-	UTXOSignature        *hexutil.Bytes  `json:"utxoSignature,omitempty"`
-	IsCoinbase           *hexutil.Uint64 `json:"isCoinbase"`
+	Nonce         *hexutil.Uint64          `json:"nonce"`
+	GasPrice      *hexutil.Big             `json:"gasPrice"`
+	MinerTip      *hexutil.Big             `json:"minerTip"`
+	Gas           *hexutil.Uint64          `json:"gas"`
+	Value         *hexutil.Big             `json:"value"`
+	Data          *hexutil.Bytes           `json:"input"`
+	To            *common.MixedcaseAddress `json:"to"`
+	AccessList    *AccessList              `json:"accessList"`
+	TxIn          []TxInJSON               `json:"inputs,omitempty"`
+	TxOut         []TxOutJSON              `json:"outputs,omitempty"`
+	UTXOSignature *hexutil.Bytes           `json:"utxoSignature,omitempty"`
+	EtxType       *hexutil.Uint64          `json:"etxType,omitempty"`
 	// Optional fields only present for internal transactions
 	ChainID *hexutil.Big `json:"chainId,omitempty"`
 	V       *hexutil.Big `json:"v,omitempty"`
@@ -52,9 +51,9 @@ type txJSON struct {
 	S       *hexutil.Big `json:"s,omitempty"`
 
 	// Optional fields only present for external transactions
-	Sender            *common.Address `json:"sender,omitempty"`
-	OriginatingTxHash *common.Hash    `json:"originatingTxHash,omitempty"`
-	ETXIndex          *hexutil.Uint64 `json:"etxIndex,omitempty"`
+	ETXSender         *common.MixedcaseAddress `json:"from,omitempty"`
+	OriginatingTxHash *common.Hash             `json:"originatingTxHash,omitempty"`
+	ETXIndex          *hexutil.Uint64          `json:"etxIndex,omitempty"`
 
 	// Only used for encoding:
 	Hash common.Hash `json:"hash"`
@@ -88,11 +87,13 @@ func (t *Transaction) MarshalJSON() ([]byte, error) {
 		enc.AccessList = &tx.AccessList
 		enc.Nonce = (*hexutil.Uint64)(&tx.Nonce)
 		enc.Gas = (*hexutil.Uint64)(&tx.Gas)
-		enc.MaxFeePerGas = (*hexutil.Big)(tx.GasFeeCap)
-		enc.MaxPriorityFeePerGas = (*hexutil.Big)(tx.GasTipCap)
+		enc.MinerTip = (*hexutil.Big)(tx.MinerTip)
+		enc.GasPrice = (*hexutil.Big)(tx.GasPrice)
 		enc.Value = (*hexutil.Big)(tx.Value)
 		enc.Data = (*hexutil.Bytes)(&tx.Data)
-		enc.To = t.To()
+		if t.To() != nil {
+			enc.To = t.To().MixedcaseAddressPtr()
+		}
 		enc.V = (*hexutil.Big)(tx.V)
 		enc.R = (*hexutil.Big)(tx.R)
 		enc.S = (*hexutil.Big)(tx.S)
@@ -104,13 +105,9 @@ func (t *Transaction) MarshalJSON() ([]byte, error) {
 		enc.Gas = (*hexutil.Uint64)(&tx.Gas)
 		enc.Value = (*hexutil.Big)(tx.Value)
 		enc.Data = (*hexutil.Bytes)(&tx.Data)
-		enc.To = t.To()
-		enc.Sender = &tx.Sender
-		isCoinbase := hexutil.Uint64(0)
-		if tx.IsCoinbase {
-			isCoinbase = hexutil.Uint64(1)
-		}
-		enc.IsCoinbase = &isCoinbase
+		enc.To = t.To().MixedcaseAddressPtr()
+		enc.ETXSender = tx.Sender.MixedcaseAddressPtr()
+		enc.EtxType = (*hexutil.Uint64)(&tx.EtxType)
 	case *QiTx:
 		sig := tx.Signature.Serialize()
 		enc.ChainID = (*hexutil.Big)(tx.ChainID)
@@ -161,20 +158,21 @@ func (t *Transaction) UnmarshalJSON(input []byte) error {
 		}
 		itx.ChainID = (*big.Int)(dec.ChainID)
 		if dec.To != nil {
-			itx.To = dec.To
+			addr := dec.To.Address()
+			itx.To = &addr
 		}
 		if dec.Nonce == nil {
 			return errors.New("missing required field 'nonce' in internal transaction")
 		}
 		itx.Nonce = uint64(*dec.Nonce)
-		if dec.MaxPriorityFeePerGas == nil {
-			return errors.New("missing required field 'maxPriorityFeePerGas' in internal transaction")
+		if dec.MinerTip == nil {
+			return errors.New("missing required field 'minerTip' in internal transaction")
 		}
-		itx.GasTipCap = (*big.Int)(dec.MaxPriorityFeePerGas)
-		if dec.MaxFeePerGas == nil {
-			return errors.New("missing required field 'maxFeePerGas' in internal transaction")
+		itx.MinerTip = (*big.Int)(dec.MinerTip)
+		if dec.GasPrice == nil {
+			return errors.New("missing required field 'gasPrice' in internal transaction")
 		}
-		itx.GasFeeCap = (*big.Int)(dec.MaxFeePerGas)
+		itx.GasPrice = (*big.Int)(dec.GasPrice)
 		if dec.Gas == nil {
 			return errors.New("missing required field 'gas' in internal transaction")
 		}
@@ -214,7 +212,8 @@ func (t *Transaction) UnmarshalJSON(input []byte) error {
 		}
 		etx.AccessList = *dec.AccessList
 		if dec.To != nil {
-			etx.To = dec.To
+			addr := dec.To.Address()
+			etx.To = &addr
 		}
 		if dec.OriginatingTxHash == nil {
 			return errors.New("missing required field 'originatingTxHash' in external transaction")
@@ -236,18 +235,13 @@ func (t *Transaction) UnmarshalJSON(input []byte) error {
 			return errors.New("missing required field 'input' in external transaction")
 		}
 		etx.Data = *dec.Data
-		if dec.Sender == nil {
-			return errors.New("missing required field 'sender' in external transaction")
+		if dec.ETXSender != nil {
+			etx.Sender = dec.ETXSender.Address()
 		}
-		etx.Sender = *dec.Sender
-		if dec.IsCoinbase == nil {
+		if dec.EtxType == nil {
 			return errors.New("missing required field 'isCoinbase' in external transaction")
 		}
-		if *dec.IsCoinbase == 1 {
-			etx.IsCoinbase = true
-		} else {
-			etx.IsCoinbase = false
-		}
+		etx.EtxType = uint64(*dec.EtxType)
 
 	case QiTxType:
 		var qiTx QiTx

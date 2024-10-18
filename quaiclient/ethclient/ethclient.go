@@ -104,7 +104,7 @@ type rpcBlock struct {
 	Header          *types.Header             `json:"header"`
 	Transactions    []rpcTransaction          `json:"transactions"`
 	UncleHashes     []*types.WorkObjectHeader `json:"uncles"`
-	ExtTransactions []rpcTransaction          `json:"extTransactions"`
+	OutboundEtxs    []rpcTransaction          `json:"outboundEtxs"`
 	SubManifest     types.BlockManifest       `json:"manifest"`
 	InterlinkHashes common.Hashes             `json:"interlinkHashes"`
 }
@@ -134,19 +134,13 @@ func (ec *Client) getBlock(ctx context.Context, method string, args ...interface
 		}
 		txs[i] = tx.tx
 	}
-	etxs := make([]*types.Transaction, len(body.ExtTransactions))
-	for i, etx := range body.ExtTransactions {
+	etxs := make([]*types.Transaction, len(body.OutboundEtxs))
+	for i, etx := range body.OutboundEtxs {
 		etxs[i] = etx.tx
 	}
 	// Fill the sender cache of subordinate block hashes in the block manifest.
 	var manifest types.BlockManifest
 	copy(manifest, body.SubManifest)
-	for i, tx := range body.Transactions {
-		if tx.From != nil {
-			setSenderFromServer(tx.tx, *tx.From, body.Hash)
-		}
-		txs[i] = tx.tx
-	}
 	var interlinkHashes common.Hashes
 	copy(interlinkHashes, body.InterlinkHashes)
 	return types.NewWorkObjectWithHeaderAndTx(head.WorkObjectHeader(), nil).WithBody(body.Header, txs, etxs, body.UncleHashes, manifest, interlinkHashes), nil
@@ -338,6 +332,12 @@ func (ec *Client) BalanceAt(ctx context.Context, account common.MixedcaseAddress
 	return (*big.Int)(&result), err
 }
 
+func (ec *Client) ContractSizeAt(ctx context.Context, account common.MixedcaseAddress, blockNumber *big.Int) (*big.Int, error) {
+	var result hexutil.Big
+	err := ec.c.CallContext(ctx, &result, "quai_getContractSize", account.Original(), toBlockNumArg(blockNumber))
+	return (*big.Int)(&result), err
+}
+
 func (ec *Client) GetOutpointsByAddress(ctx context.Context, address common.MixedcaseAddress) (map[string]*types.OutpointAndDenomination, error) {
 	var outpoints map[string]*types.OutpointAndDenomination
 	err := ec.c.CallContext(ctx, &outpoints, "quai_getOutpointsByAddress", address.Original())
@@ -448,17 +448,7 @@ func (ec *Client) PendingCallContract(ctx context.Context, msg quai.CallMsg) ([]
 // execution of a transaction.
 func (ec *Client) SuggestGasPrice(ctx context.Context) (*big.Int, error) {
 	var hex hexutil.Big
-	if err := ec.c.CallContext(ctx, &hex, "eth_gasPrice"); err != nil {
-		return nil, err
-	}
-	return (*big.Int)(&hex), nil
-}
-
-// SuggestGasTipCap retrieves the currently suggested gas tip cap to
-// allow a timely execution of a transaction.
-func (ec *Client) SuggestGasTipCap(ctx context.Context) (*big.Int, error) {
-	var hex hexutil.Big
-	if err := ec.c.CallContext(ctx, &hex, "eth_maxPriorityFeePerGas"); err != nil {
+	if err := ec.c.CallContext(ctx, &hex, "quai_gasPrice"); err != nil {
 		return nil, err
 	}
 	return (*big.Int)(&hex), nil
@@ -477,6 +467,77 @@ func (ec *Client) EstimateGas(ctx context.Context, msg quai.CallMsg) (uint64, er
 	return uint64(hex), nil
 }
 
+type TransactionArgs struct {
+	From                 *common.Address `json:"from"`
+	To                   *common.Address `json:"to"`
+	Gas                  *hexutil.Uint64 `json:"gas"`
+	GasPrice             *hexutil.Big    `json:"gasPrice"`
+	MaxFeePerGas         *hexutil.Big    `json:"maxFeePerGas"`
+	MaxPriorityFeePerGas *hexutil.Big    `json:"maxPriorityFeePerGas"`
+	Value                *hexutil.Big    `json:"value"`
+	Nonce                *hexutil.Uint64 `json:"nonce"`
+
+	// We accept "data" and "input" for backwards-compatibility reasons.
+	// "input" is the newer name and should be preferred by clients.
+	Data  *hexutil.Bytes `json:"data"`
+	Input *hexutil.Bytes `json:"input"`
+
+	// Introduced by AccessListTxType transaction.
+	AccessList *types.AccessList `json:"accessList,omitempty"`
+	ChainID    *hexutil.Big      `json:"chainId,omitempty"`
+
+	// Support for Qi (UTXO) transaction
+	TxIn   types.TxIns  `json:"txIn,omitempty"`
+	TxOut  types.TxOuts `json:"txOut,omitempty"`
+	TxType uint8        `json:"txType,omitempty"`
+}
+
+// EstimateGas tries to estimate the gas needed to execute a specific transaction based on
+// the current pending state of the backend blockchain. There is no guarantee that this is
+// the true gas limit requirement as other transactions may be added or removed by miners,
+// but it should provide a basis for setting a reasonable default.
+func (ec *Client) EstimateFeeForQi(ctx context.Context, tx *types.Transaction) (*big.Int, error) {
+	args := TransactionArgs{
+		TxIn:   tx.TxIn(),
+		TxOut:  tx.TxOut(),
+		TxType: types.QiTxType,
+	}
+	var result hexutil.Big
+	err := ec.c.CallContext(ctx, &result, "quai_estimateFeeForQi", args)
+	if err != nil {
+		return nil, err
+	}
+	return (*big.Int)(&result), nil
+}
+
+func (ec *Client) GetLatestUTXOSetSize(ctx context.Context) (uint64, error) {
+	var result hexutil.Uint64
+	err := ec.c.CallContext(ctx, &result, "quai_getLatestUTXOSetSize")
+	if err != nil {
+		return 0, err
+	}
+	return uint64(result), nil
+}
+
+// AccessListResult returns an optional accesslist
+// Its the result of the `quai_createAccessList` RPC call.
+// It contains an error if the transaction itself failed.
+type AccessListResult struct {
+	Accesslist *types.AccessList `json:"accessList"`
+	Error      string            `json:"error,omitempty"`
+	GasUsed    hexutil.Uint64    `json:"gasUsed"`
+}
+
+// CreateAccessList creates an access list for a transaction.
+func (ec *Client) CreateAccessList(ctx context.Context, msg quai.CallMsg) (AccessListResult, error) {
+	var accessList AccessListResult
+	err := ec.c.CallContext(ctx, &accessList, "quai_createAccessList", toCallArg(msg))
+	if err != nil {
+		return accessList, err
+	}
+	return accessList, nil
+}
+
 // SendTransaction injects a signed transaction into the pending pool for execution.
 //
 // If the transaction was a contract creation use the TransactionReceipt method to get the
@@ -490,7 +551,7 @@ func (ec *Client) SendTransaction(ctx context.Context, tx *types.Transaction) er
 	if err != nil {
 		return err
 	}
-	return ec.c.CallContext(ctx, nil, "eth_sendRawTransaction", hexutil.Encode(data))
+	return ec.c.CallContext(ctx, nil, "quai_sendRawTransaction", hexutil.Encode(data))
 }
 
 func toBlockNumArg(number *big.Int) string {

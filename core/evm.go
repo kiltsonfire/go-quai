@@ -52,6 +52,9 @@ type ChainContext interface {
 	// CheckIfEtxIsEligible checks if the given slice is eligible to accept the
 	// etx based on the EtxEligibleSlices
 	CheckIfEtxIsEligible(common.Hash, common.Location) bool
+
+	CheckInCalcOrderCache(common.Hash) (*big.Int, int, bool)
+	AddToCalcOrderCache(common.Hash, int, *big.Int)
 }
 
 // NewEVMBlockContext creates a new context for use in the EVM.
@@ -83,18 +86,18 @@ func NewEVMBlockContext(header *types.WorkObject, parent *types.WorkObject, chai
 	}
 
 	// Prime terminus determines which location is eligible to accept the etx
-	primeTerminus := header.PrimeTerminus()
+	primeTerminusHash := header.PrimeTerminusHash()
 	_, parentOrder, err := chain.Engine().CalcOrder(chain, parent)
 	if err != nil {
-		return vm.BlockContext{}, fmt.Errorf("parent order cannot be calculated")
+		return vm.BlockContext{}, fmt.Errorf("parent order cannot be calculated, err %s", err)
 	}
 	var primeTerminusHeader *types.WorkObject
 	if parentOrder == common.PRIME_CTX {
 		primeTerminusHeader = parent
 	} else {
-		primeTerminusHeader = chain.GetHeaderByHash(primeTerminus)
+		primeTerminusHeader = chain.GetHeaderByHash(primeTerminusHash)
 		if primeTerminusHeader == nil {
-			log.Global.Error("Prime terminus header not found", "headerHash", header.Hash(), "primeTerminus", primeTerminus)
+			log.Global.Error("Prime terminus header not found", "headerHash", header.Hash(), "primeTerminusHash", primeTerminusHash)
 			return vm.BlockContext{}, ErrSubNotSyncedToDom
 		}
 	}
@@ -104,7 +107,7 @@ func NewEVMBlockContext(header *types.WorkObject, parent *types.WorkObject, chai
 		CanTransfer:        CanTransfer,
 		Transfer:           Transfer,
 		GetHash:            GetHashFn(header, chain),
-		Coinbase:           beneficiary,
+		PrimaryCoinbase:    beneficiary,
 		BlockNumber:        new(big.Int).Set(header.Number(chain.NodeCtx())),
 		Time:               new(big.Int).SetUint64(timestamp),
 		Difficulty:         new(big.Int).Set(header.Difficulty()),
@@ -112,6 +115,7 @@ func NewEVMBlockContext(header *types.WorkObject, parent *types.WorkObject, chai
 		GasLimit:           header.GasLimit(),
 		CheckIfEtxEligible: chain.CheckIfEtxIsEligible,
 		EtxEligibleSlices:  etxEligibleSlices,
+		QuaiStateSize:      parent.QuaiStateSize(), // using the state size at the parent for all the gas calculations
 	}, nil
 }
 
@@ -122,7 +126,6 @@ func NewEVMTxContext(msg Message) vm.TxContext {
 		GasPrice:   new(big.Int).Set(msg.GasPrice()),
 		TxType:     msg.Type(),
 		Hash:       msg.Hash(),
-		TXGasTip:   msg.GasTipCap(),
 		AccessList: msg.AccessList(),
 		ETXSender:  msg.ETXSender(),
 	}

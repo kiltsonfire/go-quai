@@ -2,11 +2,12 @@ package progpow
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"math/big"
 	"runtime"
 	"runtime/debug"
+	"sort"
+	"sync"
 	"time"
 
 	mapset "github.com/deckarep/golang-set"
@@ -14,12 +15,15 @@ import (
 	"github.com/dominant-strategies/go-quai/consensus"
 	"github.com/dominant-strategies/go-quai/consensus/misc"
 	"github.com/dominant-strategies/go-quai/core"
+	"github.com/dominant-strategies/go-quai/core/rawdb"
 	"github.com/dominant-strategies/go-quai/core/state"
 	"github.com/dominant-strategies/go-quai/core/types"
-	"github.com/dominant-strategies/go-quai/core/vm"
+	"github.com/dominant-strategies/go-quai/ethdb"
 	"github.com/dominant-strategies/go-quai/log"
+	"github.com/dominant-strategies/go-quai/multiset"
 	"github.com/dominant-strategies/go-quai/params"
 	"github.com/dominant-strategies/go-quai/trie"
+	"google.golang.org/protobuf/proto"
 	"modernc.org/mathutil"
 )
 
@@ -48,27 +52,10 @@ var (
 	big2e256      = new(big.Int).Exp(big.NewInt(2), big.NewInt(256), big.NewInt(0)) // 2^256
 )
 
-// Various error messages to mark blocks invalid. These should be private to
-// prevent engine specific errors from being referenced in the remainder of the
-// codebase, inherently breaking if the engine is swapped out. Please put common
-// error types into the consensus package.
-var (
-	errOlderBlockTime      = errors.New("timestamp older than parent")
-	errTooManyUncles       = errors.New("too many uncles")
-	errDuplicateUncle      = errors.New("duplicate uncle")
-	errUncleIsAncestor     = errors.New("uncle is ancestor")
-	errDanglingUncle       = errors.New("uncle's parent is not ancestor")
-	errInvalidDifficulty   = errors.New("non-positive difficulty")
-	errDifficultyCrossover = errors.New("sub's difficulty exceeds dom's")
-	errInvalidMixHash      = errors.New("invalid mixHash")
-	errInvalidPoW          = errors.New("invalid proof-of-work")
-	errInvalidOrder        = errors.New("invalid order")
-)
-
 // Author implements consensus.Engine, returning the header's coinbase as the
 // proof-of-work verified author of the block.
 func (progpow *Progpow) Author(header *types.WorkObject) (common.Address, error) {
-	return header.Coinbase(), nil
+	return header.PrimaryCoinbase(), nil
 }
 
 // VerifyHeader checks whether a header conforms to the consensus rules of the
@@ -197,7 +184,7 @@ func (progpow *Progpow) VerifyUncles(chain consensus.ChainReader, block *types.W
 	}
 	// Verify that there are at most params.MaxWorkShareCount uncles included in this block
 	if len(block.Uncles()) > params.MaxWorkShareCount {
-		return errTooManyUncles
+		return consensus.ErrTooManyUncles
 	}
 	if len(block.Uncles()) == 0 {
 		return nil
@@ -233,13 +220,13 @@ func (progpow *Progpow) VerifyUncles(chain consensus.ChainReader, block *types.W
 		// Make sure every uncle is rewarded only once
 		hash := uncle.Hash()
 		if uncles.Contains(hash) {
-			return errDuplicateUncle
+			return consensus.ErrDuplicateUncle
 		}
 		uncles.Add(hash)
 
 		// Make sure the uncle has a valid ancestry
 		if ancestors[hash] != nil {
-			return errUncleIsAncestor
+			return consensus.ErrUncleIsAncestor
 		}
 		// Siblings are not allowed to be included in the workshares list if its an
 		// uncle but can be if its a workshare
@@ -249,9 +236,14 @@ func (progpow *Progpow) VerifyUncles(chain consensus.ChainReader, block *types.W
 			workShare = true
 		}
 		if ancestors[uncle.ParentHash()] == nil || (!workShare && (uncle.ParentHash() == block.ParentHash(nodeCtx))) {
-			return errDanglingUncle
+			return consensus.ErrDanglingUncle
 		}
 		_, err = progpow.ComputePowHash(uncle)
+		if err != nil {
+			return err
+		}
+
+		_, err = chain.WorkShareDistance(block, uncle)
 		if err != nil {
 			return err
 		}
@@ -297,7 +289,7 @@ func (progpow *Progpow) verifyHeader(chain consensus.ChainHeaderReader, header, 
 		}
 	}
 	if header.Time() < parent.Time() {
-		return errOlderBlockTime
+		return consensus.ErrOlderBlockTime
 	}
 	// Verify the block's difficulty based on its timestamp and parent's difficulty
 	// difficulty adjustment can only be checked in zone
@@ -320,37 +312,37 @@ func (progpow *Progpow) verifyHeader(chain consensus.ChainHeaderReader, header, 
 		return fmt.Errorf("block location is not in the same slice as the node location")
 	}
 	// Verify that the parent entropy is calculated correctly on the header
-	parentEntropy := progpow.TotalLogS(chain, parent)
+	parentEntropy := progpow.TotalLogEntropy(chain, parent)
 	if parentEntropy.Cmp(header.ParentEntropy(nodeCtx)) != 0 {
 		return fmt.Errorf("invalid parent entropy: have %v, want %v", header.ParentEntropy(nodeCtx), parentEntropy)
 	}
-	// If not prime, verify the parentDeltaS field as well
+	// If not prime, verify the parentDeltaEntropy field as well
 	if nodeCtx > common.PRIME_CTX {
 		_, parentOrder, _ := progpow.CalcOrder(chain, parent)
-		// If parent was dom, deltaS is zero and otherwise should be the calc delta s on the parent
+		// If parent was dom, deltaEntropy is zero and otherwise should be the calc delta entropy on the parent
 		if parentOrder < nodeCtx {
-			if common.Big0.Cmp(header.ParentDeltaS(nodeCtx)) != 0 {
-				return fmt.Errorf("invalid parent delta s: have %v, want %v", header.ParentDeltaS(nodeCtx), common.Big0)
+			if common.Big0.Cmp(header.ParentDeltaEntropy(nodeCtx)) != 0 {
+				return fmt.Errorf("invalid parent delta entropy: have %v, want %v", header.ParentDeltaEntropy(nodeCtx), common.Big0)
 			}
 		} else {
-			parentDeltaS := progpow.DeltaLogS(chain, parent)
-			if parentDeltaS.Cmp(header.ParentDeltaS(nodeCtx)) != 0 {
-				return fmt.Errorf("invalid parent delta s: have %v, want %v", header.ParentDeltaS(nodeCtx), parentDeltaS)
+			parentDeltaEntropy := progpow.DeltaLogEntropy(chain, parent)
+			if parentDeltaEntropy.Cmp(header.ParentDeltaEntropy(nodeCtx)) != 0 {
+				return fmt.Errorf("invalid parent delta entropy: have %v, want %v", header.ParentDeltaEntropy(nodeCtx), parentDeltaEntropy)
 			}
 		}
 	}
-	// If not prime, verify the parentUncledSubDeltaS field as well
+	// If not prime, verify the parentUncledDeltaEntropy field as well
 	if nodeCtx > common.PRIME_CTX {
 		_, parentOrder, _ := progpow.CalcOrder(chain, parent)
-		// If parent was dom, parent uncled sub deltaS is zero and otherwise should be the calc parent uncled sub delta s on the parent
+		// If parent was dom, parent uncled sub deltaEntropy is zero and otherwise should be the calc parent uncled sub delta entropy on the parent
 		if parentOrder < nodeCtx {
-			if common.Big0.Cmp(header.ParentUncledSubDeltaS(nodeCtx)) != 0 {
-				return fmt.Errorf("invalid parent uncled sub delta s: have %v, want %v", header.ParentUncledSubDeltaS(nodeCtx), common.Big0)
+			if common.Big0.Cmp(header.ParentUncledDeltaEntropy(nodeCtx)) != 0 {
+				return fmt.Errorf("invalid parent uncled sub delta entropy: have %v, want %v", header.ParentUncledDeltaEntropy(nodeCtx), common.Big0)
 			}
 		} else {
-			expectedParentUncledSubDeltaS := progpow.UncledSubDeltaLogS(chain, parent)
-			if expectedParentUncledSubDeltaS.Cmp(header.ParentUncledSubDeltaS(nodeCtx)) != 0 {
-				return fmt.Errorf("invalid parent uncled sub delta s: have %v, want %v", header.ParentUncledSubDeltaS(nodeCtx), expectedParentUncledSubDeltaS)
+			expectedParentUncledDeltaEntropy := progpow.UncledDeltaLogEntropy(chain, parent)
+			if expectedParentUncledDeltaEntropy.Cmp(header.ParentUncledDeltaEntropy(nodeCtx)) != 0 {
+				return fmt.Errorf("invalid parent uncled sub delta entropy: have %v, want %v", header.ParentUncledDeltaEntropy(nodeCtx), expectedParentUncledDeltaEntropy)
 			}
 		}
 	}
@@ -363,12 +355,11 @@ func (progpow *Progpow) verifyHeader(chain consensus.ChainHeaderReader, header, 
 			if header.ThresholdCount() != 0 {
 				return fmt.Errorf("invalid threshold count: have %v, want %v", header.ThresholdCount(), 0)
 			}
-			genesisHeader := chain.GetHeaderByNumber(0)
-			if header.ExpansionNumber() != genesisHeader.ExpansionNumber() {
-				return fmt.Errorf("invalid expansion number: have %v, want %v", header.ExpansionNumber(), genesisHeader.ExpansionNumber())
-			}
 		} else {
-			expectedEfficiencyScore := chain.ComputeEfficiencyScore(parent)
+			expectedEfficiencyScore, err := chain.ComputeEfficiencyScore(parent)
+			if err != nil {
+				return err
+			}
 			if header.EfficiencyScore() != expectedEfficiencyScore {
 				return fmt.Errorf("invalid efficiency score: have %v, want %v", header.EfficiencyScore(), expectedEfficiencyScore)
 			}
@@ -388,7 +379,7 @@ func (progpow *Progpow) verifyHeader(chain consensus.ChainHeaderReader, header, 
 				// past the tree expansion trigger window we have to reset the
 				// threshold count
 				if (parent.ThresholdCount() < params.TREE_EXPANSION_TRIGGER_WINDOW && expectedEfficiencyScore < params.TREE_EXPANSION_THRESHOLD) ||
-					parent.ThresholdCount() >= params.TREE_EXPANSION_TRIGGER_WINDOW+params.TREE_EXPANSION_WAIT_COUNT {
+					parent.ThresholdCount() == params.TREE_EXPANSION_TRIGGER_WINDOW+params.TREE_EXPANSION_WAIT_COUNT {
 					expectedThresholdCount = 0
 				} else {
 					expectedThresholdCount = parent.ThresholdCount() + 1
@@ -398,15 +389,6 @@ func (progpow *Progpow) verifyHeader(chain consensus.ChainHeaderReader, header, 
 				return fmt.Errorf("invalid threshold count: have %v, want %v", header.ThresholdCount(), expectedThresholdCount)
 			}
 
-			var expectedExpansionNumber uint8
-			if parent.ThresholdCount() >= params.TREE_EXPANSION_TRIGGER_WINDOW+params.TREE_EXPANSION_WAIT_COUNT {
-				expectedExpansionNumber = parent.ExpansionNumber() + 1
-			} else {
-				expectedExpansionNumber = parent.ExpansionNumber()
-			}
-			if header.ExpansionNumber() != expectedExpansionNumber {
-				return fmt.Errorf("invalid expansion number: have %v, want %v", header.ExpansionNumber(), expectedExpansionNumber)
-			}
 		}
 	}
 	// verify the etx eligible slices in zone and prime ctx
@@ -423,10 +405,38 @@ func (progpow *Progpow) verifyHeader(chain consensus.ChainHeaderReader, header, 
 	}
 
 	if nodeCtx == common.ZONE_CTX {
-		// check if the header coinbase is in scope
-		_, err := header.Coinbase().InternalAddress()
+		var expectedExpansionNumber uint8
+		expectedExpansionNumber, err := chain.ComputeExpansionNumber(parent)
 		if err != nil {
-			return fmt.Errorf("out-of-scope coinbase in the header")
+			return err
+		}
+		if header.ExpansionNumber() != expectedExpansionNumber {
+			return fmt.Errorf("invalid expansion number: have %v, want %v", header.ExpansionNumber(), expectedExpansionNumber)
+		}
+	}
+
+	if nodeCtx == common.ZONE_CTX {
+
+		// check if the header coinbase is in scope
+		_, err := header.PrimaryCoinbase().InternalAddress()
+		if err != nil {
+			return fmt.Errorf("out-of-scope primary coinbase in the header: %v location: %v nodeLocation: %v, err %s", header.PrimaryCoinbase(), header.Location(), progpow.config.NodeLocation, err)
+		}
+		_, err = header.SecondaryCoinbase().InternalAddress()
+		if err != nil {
+			return fmt.Errorf("out-of-scope secondary coinbase in the header: %v location: %v nodeLocation: %v, err %s", header.SecondaryCoinbase(), header.Location(), progpow.config.NodeLocation, err)
+		}
+
+		// One of the coinbases has to be Quai and the other one has to be Qi
+		quaiAddress := header.PrimaryCoinbase().IsInQuaiLedgerScope()
+		if quaiAddress {
+			if !header.SecondaryCoinbase().IsInQiLedgerScope() {
+				return fmt.Errorf("primary coinbase: %v is in quai ledger but secondary coinbase: %v is not in Qi ledger", header.PrimaryCoinbase(), header.SecondaryCoinbase())
+			}
+		} else {
+			if !header.SecondaryCoinbase().IsInQuaiLedgerScope() {
+				return fmt.Errorf("primary coinbase: %v is in qi ledger but secondary coinbase: %v is not in Quai ledger", header.PrimaryCoinbase(), header.SecondaryCoinbase())
+			}
 		}
 		// Verify that the gas limit is <= 2^63-1
 		cap := uint64(0x7fffffffffffffff)
@@ -444,33 +454,32 @@ func (progpow *Progpow) verifyHeader(chain consensus.ChainHeaderReader, header, 
 			return fmt.Errorf("invalid gasLimit: have %d, want %d",
 				header.GasLimit(), expectedGasLimit)
 		}
-		// Verify the header is not malformed
-		if header.BaseFee() == nil {
-			return fmt.Errorf("header is missing baseFee")
+		// Verify that the stateUsed is <= stateLimit
+		if header.StateUsed() > header.StateLimit() {
+			return fmt.Errorf("invalid stateUsed: have %d, stateLimit %d", header.StateUsed(), header.StateLimit())
 		}
-		// Verify the baseFee is correct based on the parent header.
-		expectedBaseFee := misc.CalcBaseFee(chain.Config(), parent)
-		if header.BaseFee().Cmp(expectedBaseFee) != 0 {
-			return fmt.Errorf("invalid baseFee: have %s, want %s, parentBaseFee %s, parentGasUsed %d",
-				expectedBaseFee, header.BaseFee(), parent.BaseFee(), parent.GasUsed())
+		// Verify the StateLimit is correct based on the parent header.
+		expectedStateLimit := misc.CalcStateLimit(parent, params.StateCeil)
+		if header.StateLimit() != expectedStateLimit {
+			return fmt.Errorf("invalid StateLimit: have %d, want %d, parentStateLimit %d", expectedStateLimit, header.StateLimit(), parent.StateLimit())
 		}
-		var expectedPrimeTerminus common.Hash
+		var expectedPrimeTerminusHash common.Hash
 		var expectedPrimeTerminusNumber *big.Int
 		_, parentOrder, _ := progpow.CalcOrder(chain, parent)
 		if parentOrder == common.PRIME_CTX {
-			expectedPrimeTerminus = parent.Hash()
+			expectedPrimeTerminusHash = parent.Hash()
 			expectedPrimeTerminusNumber = parent.Number(common.PRIME_CTX)
 		} else {
 			if chain.IsGenesisHash(parent.Hash()) {
-				expectedPrimeTerminus = parent.Hash()
+				expectedPrimeTerminusHash = parent.Hash()
 				expectedPrimeTerminusNumber = parent.Number(common.PRIME_CTX)
 			} else {
-				expectedPrimeTerminus = parent.PrimeTerminus()
+				expectedPrimeTerminusHash = parent.PrimeTerminusHash()
 				expectedPrimeTerminusNumber = parent.PrimeTerminusNumber()
 			}
 		}
-		if header.PrimeTerminus() != expectedPrimeTerminus {
-			return fmt.Errorf("invalid primeTerminus: have %v, want %v", header.PrimeTerminus(), expectedPrimeTerminus)
+		if header.PrimeTerminusHash() != expectedPrimeTerminusHash {
+			return fmt.Errorf("invalid primeTerminusHash: have %v, want %v", header.PrimeTerminusHash(), expectedPrimeTerminusHash)
 		}
 		if header.PrimeTerminusNumber().Cmp(expectedPrimeTerminusNumber) != 0 {
 			return fmt.Errorf("invalid primeTerminusNumber: have %v, want %v", header.PrimeTerminusNumber(), expectedPrimeTerminusNumber)
@@ -515,12 +524,12 @@ func (progpow *Progpow) CalcDifficulty(chain consensus.ChainHeaderReader, parent
 			return parent.Difficulty()
 		}
 		genesis := chain.GetHeaderByHash(parent.Hash())
-		genesisTotalLogS := progpow.TotalLogS(chain, genesis)
-		if genesisTotalLogS.Cmp(genesis.ParentEntropy(common.PRIME_CTX)) < 0 { // prevent negative difficulty
+		genesisTotalLogEntropy := progpow.TotalLogEntropy(chain, genesis)
+		if genesisTotalLogEntropy.Cmp(genesis.ParentEntropy(common.PRIME_CTX)) < 0 { // prevent negative difficulty
 			progpow.logger.Errorf("Genesis block has invalid parent entropy: %v", genesis.ParentEntropy(common.PRIME_CTX))
 			return nil
 		}
-		differenceParentEntropy := new(big.Int).Sub(genesisTotalLogS, genesis.ParentEntropy(common.PRIME_CTX))
+		differenceParentEntropy := new(big.Int).Sub(genesisTotalLogEntropy, genesis.ParentEntropy(common.PRIME_CTX))
 		numBlocks := params.PrimeEntropyTarget(expansionNum)
 		differenceParentEntropy.Div(differenceParentEntropy, numBlocks)
 		return common.EntropyBigBitsToDifficultyBits(differenceParentEntropy)
@@ -534,9 +543,15 @@ func (progpow *Progpow) CalcDifficulty(chain consensus.ChainHeaderReader, parent
 	bigTime := new(big.Int).SetUint64(time)
 	bigParentTime := new(big.Int).SetUint64(parentOfParent.Time())
 
+	// Bound the time diff so that the difficulty doesnt have huge discontinuity
+	// in the values
+	timeDiff := new(big.Int).Sub(bigTime, bigParentTime)
+	if timeDiff.Cmp(big.NewInt(params.MaxTimeDiffBetweenBlocks)) > 0 {
+		timeDiff = big.NewInt(params.MaxTimeDiffBetweenBlocks)
+	}
+
 	// holds intermediate values to make the algo easier to read & audit
-	x := new(big.Int)
-	x.Sub(bigTime, bigParentTime)
+	x := new(big.Int).Set(timeDiff)
 	x.Sub(progpow.config.DurationLimit, x)
 	x.Mul(x, parent.Difficulty())
 	k, _ := mathutil.BinaryLog(new(big.Int).Set(parent.Difficulty()), 64)
@@ -556,17 +571,22 @@ func (progpow *Progpow) CalcDifficulty(chain consensus.ChainHeaderReader, parent
 func (progpow *Progpow) IsDomCoincident(chain consensus.ChainHeaderReader, header *types.WorkObject) bool {
 	_, order, err := progpow.CalcOrder(chain, header)
 	if err != nil {
+		progpow.logger.WithField("err", err).Error("Error calculating order in IsDomCoincident")
 		return false
 	}
 	return order < chain.Config().Location.Context()
 }
 
 func (progpow *Progpow) ComputePowLight(header *types.WorkObjectHeader) (mixHash, powHash common.Hash) {
+	hashes, ok := progpow.hashCache.Peek(header.Hash())
+	if ok {
+		return common.Hash(hashes.mixHash), common.Hash(hashes.workHash)
+	}
 	powLight := func(size uint64, cache []uint32, hash common.Hash, nonce uint64, blockNumber uint64) ([]byte, []byte) {
 		ethashCache := progpow.cache(blockNumber)
 		if ethashCache.cDag == nil {
 			cDag := make([]uint32, progpowCacheWords)
-			generateCDag(cDag, ethashCache.cache, blockNumber/epochLength, progpow.logger)
+			generateCDag(cDag, ethashCache.cache, blockNumber/C_epochLength, progpow.logger)
 			ethashCache.cDag = cDag
 		}
 		return progpowLight(size, cache, hash.Bytes(), nonce, blockNumber, ethashCache.cDag, progpow.lookupCache)
@@ -579,6 +599,8 @@ func (progpow *Progpow) ComputePowLight(header *types.WorkObjectHeader) (mixHash
 	header.PowDigest.Store(mixHash)
 	header.PowHash.Store(powHash)
 
+	// Cache the hash
+	progpow.hashCache.Add(header.Hash(), mixHashWorkHash{mixHash: mixHash.Bytes(), workHash: powHash.Bytes()})
 	// Caches are unmapped in a finalizer. Ensure that the cache stays alive
 	// until after the call to hashimotoLight so it's not unmapped while being used.
 	runtime.KeepAlive(cache)
@@ -599,7 +621,7 @@ func (progpow *Progpow) verifySeal(header *types.WorkObjectHeader) (common.Hash,
 	if progpow.config.PowMode == ModeFake || progpow.config.PowMode == ModeFullFake {
 		time.Sleep(progpow.fakeDelay)
 		if progpow.fakeFail == header.NumberU64() {
-			return common.Hash{}, errInvalidPoW
+			return common.Hash{}, consensus.ErrInvalidPoW
 		}
 		return common.Hash{}, nil
 	}
@@ -609,23 +631,17 @@ func (progpow *Progpow) verifySeal(header *types.WorkObjectHeader) (common.Hash,
 	}
 	// Ensure that we have a valid difficulty for the block
 	if header.Difficulty().Sign() <= 0 {
-		return common.Hash{}, errInvalidDifficulty
+		return common.Hash{}, consensus.ErrInvalidDifficulty
 	}
-	// Check progpow
-	mixHash := header.PowDigest.Load()
-	powHash := header.PowHash.Load()
-	if powHash == nil || mixHash == nil {
-		mixHash, powHash = progpow.ComputePowLight(header)
-	}
-	// Verify the calculated values against the ones provided in the header
-	if !bytes.Equal(header.MixHash().Bytes(), mixHash.(common.Hash).Bytes()) {
-		return common.Hash{}, errInvalidMixHash
+	powHash, err := progpow.ComputePowHash(header)
+	if err != nil {
+		return common.Hash{}, err
 	}
 	target := new(big.Int).Div(big2e256, header.Difficulty())
-	if new(big.Int).SetBytes(powHash.(common.Hash).Bytes()).Cmp(target) > 0 {
-		return powHash.(common.Hash), errInvalidPoW
+	if new(big.Int).SetBytes(powHash.Bytes()).Cmp(target) > 0 {
+		return powHash, consensus.ErrInvalidPoW
 	}
-	return powHash.(common.Hash), nil
+	return powHash, nil
 }
 
 func (progpow *Progpow) ComputePowHash(header *types.WorkObjectHeader) (common.Hash, error) {
@@ -637,7 +653,7 @@ func (progpow *Progpow) ComputePowHash(header *types.WorkObjectHeader) (common.H
 	}
 	// Verify the calculated values against the ones provided in the header
 	if !bytes.Equal(header.MixHash().Bytes(), mixHash.(common.Hash).Bytes()) {
-		return common.Hash{}, errInvalidMixHash
+		return common.Hash{}, consensus.ErrInvalidMixHash
 	}
 	return powHash.(common.Hash), nil
 }
@@ -651,26 +667,22 @@ func (progpow *Progpow) Prepare(chain consensus.ChainHeaderReader, header *types
 
 // Finalize implements consensus.Engine, accumulating the block and uncle rewards,
 // setting the final state on the header
-func (progpow *Progpow) Finalize(chain consensus.ChainHeaderReader, header *types.WorkObject, state *state.StateDB) {
+// Finalize returns the new MuHash of the UTXO set, the new size of the UTXO set and an error if any
+func (progpow *Progpow) Finalize(chain consensus.ChainHeaderReader, batch ethdb.Batch, header *types.WorkObject, state *state.StateDB, setRoots bool, utxoSetSize uint64, utxosCreate, utxosDelete []common.Hash) (*multiset.MultiSet, uint64, error) {
 	nodeLocation := progpow.NodeLocation()
 	nodeCtx := progpow.NodeLocation().Context()
-
-	if nodeCtx == common.ZONE_CTX && chain.IsGenesisHash(header.ParentHash(nodeCtx)) {
-		// Create the lockup contract account
-		lockupContract, err := vm.LockupContractAddresses[[2]byte{nodeLocation[0], nodeLocation[1]}].InternalAndQuaiAddress()
-		if err != nil {
-			panic(err)
-		}
-		state.CreateAccount(lockupContract)
-
-		alloc := core.ReadGenesisAlloc("genallocs/gen_quai_alloc_"+nodeLocation.Name()+".json", progpow.logger)
+	var multiSet *multiset.MultiSet
+	if chain.IsGenesisHash(header.ParentHash(nodeCtx)) {
+		multiSet = multiset.New()
+		alloc := core.ReadGenesisAlloc("genallocs/gen_alloc_quai_"+nodeLocation.Name()+".json", progpow.logger)
 		progpow.logger.WithField("alloc", len(alloc)).Info("Allocating genesis accounts")
 
 		for addressString, account := range alloc {
 			addr := common.HexToAddress(addressString, nodeLocation)
 			internal, err := addr.InternalAddress()
 			if err != nil {
-				progpow.logger.Error("Provided address in genesis block is out of scope")
+				progpow.logger.WithField("err", err).Error("Provided address in genesis block is out of scope")
+				continue
 			}
 			if addr.IsInQuaiLedgerScope() {
 				state.AddBalance(internal, account.Balance)
@@ -685,23 +697,293 @@ func (progpow *Progpow) Finalize(chain consensus.ChainHeaderReader, header *type
 			}
 		}
 		addressOutpointMap := make(map[string]map[string]*types.OutpointAndDenomination)
-		core.AddGenesisUtxos(state, nodeLocation, addressOutpointMap, progpow.logger)
+		core.AddGenesisUtxos(chain.Database(), &utxosCreate, nodeLocation, addressOutpointMap, progpow.logger)
 		if chain.Config().IndexAddressUtxos {
 			chain.WriteAddressOutpoints(addressOutpointMap)
+			progpow.logger.Info("Indexed genesis utxos")
+		}
+	} else {
+		multiSet = rawdb.ReadMultiSet(chain.Database(), header.ParentHash(nodeCtx))
+	}
+	if multiSet == nil {
+		return nil, 0, fmt.Errorf("Multiset is nil for block %s", header.ParentHash(nodeCtx).String())
+	}
+
+	utxoSetSize += uint64(len(utxosCreate))
+	if utxoSetSize < uint64(len(utxosDelete)) {
+		return nil, 0, fmt.Errorf("UTXO set size is less than the number of utxos to delete. This is a bug. UTXO set size: %d, UTXOs to delete: %d", utxoSetSize, len(utxosDelete))
+	}
+	utxoSetSize -= uint64(len(utxosDelete))
+
+	trimDepths := types.TrimDepths
+	if utxoSetSize > params.SoftMaxUTXOSetSize/2 {
+		var err error
+		trimDepths, err = rawdb.ReadTrimDepths(chain.Database(), header.ParentHash(nodeCtx))
+		if err != nil || trimDepths == nil {
+			progpow.logger.Errorf("Failed to read trim depths for block %s: %+v", header.ParentHash(nodeCtx).String(), err)
+			trimDepths = make(map[uint8]uint64, len(types.TrimDepths))
+			for denomination, depth := range types.TrimDepths { // copy the default trim depths
+				trimDepths[denomination] = depth
+			}
+		}
+		if UpdateTrimDepths(trimDepths, utxoSetSize) {
+			progpow.logger.Infof("Updated trim depths at height %d new depths: %+v", header.NumberU64(nodeCtx), trimDepths)
+		}
+		if !setRoots {
+			rawdb.WriteTrimDepths(batch, header.Hash(), trimDepths)
 		}
 	}
-	header.Header().SetUTXORoot(state.UTXORoot())
-	header.Header().SetEVMRoot(state.IntermediateRoot(true))
-	header.Header().SetEtxSetRoot(state.ETXRoot())
+	start := time.Now()
+	collidingKeys, err := rawdb.ReadCollidingKeys(chain.Database(), header.ParentHash(nodeCtx))
+	if err != nil {
+		progpow.logger.Errorf("Failed to read colliding keys for block %s: %+v", header.ParentHash(nodeCtx).String(), err)
+	}
+	newCollidingKeys := make([][]byte, 0)
+	trimmedUtxos := make([]*types.SpentUtxoEntry, 0)
+	var wg sync.WaitGroup
+	var lock sync.Mutex
+	for denomination, depth := range trimDepths {
+		if denomination <= types.MaxTrimDenomination && header.NumberU64(nodeCtx) > depth+params.MinimumTrimDepth {
+			wg.Add(1)
+			go func(denomination uint8, depth uint64) {
+				defer func() {
+					if r := recover(); r != nil {
+						progpow.logger.WithFields(log.Fields{
+							"error":      r,
+							"stacktrace": string(debug.Stack()),
+						}).Error("Go-Quai Panicked")
+					}
+				}()
+				nextBlockToTrim := rawdb.ReadCanonicalHash(chain.Database(), header.NumberU64(nodeCtx)-depth)
+				collisions := TrimBlock(chain, batch, denomination, true, header.NumberU64(nodeCtx)-depth, nextBlockToTrim, &utxosDelete, &trimmedUtxos, nil, &utxoSetSize, !setRoots, &lock, progpow.logger) // setRoots is false when we are processing the block
+				if len(collisions) > 0 {
+					lock.Lock()
+					newCollidingKeys = append(newCollidingKeys, collisions...)
+					lock.Unlock()
+				}
+				wg.Done()
+			}(denomination, depth)
+		}
+	}
+	if len(collidingKeys) > 0 {
+		wg.Add(1)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					progpow.logger.WithFields(log.Fields{
+						"error":      r,
+						"stacktrace": string(debug.Stack()),
+					}).Error("Go-Quai Panicked")
+				}
+			}()
+			// Trim colliding/duplicate keys here - an optimization could be to do this above in parallel with the other trims
+			collisions := TrimBlock(chain, batch, 0, false, 0, common.Hash{}, &utxosDelete, &trimmedUtxos, collidingKeys, &utxoSetSize, !setRoots, &lock, progpow.logger)
+			if len(collisions) > 0 {
+				lock.Lock()
+				newCollidingKeys = append(newCollidingKeys, collisions...)
+				lock.Unlock()
+			}
+			wg.Done()
+		}()
+	}
+	wg.Wait()
+	if len(trimmedUtxos) > 0 {
+		progpow.logger.Infof("Trimmed %d UTXOs from db in %s", len(trimmedUtxos), common.PrettyDuration(time.Since(start)))
+	}
+	if !setRoots {
+		rawdb.WriteTrimmedUTXOs(batch, header.Hash(), trimmedUtxos)
+		if len(newCollidingKeys) > 0 {
+			rawdb.WriteCollidingKeys(batch, header.Hash(), newCollidingKeys)
+		}
+	}
+	for _, hash := range utxosCreate {
+		multiSet.Add(hash.Bytes())
+	}
+	for _, hash := range utxosDelete {
+		multiSet.Remove(hash.Bytes())
+	}
+	progpow.logger.Infof("Parent hash: %s, header hash: %s, muhash: %s, block height: %d, setroots: %t, UtxosCreated: %d, UtxosDeleted: %d, UTXOs Trimmed from DB: %d, UTXO Set Size: %d", header.ParentHash(nodeCtx).String(), header.Hash().String(), multiSet.Hash().String(), header.NumberU64(nodeCtx), setRoots, len(utxosCreate), len(utxosDelete), len(trimmedUtxos), utxoSetSize)
+
+	if setRoots {
+		header.Header().SetUTXORoot(multiSet.Hash())
+		header.Header().SetEVMRoot(state.IntermediateRoot(true))
+		header.Header().SetEtxSetRoot(state.ETXRoot())
+		header.Header().SetQuaiStateSize(state.GetQuaiTrieSize())
+	}
+	return multiSet, utxoSetSize, nil
+}
+
+// TrimBlock trims all UTXOs of a given denomination that were created in a given block.
+// In the event of an attacker intentionally creating too many 9-byte keys that collide, we return the colliding keys to be trimmed in the next block.
+func TrimBlock(chain consensus.ChainHeaderReader, batch ethdb.Batch, denomination uint8, checkDenom bool, blockHeight uint64, blockHash common.Hash, utxosDelete *[]common.Hash, trimmedUtxos *[]*types.SpentUtxoEntry, collidingKeys [][]byte, utxoSetSize *uint64, deleteFromDb bool, lock *sync.Mutex, logger *log.Logger) [][]byte {
+	utxosCreated, _ := rawdb.ReadPrunedUTXOKeys(chain.Database(), blockHeight)
+	if len(utxosCreated) == 0 {
+		// This should almost never happen, but we need to handle it
+		utxosCreated, _ = rawdb.ReadCreatedUTXOKeys(chain.Database(), blockHash)
+		logger.Infof("Reading non-pruned UTXOs for block %d", blockHeight)
+		for i, key := range utxosCreated {
+			if len(key) == rawdb.UtxoKeyWithDenominationLength {
+				if key[len(key)-1] > types.MaxTrimDenomination {
+					// Don't keep it if the denomination is not trimmed
+					// The keys are sorted in order of denomination, so we can break here
+					break
+				}
+				key[rawdb.PrunedUtxoKeyWithDenominationLength+len(rawdb.UtxoPrefix)-1] = key[len(key)-1] // place the denomination at the end of the pruned key (11th byte will become 9th byte)
+			}
+			// Reduce key size to 9 bytes and cut off the prefix
+			key = key[len(rawdb.UtxoPrefix) : rawdb.PrunedUtxoKeyWithDenominationLength+len(rawdb.UtxoPrefix)]
+			utxosCreated[i] = key
+		}
+	}
+
+	logger.Infof("UTXOs created in block %d: %d", blockHeight, len(utxosCreated))
+	if len(collidingKeys) > 0 {
+		logger.Infof("Colliding keys: %d", len(collidingKeys))
+		utxosCreated = append(utxosCreated, collidingKeys...)
+		sort.Slice(utxosCreated, func(i, j int) bool {
+			return utxosCreated[i][len(utxosCreated[i])-1] < utxosCreated[j][len(utxosCreated[j])-1]
+		})
+	}
+	newCollisions := make([][]byte, 0)
+	duplicateKeys := make(map[[36]byte]bool) // cannot use rawdb.UtxoKeyLength for map as it's not const
+	// Start by grabbing all the UTXOs created in the block (that are still in the UTXO set)
+	for _, key := range utxosCreated {
+		if len(key) != rawdb.PrunedUtxoKeyWithDenominationLength {
+			continue
+		}
+		if checkDenom {
+			if key[len(key)-1] != denomination {
+				if key[len(key)-1] > denomination {
+					break // The keys are stored in order of denomination, so we can stop checking here
+				} else {
+					continue
+				}
+			} else {
+				key = append(rawdb.UtxoPrefix, key...) // prepend the db prefix
+				key = key[:len(key)-1]                 // remove the denomination byte
+			}
+		}
+		// Check key in database
+		i := 0
+		it := chain.Database().NewIterator(key, nil)
+		for it.Next() {
+			data := it.Value()
+			if len(data) == 0 {
+				logger.Infof("Empty key found, denomination: %d", denomination)
+				continue
+			}
+			// Check if the key is a duplicate
+			if len(it.Key()) == rawdb.UtxoKeyLength {
+				key36 := [36]byte(it.Key())
+				if duplicateKeys[key36] {
+					continue
+				} else {
+					duplicateKeys[key36] = true
+				}
+			}
+			utxoProto := new(types.ProtoTxOut)
+			if err := proto.Unmarshal(data, utxoProto); err != nil {
+				logger.Errorf("Failed to unmarshal ProtoTxOut: %+v data: %+v key: %+v", err, data, key)
+				continue
+			}
+
+			utxo := new(types.UtxoEntry)
+			if err := utxo.ProtoDecode(utxoProto); err != nil {
+				logger.WithFields(log.Fields{
+					"key":  key,
+					"data": data,
+					"err":  err,
+				}).Error("Invalid utxo Proto")
+				continue
+			}
+			if checkDenom && utxo.Denomination != denomination {
+				continue
+			}
+			txHash, index, err := rawdb.ReverseUtxoKey(it.Key())
+			if err != nil {
+				logger.WithField("err", err).Error("Failed to parse utxo key")
+				continue
+			}
+			lock.Lock()
+			*utxosDelete = append(*utxosDelete, types.UTXOHash(txHash, index, utxo))
+			if deleteFromDb {
+				batch.Delete(it.Key())
+				*trimmedUtxos = append(*trimmedUtxos, &types.SpentUtxoEntry{OutPoint: types.OutPoint{txHash, index}, UtxoEntry: utxo})
+			}
+			*utxoSetSize--
+			lock.Unlock()
+			i++
+			if i >= types.MaxTrimCollisionsPerKeyPerBlock {
+				// This will rarely ever happen, but if it does, we should continue trimming this key in the next block
+				logger.WithField("blockHeight", blockHeight).Error("MaxTrimCollisionsPerBlock exceeded")
+				newCollisions = append(newCollisions, key)
+				break
+			}
+		}
+		it.Release()
+	}
+	return newCollisions
+}
+
+func UpdateTrimDepths(trimDepths map[uint8]uint64, utxoSetSize uint64) bool {
+	switch {
+	case utxoSetSize > params.SoftMaxUTXOSetSize/2 && trimDepths[255] == 0: // 50% full
+		for denomination, depth := range trimDepths {
+			trimDepths[denomination] = depth - (depth / 10) // decrease lifespan of this denomination by 10%
+		}
+		trimDepths[255] = 1 // level 1
+	case utxoSetSize > params.SoftMaxUTXOSetSize-(params.SoftMaxUTXOSetSize/4) && trimDepths[255] == 1: // 75% full
+		for denomination, depth := range trimDepths {
+			trimDepths[denomination] = depth - (depth / 5) // decrease lifespan of this denomination by an additional 20%
+		}
+		trimDepths[255] = 2 // level 2
+	case utxoSetSize > params.SoftMaxUTXOSetSize-(params.SoftMaxUTXOSetSize/10) && trimDepths[255] == 2: // 90% full
+		for denomination, depth := range trimDepths {
+			trimDepths[denomination] = depth - (depth / 2) // decrease lifespan of this denomination by an additional 50%
+		}
+		trimDepths[255] = 3 // level 3
+	case utxoSetSize > params.SoftMaxUTXOSetSize && trimDepths[255] == 3:
+		for denomination, depth := range trimDepths {
+			trimDepths[denomination] = depth - (depth / 2) // decrease lifespan of this denomination by an additional 50%
+		}
+		trimDepths[255] = 4 // level 4
+
+	// Resets
+	case utxoSetSize <= params.SoftMaxUTXOSetSize/2 && trimDepths[255] == 1: // Below 50% full
+		for denomination, depth := range types.TrimDepths { // reset to the default trim depths
+			trimDepths[denomination] = depth
+		}
+		trimDepths[255] = 0 // level 0
+	case utxoSetSize <= params.SoftMaxUTXOSetSize-(params.SoftMaxUTXOSetSize/4) && trimDepths[255] == 2: // Below 75% full
+		for denomination, depth := range trimDepths {
+			trimDepths[denomination] = depth + (depth / 5) // increase lifespan of this denomination by 20%
+		}
+		trimDepths[255] = 1 // level 1
+	case utxoSetSize <= params.SoftMaxUTXOSetSize-(params.SoftMaxUTXOSetSize/10) && trimDepths[255] == 3: // Below 90% full
+		for denomination, depth := range trimDepths {
+			trimDepths[denomination] = depth + (depth / 2) // increase lifespan of this denomination by 50%
+		}
+		trimDepths[255] = 2 // level 2
+	case utxoSetSize <= params.SoftMaxUTXOSetSize && trimDepths[255] == 4: // Below 100% full
+		for denomination, depth := range trimDepths {
+			trimDepths[denomination] = depth + (depth / 2) // increase lifespan of this denomination by 50%
+		}
+		trimDepths[255] = 3 // level 3
+	default:
+		return false
+	}
+	return true
 }
 
 // FinalizeAndAssemble implements consensus.Engine, accumulating the block and
 // uncle rewards, setting the final state and assembling the block.
-func (progpow *Progpow) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.WorkObject, state *state.StateDB, txs []*types.Transaction, uncles []*types.WorkObjectHeader, etxs []*types.Transaction, subManifest types.BlockManifest, receipts []*types.Receipt) (*types.WorkObject, error) {
+func (progpow *Progpow) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.WorkObject, state *state.StateDB, txs []*types.Transaction, uncles []*types.WorkObjectHeader, etxs []*types.Transaction, subManifest types.BlockManifest, receipts []*types.Receipt, parentUtxoSetSize uint64, utxosCreate, utxosDelete []common.Hash) (*types.WorkObject, error) {
 	nodeCtx := progpow.config.NodeLocation.Context()
 	if nodeCtx == common.ZONE_CTX && chain.ProcessingState() {
 		// Finalize block
-		progpow.Finalize(chain, header, state)
+		if _, _, err := progpow.Finalize(chain, nil, header, state, true, parentUtxoSetSize, utxosCreate, utxosDelete); err != nil {
+			return nil, err
+		}
 	}
 
 	woBody, err := types.NewWorkObjectBody(header.Header(), txs, etxs, uncles, subManifest, receipts, trie.NewStackTrie(nil), nodeCtx)

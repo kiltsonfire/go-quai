@@ -464,6 +464,33 @@ func (loc Location) InSameSliceAs(cmp Location) bool {
 	// Compare bytes up to the shorter depth
 	return shorter.Equal(longer[:len(shorter)])
 }
+func (loc Location) NameAtOrder(order int) string {
+	regionName := ""
+	switch loc.Region() {
+	case 0:
+		regionName = "cyprus"
+	case 1:
+		regionName = "paxos"
+	case 2:
+		regionName = "hydra"
+	default:
+		regionName = "unknownregion"
+	}
+
+	zoneNum := strconv.Itoa(loc.Zone() + 1)
+	switch order {
+	case PRIME_CTX:
+		return "prime"
+	case REGION_CTX:
+		return regionName
+	case ZONE_CTX:
+		return regionName + zoneNum
+	default:
+		log.Global.Info("cannot name invalid location")
+		return "invalid-location"
+	}
+
+}
 
 func (loc Location) Name() string {
 	regionName := ""
@@ -477,6 +504,7 @@ func (loc Location) Name() string {
 	default:
 		regionName = "unknownregion"
 	}
+
 	zoneNum := strconv.Itoa(loc.Zone() + 1)
 	switch loc.Context() {
 	case PRIME_CTX:
@@ -737,4 +765,26 @@ func NewChainsAdded(expansionNumber uint8) []Location {
 		}
 	}
 	return newChains
+}
+
+// SetBlockHashForQuai sets the correct first 4 bytes in the block hash for QIP10 and Quai origin
+func SetBlockHashForQuai(blockHash Hash, nodeLocation Location) Hash {
+	// Set the first byte of the block hash to the zone prefix
+	origin := (uint8(nodeLocation[0]) * 16) + uint8(nodeLocation[1])
+	blockHash[0] = origin
+	blockHash[2] = origin
+	blockHash[1] &= 0x7F // 01111111 in binary (set first bit to 0)
+	blockHash[3] &= 0x7F // 01111111 in binary (set first bit to 0)
+	return blockHash
+}
+
+// SetBlockHashForQuai sets the correct first 4 bytes in the block hash for QIP10 and Qi origin
+func SetBlockHashForQi(blockHash Hash, nodeLocation Location) Hash {
+	// Set the first byte of the block hash to the zone prefix
+	origin := (uint8(nodeLocation[0]) * 16) + uint8(nodeLocation[1])
+	blockHash[0] = origin
+	blockHash[2] = origin
+	blockHash[1] |= 0x80 // 10000000 in binary (set first bit to 1)
+	blockHash[3] |= 0x80 // 10000000 in binary (set first bit to 1)
+	return blockHash
 }

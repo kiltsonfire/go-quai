@@ -6,8 +6,14 @@ import (
 	"io"
 	"math/big"
 	"runtime/debug"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	libp2pprotocol "github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/sirupsen/logrus"
 
 	"github.com/dominant-strategies/go-quai/common"
@@ -17,14 +23,122 @@ import (
 )
 
 const (
-	numWorkers   = 10  // Number of workers per stream
-	msgChanSize  = 100 // 100 requests per stream
-	protocolName = "quai"
+	numWorkers                 = 10  // Number of workers per stream
+	msgChanSize                = 100 // 100 requests per stream
+	protocolName               = "quai"
+	rateFilterAlphaPct         = 10 // alpha (in percent) for rate tracker filter
+	requestRateLimitPeriod_ms  = 20 // 20ms avg delay between requests = 50 requests/sec
+	C_NumPrimeBlocksToDownload = 10
 )
 
+type rateTracker struct {
+	avg_period int64     // avg time (ms) between requests
+	last       time.Time // last time a request was fed to the tracker
+}
+
+var inRateTrackers map[peer.ID]rateTracker
+var outRateTrackers map[peer.ID]rateTracker
+
+var requestRateMu sync.RWMutex
+
+// Feed the request rate tracker, recomputing the rate, and returning an error if the rate limit is exceeded
+func ProcRequestRate(peerId peer.ID, inbound bool) error {
+	requestRateMu.Lock()
+	defer requestRateMu.Unlock()
+	var rateTrackers *map[peer.ID]rateTracker
+	if inRateTrackers == nil {
+		inRateTrackers = make(map[peer.ID]rateTracker)
+	}
+	if outRateTrackers == nil {
+		outRateTrackers = make(map[peer.ID]rateTracker)
+	}
+	if inbound {
+		rateTrackers = &inRateTrackers
+	} else {
+		rateTrackers = &outRateTrackers
+	}
+	if tracker, exists := (*rateTrackers)[peerId]; exists {
+		t_now := time.Now()
+		dt_ms := t_now.UnixMilli() - tracker.last.UnixMilli()
+		avg_period := ((100-rateFilterAlphaPct)*tracker.avg_period + (rateFilterAlphaPct*dt_ms)/100)
+		if inbound {
+			// inbound rate always updates, because request has already arrived
+			tracker.avg_period = avg_period
+			tracker.last = t_now
+		}
+		minPeriod := requestRateLimitPeriod_ms
+		if !inbound {
+			// Conservatively rate limit ourselves, to avoid tripping our peers rate limit
+			minPeriod /= 2
+		}
+		if avg_period < requestRateLimitPeriod_ms {
+			return errors.New("peer exceeded request rate limit")
+		} else {
+			// since outbound requests wont be sent if the limit is exceeded, only update the outbound rate if there is no error
+			tracker.avg_period = avg_period
+			tracker.last = t_now
+		}
+	} else {
+		(*rateTrackers)[peerId] = rateTracker{
+			avg_period: 1000000, // initially start at very low rate
+			last:       time.Now(),
+		}
+	}
+	return nil
+}
+
+// Splits a protocol version into its name, major, minor, and patch values
+func splitVersion(version libp2pprotocol.ID) (string, int, int, int) {
+	split := strings.Split(string(ProtocolVersion), "/")
+	if len(split) != 3 {
+		return "", -1, -1, -1
+	}
+	name := split[1]
+	split = strings.Split(split[2], ".")
+	if len(split) != 3 {
+		return "", -2, -1, -1
+	}
+	major, err := strconv.Atoi(split[0])
+	if err != nil {
+		return "", -3, -1, -1
+	}
+	minor, err := strconv.Atoi(split[1])
+	if err != nil {
+		return "", -4, -1, -1
+	}
+	patch, err := strconv.Atoi(split[2])
+	if err != nil {
+		return "", -5, -1, -1
+	}
+	return name, major, minor, patch
+}
+
+// Compares two protocol versions and returns true if they are compatible
+func isPeerVersionCompatible(theirVersion libp2pprotocol.ID, node QuaiP2PNode) bool {
+	ourName, ourMajor, ourMinor, ourPatch := splitVersion(ProtocolVersion)
+	if ourName == "" || ourMajor < 0 || ourMinor < 0 || ourPatch < 0 {
+		return false
+	}
+	theirName, theirMajor, theirMinor, theirPatch := splitVersion(theirVersion)
+	if theirName == "" || theirMajor < 0 || theirMinor < 0 || theirPatch < 0 {
+		return false
+	}
+	if theirName != ourName {
+		return false
+	}
+	// If they are more than one major version behind, we cannot be compatible
+	if theirMajor < ourMajor-1 {
+		return false
+	}
+	// If they are exactly one version behind, they may be compatible if the grace period has not expired
+	if theirMajor == ourMajor-1 && ProtocolGraceHeight >= node.GetHeight(common.Location{}) {
+		return false
+	}
+	return true
+}
+
 // QuaiProtocolHandler handles all the incoming requests and responds with corresponding data
-func QuaiProtocolHandler(stream network.Stream, node QuaiP2PNode) {
-	defer stream.Close()
+func QuaiProtocolHandler(ctx context.Context, stream network.Stream, node QuaiP2PNode) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Global.WithFields(log.Fields{
@@ -33,21 +147,28 @@ func QuaiProtocolHandler(stream network.Stream, node QuaiP2PNode) {
 			}).Fatal("Go-Quai Panicked")
 		}
 	}()
+	defer stream.Close()
 
 	log.Global.Debugf("Received a new stream from %s", stream.Conn().RemotePeer())
 
 	// if there is a protocol mismatch, close the stream
-	if stream.Protocol() != ProtocolVersion {
-		log.Global.Warnf("Invalid protocol: %s", stream.Protocol())
+	if !isPeerVersionCompatible(stream.Protocol(), node) {
+		log.Global.Warnf("Incompatible protocol: %s", stream.Protocol())
 		// TODO: add logic to drop the peer
 		return
 	}
 	// Create a channel for messages
 	msgChan := make(chan []byte, msgChanSize)
 	full := 0
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Global.WithFields(log.Fields{
+					"error":      r,
+					"stacktrace": string(debug.Stack()),
+				}).Fatal("Go-Quai Panicked")
+			}
+		}()
 		for {
 			select {
 			case message := <-msgChan:
@@ -69,7 +190,7 @@ func QuaiProtocolHandler(stream network.Stream, node QuaiP2PNode) {
 
 			log.Global.Errorf("error reading message from stream: %s", err)
 			// TODO: handle error
-			return
+			continue
 		}
 
 		// Send to worker goroutines
@@ -83,7 +204,6 @@ func QuaiProtocolHandler(stream network.Stream, node QuaiP2PNode) {
 			}
 			full++
 		}
-
 	}
 }
 
@@ -121,6 +241,13 @@ func handleMessage(data []byte, stream network.Stream, node QuaiP2PNode) {
 }
 
 func handleRequest(quaiMsg *pb.QuaiRequestMessage, stream network.Stream, node QuaiP2PNode) {
+	// if this peer exceeds the request rate limit, drop them
+	if err := ProcRequestRate(stream.Conn().RemotePeer(), true); err != nil {
+		stream.Close()
+		log.Global.Warn("closing stream to over-chatty peer")
+		return
+	}
+
 	id, decodedType, loc, query, err := pb.DecodeQuaiRequest(quaiMsg)
 	if err != nil {
 		log.Global.WithField("err", err).Errorf("error decoding quai request")
@@ -149,13 +276,15 @@ func handleRequest(quaiMsg *pb.QuaiRequestMessage, stream network.Stream, node Q
 	}
 
 	switch decodedType.(type) {
-	case *types.WorkObject, *types.WorkObjectHeaderView, *types.WorkObjectBlockView:
+	case *types.WorkObjectHeaderView, *types.WorkObjectBlockView, []*types.WorkObjectBlockView:
 		var requestedView types.WorkObjectView
 		switch decodedType.(type) {
 		case *types.WorkObjectHeaderView:
 			requestedView = types.HeaderObject
 		case *types.WorkObjectBlockView:
 			requestedView = types.BlockObject
+		case []*types.WorkObjectBlockView:
+			requestedView = types.BlockObjects
 		}
 
 		requestedHash := &common.Hash{}
@@ -247,6 +376,9 @@ func handleBlockRequest(id uint32, loc common.Location, hash common.Hash, stream
 			block = fullWO.ConvertToHeaderView()
 		case types.BlockObject:
 			block = fullWO.ConvertToBlockView()
+		case types.BlockObjects:
+			// This is the case in which the Prime is asking for the next c_NumPrimeBlocksToDownload blocks
+			block = node.GetWorkObjectsFrom(hash, loc, C_NumPrimeBlocksToDownload)
 		}
 	}
 	var requestDataType interface{}
@@ -255,6 +387,8 @@ func handleBlockRequest(id uint32, loc common.Location, hash common.Hash, stream
 		requestDataType = &types.WorkObjectBlockView{}
 	case types.HeaderObject:
 		requestDataType = &types.WorkObjectHeaderView{}
+	case types.BlockObjects:
+		requestDataType = []*types.WorkObjectBlockView{}
 	}
 	// create a Quai Message Response with the block
 	data, err = pb.EncodeQuaiResponse(id, loc, requestDataType, block)

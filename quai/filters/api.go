@@ -55,24 +55,28 @@ type filter struct {
 // PublicFilterAPI offers support to create and manage filters. This will allow external clients to retrieve various
 // information related to the Quai protocol such as blocks, transactions and logs.
 type PublicFilterAPI struct {
-	backend   Backend
-	mux       *event.TypeMux
-	quit      chan struct{}
-	chainDb   ethdb.Database
-	events    *EventSystem
-	filtersMu sync.Mutex
-	filters   map[rpc.ID]*filter
-	timeout   time.Duration
+	backend             Backend
+	mux                 *event.TypeMux
+	quit                chan struct{}
+	chainDb             ethdb.Database
+	events              *EventSystem
+	filtersMu           sync.Mutex
+	filters             map[rpc.ID]*filter
+	timeout             time.Duration
+	subscriptionLimit   int
+	activeSubscriptions int
 }
 
 // NewPublicFilterAPI returns a new PublicFilterAPI instance.
-func NewPublicFilterAPI(backend Backend, timeout time.Duration) *PublicFilterAPI {
+func NewPublicFilterAPI(backend Backend, timeout time.Duration, subscriptionLimit int) *PublicFilterAPI {
 	api := &PublicFilterAPI{
-		backend: backend,
-		chainDb: backend.ChainDb(),
-		events:  NewEventSystem(backend),
-		filters: make(map[rpc.ID]*filter),
-		timeout: timeout,
+		backend:             backend,
+		chainDb:             backend.ChainDb(),
+		events:              NewEventSystem(backend),
+		filters:             make(map[rpc.ID]*filter),
+		timeout:             timeout,
+		subscriptionLimit:   subscriptionLimit,
+		activeSubscriptions: 0,
 	}
 	go api.timeoutLoop(timeout)
 
@@ -166,6 +170,10 @@ func (api *PublicFilterAPI) NewPendingTransactionFilter() rpc.ID {
 // NewPendingTransactions creates a subscription that is triggered each time a transaction
 // enters the transaction pool and was signed from one of the transactions this nodes manages.
 func (api *PublicFilterAPI) NewPendingTransactions(ctx context.Context) (*rpc.Subscription, error) {
+	if api.activeSubscriptions >= api.subscriptionLimit {
+		return &rpc.Subscription{}, errors.New("too many subscribers")
+	}
+
 	notifier, supported := rpc.NotifierFromContext(ctx)
 	if !supported {
 		return &rpc.Subscription{}, rpc.ErrNotificationsUnsupported
@@ -181,7 +189,9 @@ func (api *PublicFilterAPI) NewPendingTransactions(ctx context.Context) (*rpc.Su
 					"stacktrace": string(debug.Stack()),
 				}).Fatal("Go-Quai Panicked")
 			}
+			api.activeSubscriptions -= 1
 		}()
+		api.activeSubscriptions += 1
 		txHashes := make(chan []common.Hash, 128)
 		pendingTxSub := api.events.SubscribePendingTxs(txHashes)
 
@@ -251,6 +261,10 @@ func (api *PublicFilterAPI) NewBlockFilter() rpc.ID {
 
 // NewHeads send a notification each time a new (header) block is appended to the chain.
 func (api *PublicFilterAPI) NewHeads(ctx context.Context) (*rpc.Subscription, error) {
+	if api.activeSubscriptions >= api.subscriptionLimit {
+		return &rpc.Subscription{}, errors.New("too many subscribers")
+	}
+
 	notifier, supported := rpc.NotifierFromContext(ctx)
 	if !supported {
 		return &rpc.Subscription{}, rpc.ErrNotificationsUnsupported
@@ -266,7 +280,9 @@ func (api *PublicFilterAPI) NewHeads(ctx context.Context) (*rpc.Subscription, er
 					"stacktrace": string(debug.Stack()),
 				}).Fatal("Go-Quai Panicked")
 			}
+			api.activeSubscriptions -= 1
 		}()
+		api.activeSubscriptions += 1
 		headers := make(chan *types.WorkObject)
 		headersSub := api.events.SubscribeNewHeads(headers)
 
@@ -289,8 +305,75 @@ func (api *PublicFilterAPI) NewHeads(ctx context.Context) (*rpc.Subscription, er
 	return rpcSub, nil
 }
 
+// Accesses send a notification each time the specified address is accessed
+func (api *PublicFilterAPI) Accesses(ctx context.Context, addr common.Address) (*rpc.Subscription, error) {
+	if api.activeSubscriptions >= api.subscriptionLimit {
+		return &rpc.Subscription{}, errors.New("too many subscribers")
+	}
+
+	notifier, supported := rpc.NotifierFromContext(ctx)
+	if !supported {
+		return &rpc.Subscription{}, rpc.ErrNotificationsUnsupported
+	}
+
+	rpcSub := notifier.CreateSubscription()
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				api.backend.Logger().WithFields(log.Fields{
+					"error":      r,
+					"stacktrace": string(debug.Stack()),
+				}).Fatal("Go-Quai Panicked")
+			}
+			api.activeSubscriptions -= 1
+		}()
+		api.activeSubscriptions += 1
+		headers := make(chan *types.WorkObject)
+		headersSub := api.events.SubscribeNewHeads(headers)
+
+		for {
+			select {
+			case h := <-headers:
+				// Marshal the header data
+				hash := h.Hash()
+				nodeLocation := api.backend.NodeLocation()
+				nodeCtx := nodeLocation.Context()
+				if block, err := api.backend.GetBlock(h.Hash(), h.NumberU64(nodeCtx)); err != nil {
+					for _, tx := range block.Transactions() {
+						// Check for external accesses
+						if tx.To() == &addr || tx.From(nodeLocation) == &addr {
+							notifier.Notify(rpcSub.ID, hash)
+							break
+						}
+						// Check for EVM accesses
+						for _, access := range tx.AccessList() {
+							if access.Address == addr {
+								notifier.Notify(rpcSub.ID, hash)
+								break
+							}
+						}
+					}
+				}
+			case <-rpcSub.Err():
+				headersSub.Unsubscribe()
+				return
+			case <-notifier.Closed():
+				headersSub.Unsubscribe()
+				return
+			}
+		}
+	}()
+
+	return rpcSub, nil
+}
+
 // Logs creates a subscription that fires for all new log that match the given filter criteria.
 func (api *PublicFilterAPI) Logs(ctx context.Context, crit FilterCriteria) (*rpc.Subscription, error) {
+	if api.activeSubscriptions >= api.subscriptionLimit {
+		return &rpc.Subscription{}, errors.New("too many subscribers")
+	}
+
 	notifier, supported := rpc.NotifierFromContext(ctx)
 	if !supported {
 		return &rpc.Subscription{}, rpc.ErrNotificationsUnsupported
@@ -301,8 +384,6 @@ func (api *PublicFilterAPI) Logs(ctx context.Context, crit FilterCriteria) (*rpc
 		matchedLogs = make(chan []*types.Log)
 	)
 
-	// Add the node location information into the filter query
-	crit.NodeLocation = api.backend.NodeLocation()
 	logsSub, err := api.events.SubscribeLogs(quai.FilterQuery(crit), matchedLogs)
 	if err != nil {
 		return nil, err
@@ -316,7 +397,9 @@ func (api *PublicFilterAPI) Logs(ctx context.Context, crit FilterCriteria) (*rpc
 					"stacktrace": string(debug.Stack()),
 				}).Fatal("Go-Quai Panicked")
 			}
+			api.activeSubscriptions -= 1
 		}()
+		api.activeSubscriptions += 1
 		for {
 			select {
 			case logs := <-matchedLogs:
@@ -355,8 +438,6 @@ type FilterCriteria quai.FilterQuery
 // https://eth.wiki/json-rpc/API#eth_newfilter
 func (api *PublicFilterAPI) NewFilter(crit FilterCriteria) (rpc.ID, error) {
 	logs := make(chan []*types.Log)
-	// add the node location information to the filter
-	crit.NodeLocation = api.backend.NodeLocation()
 	logsSub, err := api.events.SubscribeLogs(quai.FilterQuery(crit), logs)
 	if err != nil {
 		return "", err
@@ -400,9 +481,17 @@ func (api *PublicFilterAPI) NewFilter(crit FilterCriteria) (rpc.ID, error) {
 // https://eth.wiki/json-rpc/API#eth_getlogs
 func (api *PublicFilterAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*types.Log, error) {
 	var filter *Filter
+
+	var addresses []common.Address
+	if crit.Addresses != nil {
+		addresses = make([]common.Address, len(crit.Addresses))
+		for i, addr := range crit.Addresses {
+			addresses[i] = common.Bytes20ToAddress(addr, api.backend.NodeLocation())
+		}
+	}
 	if crit.BlockHash != nil {
 		// Block filter requested, construct a single-shot filter
-		filter = NewBlockFilter(api.backend, *crit.BlockHash, crit.Addresses, crit.Topics)
+		filter = NewBlockFilter(api.backend, *crit.BlockHash, addresses, crit.Topics)
 	} else {
 		// Convert the RPC block numbers into internal representations
 		begin := rpc.LatestBlockNumber.Int64()
@@ -414,7 +503,7 @@ func (api *PublicFilterAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([
 			end = crit.ToBlock.Int64()
 		}
 		// Construct the range filter
-		filter = NewRangeFilter(api.backend, begin, end, crit.Addresses, crit.Topics, api.backend.Logger())
+		filter = NewRangeFilter(api.backend, begin, end, addresses, crit.Topics, api.backend.Logger())
 	}
 	// Run the filter and return all the logs
 	logs, err := filter.Logs(ctx)
@@ -454,10 +543,18 @@ func (api *PublicFilterAPI) GetFilterLogs(ctx context.Context, id rpc.ID) ([]*ty
 		return nil, fmt.Errorf("filter not found")
 	}
 
+	var addresses []common.Address
+	if f.crit.Addresses != nil {
+		addresses = make([]common.Address, len(f.crit.Addresses))
+		for i, addr := range f.crit.Addresses {
+			addresses[i] = common.Bytes20ToAddress(addr, api.backend.NodeLocation())
+		}
+	}
+
 	var filter *Filter
 	if f.crit.BlockHash != nil {
 		// Block filter requested, construct a single-shot filter
-		filter = NewBlockFilter(api.backend, *f.crit.BlockHash, f.crit.Addresses, f.crit.Topics)
+		filter = NewBlockFilter(api.backend, *f.crit.BlockHash, addresses, f.crit.Topics)
 	} else {
 		// Convert the RPC block numbers into internal representations
 		begin := rpc.LatestBlockNumber.Int64()
@@ -469,7 +566,7 @@ func (api *PublicFilterAPI) GetFilterLogs(ctx context.Context, id rpc.ID) ([]*ty
 			end = f.crit.ToBlock.Int64()
 		}
 		// Construct the range filter
-		filter = NewRangeFilter(api.backend, begin, end, f.crit.Addresses, f.crit.Topics, api.backend.Logger())
+		filter = NewRangeFilter(api.backend, begin, end, addresses, f.crit.Topics, api.backend.Logger())
 	}
 	// Run the filter and return all the logs
 	logs, err := filter.Logs(ctx)
@@ -534,12 +631,11 @@ func returnLogs(logs []*types.Log) []*types.Log {
 // UnmarshalJSON sets *args fields with given data.
 func (args *FilterCriteria) UnmarshalJSON(data []byte) error {
 	type input struct {
-		BlockHash    *common.Hash     `json:"blockHash"`
-		FromBlock    *rpc.BlockNumber `json:"fromBlock"`
-		ToBlock      *rpc.BlockNumber `json:"toBlock"`
-		Addresses    interface{}      `json:"address"`
-		Topics       []interface{}    `json:"topics"`
-		NodeLocation *common.Location `json:"nodeLocation"`
+		BlockHash *common.Hash     `json:"blockHash"`
+		FromBlock *rpc.BlockNumber `json:"fromBlock"`
+		ToBlock   *rpc.BlockNumber `json:"toBlock"`
+		Addresses interface{}      `json:"address"`
+		Topics    []interface{}    `json:"topics"`
 	}
 
 	var raw input
@@ -563,11 +659,7 @@ func (args *FilterCriteria) UnmarshalJSON(data []byte) error {
 		}
 	}
 
-	if raw.NodeLocation == nil {
-		return fmt.Errorf("NodeLocation is required but was not provided")
-	}
-
-	args.Addresses = []common.Address{}
+	args.Addresses = []common.AddressBytes{}
 
 	if raw.Addresses != nil {
 		// raw.Address can contain a single address or an array of addresses
@@ -575,7 +667,7 @@ func (args *FilterCriteria) UnmarshalJSON(data []byte) error {
 		case []interface{}:
 			for i, addr := range rawAddr {
 				if strAddr, ok := addr.(string); ok {
-					addr, err := decodeAddress(strAddr, *raw.NodeLocation)
+					addr, err := decodeAddress(strAddr)
 					if err != nil {
 						return fmt.Errorf("invalid address at index %d: %v", i, err)
 					}
@@ -585,11 +677,11 @@ func (args *FilterCriteria) UnmarshalJSON(data []byte) error {
 				}
 			}
 		case string:
-			addr, err := decodeAddress(rawAddr, *raw.NodeLocation)
+			addr, err := decodeAddress(rawAddr)
 			if err != nil {
 				return fmt.Errorf("invalid address: %v", err)
 			}
-			args.Addresses = []common.Address{addr}
+			args.Addresses = []common.AddressBytes{addr}
 		default:
 			return errors.New("invalid addresses in query")
 		}
@@ -639,12 +731,12 @@ func (args *FilterCriteria) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func decodeAddress(s string, nodeLocation common.Location) (common.Address, error) {
+func decodeAddress(s string) (common.AddressBytes, error) {
 	b, err := hexutil.Decode(s)
 	if err == nil && len(b) != common.AddressLength {
 		err = fmt.Errorf("hex has invalid length %d after decoding; expected %d for address", len(b), common.AddressLength)
 	}
-	return common.BytesToAddress(b, nodeLocation), err
+	return common.HexToAddressBytes(s), err
 }
 
 func decodeTopic(s string) (common.Hash, error) {
@@ -680,6 +772,14 @@ func (api *PublicFilterAPI) PendingHeader(ctx context.Context) (*rpc.Subscriptio
 			select {
 			case b := <-header:
 				go func() {
+					defer func() {
+						if r := recover(); r != nil {
+							api.backend.Logger().WithFields(log.Fields{
+								"error":      r,
+								"stacktrace": string(debug.Stack()),
+							}).Fatal("Go-Quai Panicked")
+						}
+					}()
 					// Marshal the header data
 					// Only keep the Header in the body
 					pendingHeaderForMining := b.WithBody(b.Header(), nil, nil, nil, nil, nil)

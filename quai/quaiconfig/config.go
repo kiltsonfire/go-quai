@@ -31,7 +31,6 @@ import (
 	"github.com/dominant-strategies/go-quai/metrics_config"
 	"github.com/dominant-strategies/go-quai/node"
 	"github.com/dominant-strategies/go-quai/params"
-	"github.com/dominant-strategies/go-quai/quai/gasprice"
 )
 
 type QuaistatsConfig struct {
@@ -45,49 +44,27 @@ type QuaiConfig struct {
 	Metrics   metrics_config.Config
 }
 
-// FullNodeGPO contains default gasprice oracle settings for full node.
-var FullNodeGPO = gasprice.Config{
-	Blocks:           20,
-	Percentile:       60,
-	MaxHeaderHistory: 0,
-	MaxBlockHistory:  0,
-	MaxPrice:         gasprice.DefaultMaxPrice,
-	IgnorePrice:      gasprice.DefaultIgnorePrice,
-}
-
-// LightClientGPO contains default gasprice oracle settings for light client.
-var LightClientGPO = gasprice.Config{
-	Blocks:           2,
-	Percentile:       60,
-	MaxHeaderHistory: 300,
-	MaxBlockHistory:  5,
-	MaxPrice:         gasprice.DefaultMaxPrice,
-	IgnorePrice:      gasprice.DefaultIgnorePrice,
-}
-
 // Defaults contains default settings for use on the Quai main net.
 var Defaults = Config{
-	Progpow:                   progpow.Config{},
-	NetworkId:                 1,
-	TxLookupLimit:             2350000,
-	DatabaseCache:             512,
-	TrieCleanCache:            154,
-	TrieCleanCacheJournal:     "triecache",
-	UTXOTrieCleanCacheJournal: "utxotriecache",
-	ETXTrieCleanCacheJournal:  "etxtriecache",
-	TrieCleanCacheRejournal:   60 * time.Minute,
-	TrieDirtyCache:            256,
-	TrieTimeout:               60 * time.Minute,
-	SnapshotCache:             102,
+	Progpow:                  progpow.Config{},
+	NetworkId:                1,
+	TxLookupLimit:            2350000,
+	DatabaseCache:            512,
+	TrieCleanCache:           154,
+	TrieCleanCacheJournal:    "triecache",
+	ETXTrieCleanCacheJournal: "etxtriecache",
+	TrieCleanCacheRejournal:  60 * time.Minute,
+	TrieDirtyCache:           256,
+	TrieTimeout:              60 * time.Minute,
+	SnapshotCache:            102,
 	Miner: core.Config{
 		GasCeil:  18000000,
 		GasPrice: big.NewInt(params.GWei),
 		Recommit: 3 * time.Second,
 	},
 	TxPool:      core.DefaultTxPoolConfig,
-	RPCGasCap:   50000000,
-	GPO:         FullNodeGPO,
-	RPCTxFeeCap: 1, // 1 ether
+	RPCGasCap:   params.GasCeil,
+	RPCTxFeeCap: 10000, // 10000 quai
 }
 
 //go:generate gencodec -type Config -formats toml -out gen_config.go
@@ -97,6 +74,9 @@ type Config struct {
 	// The genesis block, which is inserted if the database is empty.
 	// If nil, the Quai main net block is used.
 	Genesis *core.Genesis `toml:",omitempty"`
+
+	// Genesis nonce used to start the network
+	GenesisNonce uint64 `toml:",omitempty"`
 
 	// Protocol options
 	NetworkId uint64 // Network ID to use for selecting peers to connect to
@@ -120,15 +100,14 @@ type Config struct {
 	DatabaseCache      int
 	DatabaseFreezer    string
 
-	TrieCleanCache            int
-	TrieCleanCacheJournal     string        `toml:",omitempty"` // Disk journal directory for trie cache to survive node restarts
-	UTXOTrieCleanCacheJournal string        `toml:",omitempty"` // Disk journal directory for trie cache to survive node restarts
-	ETXTrieCleanCacheJournal  string        `toml:",omitempty"` // Disk journal directory for trie cache to survive node restarts
-	TrieCleanCacheRejournal   time.Duration `toml:",omitempty"` // Time interval to regenerate the journal for clean cache
-	TrieDirtyCache            int
-	TrieTimeout               time.Duration
-	SnapshotCache             int
-	Preimages                 bool
+	TrieCleanCache           int
+	TrieCleanCacheJournal    string        `toml:",omitempty"` // Disk journal directory for trie cache to survive node restarts
+	ETXTrieCleanCacheJournal string        `toml:",omitempty"` // Disk journal directory for trie cache to survive node restarts
+	TrieCleanCacheRejournal  time.Duration `toml:",omitempty"` // Time interval to regenerate the journal for clean cache
+	TrieDirtyCache           int
+	TrieTimeout              time.Duration
+	SnapshotCache            int
+	Preimages                bool
 
 	// Mining options
 	Miner core.Config
@@ -144,9 +123,6 @@ type Config struct {
 
 	// Transaction pool options
 	TxPool core.TxPoolConfig
-
-	// Gas Price Oracle options
-	GPO gasprice.Config
 
 	// Enables tracking of SHA3 preimages in the VM
 	EnablePreimageRecording bool
@@ -198,19 +174,20 @@ func CreateProgpowConsensusEngine(stack *node.Node, nodeLocation common.Location
 		logger.Warn("Progpow used in shared mode")
 	}
 	engine := progpow.New(progpow.Config{
-		PowMode:       config.PowMode,
-		NotifyFull:    config.NotifyFull,
-		DurationLimit: config.DurationLimit,
-		NodeLocation:  nodeLocation,
-		GasCeil:       config.GasCeil,
-		MinDifficulty: config.MinDifficulty,
+		PowMode:            config.PowMode,
+		NotifyFull:         config.NotifyFull,
+		DurationLimit:      config.DurationLimit,
+		NodeLocation:       nodeLocation,
+		GasCeil:            config.GasCeil,
+		MinDifficulty:      config.MinDifficulty,
+		WorkShareThreshold: config.WorkShareThreshold,
 	}, notify, noverify, logger)
 	engine.SetThreads(-1) // Disable CPU mining
 	return engine
 }
 
 // CreateBlake3ConsensusEngine creates a progpow consensus engine for the given chain configuration.
-func CreateBlake3ConsensusEngine(stack *node.Node, nodeLocation common.Location, config *blake3pow.Config, notify []string, noverify bool, db ethdb.Database, logger *log.Logger) consensus.Engine {
+func CreateBlake3ConsensusEngine(stack *node.Node, nodeLocation common.Location, config *blake3pow.Config, notify []string, noverify bool, workShareThreshold int, db ethdb.Database, logger *log.Logger) consensus.Engine {
 	// Otherwise assume proof-of-work
 	switch config.PowMode {
 	case blake3pow.ModeFake:
@@ -221,12 +198,13 @@ func CreateBlake3ConsensusEngine(stack *node.Node, nodeLocation common.Location,
 		logger.Warn("Progpow used in shared mode")
 	}
 	engine := blake3pow.New(blake3pow.Config{
-		PowMode:       config.PowMode,
-		NotifyFull:    config.NotifyFull,
-		DurationLimit: config.DurationLimit,
-		NodeLocation:  nodeLocation,
-		GasCeil:       config.GasCeil,
-		MinDifficulty: config.MinDifficulty,
+		PowMode:            config.PowMode,
+		NotifyFull:         config.NotifyFull,
+		DurationLimit:      config.DurationLimit,
+		NodeLocation:       nodeLocation,
+		GasCeil:            config.GasCeil,
+		MinDifficulty:      config.MinDifficulty,
+		WorkShareThreshold: workShareThreshold,
 	}, notify, noverify, logger)
 	engine.SetThreads(-1) // Disable CPU mining
 	return engine

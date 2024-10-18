@@ -20,7 +20,6 @@ package core
 import (
 	"fmt"
 	"runtime"
-	"runtime/debug"
 	"time"
 
 	"github.com/dominant-strategies/go-quai/common"
@@ -36,67 +35,28 @@ import (
 
 // Miner creates blocks and searches for proof-of-work values.
 type Miner struct {
-	worker   *worker
-	coinbase common.Address
-	hc       *HeaderChain
-	engine   consensus.Engine
-	startCh  chan common.Address
-	stopCh   chan struct{}
-	logger   *log.Logger
+	worker  *worker
+	hc      *HeaderChain
+	engine  consensus.Engine
+	startCh chan []common.Address
+	logger  *log.Logger
 }
 
 func New(hc *HeaderChain, txPool *TxPool, config *Config, db ethdb.Database, chainConfig *params.ChainConfig, engine consensus.Engine, isLocalBlock func(block *types.WorkObject) bool, processingState bool, logger *log.Logger) *Miner {
 	miner := &Miner{
-		hc:       hc,
-		engine:   engine,
-		startCh:  make(chan common.Address),
-		stopCh:   make(chan struct{}),
-		worker:   newWorker(config, chainConfig, db, engine, hc, txPool, isLocalBlock, true, processingState, logger),
-		coinbase: config.Etherbase,
+		hc:      hc,
+		engine:  engine,
+		startCh: make(chan []common.Address, 2),
+		worker:  newWorker(config, chainConfig, db, engine, hc, txPool, isLocalBlock, true, processingState, logger),
 	}
-	go miner.update()
 
-	miner.Start(miner.coinbase)
 	miner.SetExtra(miner.MakeExtraData(config.ExtraData))
 
 	return miner
 }
 
-// update keeps track of the downloader events. Please be aware that this is a one shot type of update loop.
-// It's entered once and as soon as `Done` or `Failed` has been broadcasted the events are unregistered and
-// the loop is exited. This to prevent a major security vuln where external parties can DOS you with blocks
-// and halt your mining operation for as long as the DOS continues.
-func (miner *Miner) update() {
-	defer func() {
-		if r := recover(); r != nil {
-			miner.logger.WithFields(log.Fields{
-				"error":      r,
-				"stacktrace": string(debug.Stack()),
-			}).Fatal("Go-Quai Panicked")
-		}
-	}()
-	canStart := true
-	for {
-		select {
-		case addr := <-miner.startCh:
-			miner.SetEtherbase(addr)
-			if canStart {
-				miner.worker.start()
-			}
-		case <-miner.stopCh:
-			miner.worker.stop()
-			miner.worker.close()
-			return
-		}
-	}
-}
-
-func (miner *Miner) Start(coinbase common.Address) {
-	miner.startCh <- coinbase
-}
-
 func (miner *Miner) Stop() {
-	miner.stopCh <- struct{}{}
+	miner.worker.stop()
 }
 
 func (miner *Miner) Mining() bool {
@@ -166,9 +126,12 @@ func (miner *Miner) PendingBlockAndReceipts() (*types.WorkObject, types.Receipts
 	return miner.worker.pendingBlockAndReceipts()
 }
 
-func (miner *Miner) SetEtherbase(addr common.Address) {
-	miner.coinbase = addr
-	miner.worker.setEtherbase(addr)
+func (miner *Miner) SetPrimaryCoinbase(addr common.Address) {
+	miner.worker.setPrimaryCoinbase(addr)
+}
+
+func (miner *Miner) SetSecondaryCoinbase(addr common.Address) {
+	miner.worker.setSecondaryCoinbase(addr)
 }
 
 // SetGasCeil sets the gaslimit to strive for when mining blocks.

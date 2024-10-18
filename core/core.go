@@ -13,10 +13,12 @@ import (
 
 	lru "github.com/hashicorp/golang-lru/v2"
 	expireLru "github.com/hashicorp/golang-lru/v2/expirable"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 
 	"github.com/dominant-strategies/go-quai/common"
 	"github.com/dominant-strategies/go-quai/common/math"
 	"github.com/dominant-strategies/go-quai/consensus"
+	"github.com/dominant-strategies/go-quai/consensus/misc"
 	"github.com/dominant-strategies/go-quai/core/rawdb"
 	"github.com/dominant-strategies/go-quai/core/state"
 	"github.com/dominant-strategies/go-quai/core/state/snapshot"
@@ -30,31 +32,30 @@ import (
 )
 
 const (
-	c_maxAppendQueue                           = 3000 // Maximum number of future headers we can store in cache
-	c_maxFutureTime                            = 30   // Max time into the future (in seconds) we will accept a block
-	c_appendQueueRetryPeriod                   = 1    // Time (in seconds) before retrying to append from AppendQueue
-	c_appendQueueThreshold                     = 200  // Number of blocks to load from the disk to ram on every proc of append queue
-	c_processingCache                          = 10   // Number of block hashes held to prevent multi simultaneous appends on a single block hash
-	c_primeRetryThreshold                      = 1800 // Number of times a block is retry to be appended before eviction from append queue in Prime
-	c_regionRetryThreshold                     = 1200 // Number of times a block is retry to be appended before eviction from append queue in Region
-	c_zoneRetryThreshold                       = 600  // Number of times a block is retry to be appended before eviction from append queue in Zone
-	c_maxFutureBlocksPrime              uint64 = 3    // Number of blocks ahead of the current block to be put in the hashNumberList
-	c_maxFutureBlocksRegion             uint64 = 150
-	c_maxFutureBlocksZone               uint64 = 2000
-	c_appendQueueRetryPriorityThreshold        = 5  // If retry counter for a block is less than this number,  then its put in the special list that is tried first to be appended
-	c_appendQueueRemoveThreshold               = 10 // Number of blocks behind the block should be from the current header to be eligble for removal from the append queue
-	c_normalListProcCounter                    = 1  // Ratio of Number of times the PriorityList is serviced over the NormalList
-	c_statsPrintPeriod                         = 60 // Time between stats prints
-	c_appendQueuePrintSize                     = 10
-	c_normalListBackoffThreshold               = 5 // Max multiple on the c_normalListProcCounter
-	c_maxRemoteTxQueue                         = 50000
-	c_remoteTxProcPeriod                       = 2 // Time between remote tx pool processing
-	c_asyncWorkShareTimer                      = 1 * time.Second
+	c_maxAppendQueue                    = 100000 // Maximum number of future headers we can store in cache
+	c_maxFutureTime                     = 30     // Max time into the future (in seconds) we will accept a block
+	c_appendQueueRetryPeriod            = 1      // Time (in seconds) before retrying to append from AppendQueue
+	c_appendQueueThreshold              = 200    // Number of blocks to load from the disk to ram on every proc of append queue
+	c_processingCache                   = 10     // Number of block hashes held to prevent multi simultaneous appends on a single block hash
+	c_primeRetryThreshold               = 1800   // Number of times a block is retry to be appended before eviction from append queue in Prime
+	c_regionRetryThreshold              = 1200   // Number of times a block is retry to be appended before eviction from append queue in Region
+	c_zoneRetryThreshold                = 600    // Number of times a block is retry to be appended before eviction from append queue in Zone
+	c_appendQueueRetryPriorityThreshold = 5      // If retry counter for a block is less than this number,  then its put in the special list that is tried first to be appended
+	c_appendQueueRemoveThreshold        = 10     // Number of blocks behind the block should be from the current header to be eligble for removal from the append queue
+	c_normalListProcCounter             = 1      // Ratio of Number of times the PriorityList is serviced over the NormalList
+	c_statsPrintPeriod                  = 60     // Time between stats prints
+	c_appendQueuePrintSize              = 10
+	c_normalListBackoffThreshold        = 5 // Max multiple on the c_normalListProcCounter
+	c_maxRemoteTxQueue                  = 50000
+	c_remoteTxProcPeriod                = 2 // Time between remote tx pool processing
+	c_asyncWorkShareTimer               = 1 * time.Second
+	c_maxFutureEntropyMultiple          = 500
 )
 
 type blockNumberAndRetryCounter struct {
-	number uint64
-	retry  uint64
+	number  uint64
+	entropy *big.Int
+	retry   uint64
 }
 
 type Core struct {
@@ -69,7 +70,10 @@ type Core struct {
 
 	procCounter int
 
-	normalListBackoff uint64 // normalListBackoff is the multiple on c_normalListProcCounter which delays the proc on normal list
+	normalListBackoff  uint64 // normalListBackoff is the multiple on c_normalListProcCounter which delays the proc on normal list
+	workShareMining    bool   // whether to mine workshare transactions
+	workShareThreshold int    // workShareThreshold is the minimum fraction of a share that this node will accept to mine a transaction
+	endpoints          []string
 
 	quit chan struct{} // core quit channel
 
@@ -83,19 +87,23 @@ func NewCore(db ethdb.Database, config *Config, isLocalBlock func(block *types.W
 	}
 
 	c := &Core{
-		sl:                slice,
-		engine:            engine,
-		quit:              make(chan struct{}),
-		procCounter:       0,
-		normalListBackoff: 1,
-		logger:            logger,
+		sl:                 slice,
+		engine:             engine,
+		quit:               make(chan struct{}),
+		procCounter:        0,
+		normalListBackoff:  1,
+		workShareMining:    config.WorkShareMining,
+		workShareThreshold: config.WorkShareThreshold,
+		endpoints:          config.Endpoints,
+		logger:             logger,
 	}
 
 	// Initialize the sync target to current header parent entropy
 	appendQueue, _ := lru.New[common.Hash, blockNumberAndRetryCounter](c_maxAppendQueue)
 	c.appendQueue = appendQueue
 
-	c.processingCache = expireLru.NewLRU[common.Hash, interface{}](c_processingCache, nil, time.Second*60)
+	processingCache := expireLru.NewLRU[common.Hash, interface{}](c_processingCache, nil, time.Second*60)
+	c.processingCache = processingCache
 
 	remoteTxQueue, _ := lru.New[common.Hash, types.Transaction](c_maxRemoteTxQueue)
 	c.remoteTxQueue = remoteTxQueue
@@ -114,6 +122,14 @@ func NewCore(db ethdb.Database, config *Config, isLocalBlock func(block *types.W
 // the number of blocks which were successfully consumed (either appended, or
 // cached), and an error.
 func (c *Core) InsertChain(blocks types.WorkObjects) (int, error) {
+	defer func() {
+		if r := recover(); r != nil {
+			c.logger.WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Error("Go-Quai Panicked")
+		}
+	}()
 	nodeCtx := c.NodeCtx()
 	for idx, block := range blocks {
 		// Only attempt to append a block, if it is not coincident with our dominant
@@ -134,7 +150,7 @@ func (c *Core) InsertChain(blocks types.WorkObjects) (int, error) {
 				}).Info("Already processing block")
 				return idx, errors.New("Already in process of appending this block")
 			}
-			newPendingEtxs, _, err := c.sl.Append(block, types.EmptyWorkObject(c.NodeCtx()), common.Hash{}, false, nil)
+			newPendingEtxs, err := c.sl.Append(block, common.Hash{}, false, nil)
 			c.processingCache.Remove(block.Hash())
 			if err == nil {
 				// If we have a dom, send the dom any pending ETXs which will become
@@ -142,7 +158,7 @@ func (c *Core) InsertChain(blocks types.WorkObjects) (int, error) {
 				// subordinate block manifest, then ETXs produced by this block and the rollup
 				// of ETXs produced by subordinate chain(s) will become referencable.
 				if nodeCtx > common.PRIME_CTX {
-					pendingEtx := types.PendingEtxs{Header: block.ConvertToPEtxView(), Etxs: newPendingEtxs}
+					pendingEtx := types.PendingEtxs{Header: block.ConvertToPEtxView(), OutboundEtxs: newPendingEtxs}
 					// Only send the pending Etxs to dom if valid, because in the case of running a slice, for the zones that the node doesn't run, it cannot have the etxs generated
 					if pendingEtx.IsValid(trie.NewStackTrie(nil)) {
 						if err := c.SendPendingEtxsToDom(pendingEtx); err != nil {
@@ -202,13 +218,11 @@ func (c *Core) InsertChain(blocks types.WorkObjects) (int, error) {
 
 // procAppendQueue sorts the append queue and attempts to append
 func (c *Core) procAppendQueue() {
-	nodeCtx := c.NodeLocation().Context()
 
-	maxFutureBlocks := c_maxFutureBlocksPrime
-	if nodeCtx == common.REGION_CTX {
-		maxFutureBlocks = c_maxFutureBlocksRegion
-	} else if nodeCtx == common.ZONE_CTX {
-		maxFutureBlocks = c_maxFutureBlocksZone
+	var genesis bool
+	entropyWindow := c.EntropyWindow()
+	if entropyWindow == nil {
+		genesis = true
 	}
 
 	// Sort the blocks by number and retry attempts and try to insert them
@@ -217,8 +231,8 @@ func (c *Core) procAppendQueue() {
 	var hashNumberPriorityList []types.HashAndNumber
 	for _, hash := range c.appendQueue.Keys() {
 		if value, exist := c.appendQueue.Peek(hash); exist {
-			hashNumber := types.HashAndNumber{Hash: hash, Number: value.number}
-			if hashNumber.Number < c.CurrentHeader().NumberU64(nodeCtx)+maxFutureBlocks {
+			hashNumber := types.HashAndNumber{Hash: hash, Number: value.number, Entropy: value.entropy}
+			if genesis || hashNumber.Entropy.Cmp(entropyWindow) < 0 {
 				if value.retry < c_appendQueueRetryPriorityThreshold {
 					hashNumberPriorityList = append(hashNumberPriorityList, hashNumber)
 				} else {
@@ -250,6 +264,24 @@ func (c *Core) procAppendQueue() {
 		}
 	}
 	c.procCounter++
+}
+
+// EntropyWindow calculates the entropy in terms of the current blocks intrinsic, and take a multiple of that value
+func (c *Core) EntropyWindow() *big.Int {
+	var err error
+	currentHeader := c.CurrentHeader()
+	powhash, exists := c.sl.hc.powHashCache.Peek(currentHeader.Hash())
+	if !exists {
+		powhash, err = c.engine.VerifySeal(currentHeader.WorkObjectHeader())
+		if err != nil {
+			return nil
+		}
+		c.sl.hc.powHashCache.Add(currentHeader.Hash(), powhash)
+	}
+	currentBlockIntrinsic := c.engine.IntrinsicLogEntropy(powhash)
+	MaxAllowableEntropyDist := new(big.Int).Mul(currentBlockIntrinsic, big.NewInt(c_maxFutureEntropyMultiple))
+	currentHeaderEntropy := c.CurrentHeader().ParentEntropy(common.ZONE_CTX)
+	return new(big.Int).Add(currentHeaderEntropy, MaxAllowableEntropyDist)
 }
 
 func (c *Core) serviceBlocks(hashNumberList []types.HashAndNumber) {
@@ -289,6 +321,7 @@ func (c *Core) serviceBlocks(hashNumberList []types.HashAndNumber) {
 					c.logger.WithFields(log.Fields{
 						"Hash":   parentBlock.Hash(),
 						"Number": parentBlock.NumberArray(),
+						"err":    err,
 					}).Info("Error calculating the parent block order in serviceBlocks")
 					continue
 				}
@@ -324,6 +357,14 @@ func (c *Core) serviceBlocks(hashNumberList []types.HashAndNumber) {
 }
 
 func (c *Core) RequestDomToAppendOrFetch(hash common.Hash, entropy *big.Int, order int) {
+	defer func() {
+		if r := recover(); r != nil {
+			c.logger.WithFields(log.Fields{
+				"error":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Error("Go-Quai Panicked")
+		}
+	}()
 	// TODO: optimize to check if the block is in the appendqueue or already
 	// appended to reduce the network bandwidth utilization
 	nodeCtx := c.NodeLocation().Context()
@@ -381,7 +422,7 @@ func (c *Core) addToAppendQueue(block *types.WorkObject) error {
 		return err
 	}
 	if order == nodeCtx {
-		c.appendQueue.ContainsOrAdd(block.Hash(), blockNumberAndRetryCounter{block.NumberU64(c.NodeCtx()), 0})
+		c.appendQueue.ContainsOrAdd(block.Hash(), blockNumberAndRetryCounter{block.NumberU64(c.NodeCtx()), block.ParentEntropy(c.NodeCtx()), 0})
 	}
 	return nil
 }
@@ -443,8 +484,6 @@ func (c *Core) startRemoteTxQueue() {
 }
 
 func (c *Core) startStatsTimer() {
-	futureTimer := time.NewTicker(c_statsPrintPeriod * time.Second)
-	defer futureTimer.Stop()
 	defer func() {
 		if r := recover(); r != nil {
 			c.logger.WithFields(log.Fields{
@@ -453,6 +492,8 @@ func (c *Core) startStatsTimer() {
 			}).Fatal("Go-Quai Panicked")
 		}
 	}()
+	futureTimer := time.NewTicker(c_statsPrintPeriod * time.Second)
+	defer futureTimer.Stop()
 	for {
 		select {
 		case <-futureTimer.C:
@@ -528,7 +569,7 @@ func (c *Core) Engine() consensus.Engine {
 	return c.engine
 }
 
-func (c *Core) CheckIfValidWorkShare(workShare *types.WorkObjectHeader) bool {
+func (c *Core) CheckIfValidWorkShare(workShare *types.WorkObjectHeader) types.WorkShareValidity {
 	return c.engine.CheckIfValidWorkShare(workShare)
 }
 
@@ -572,6 +613,7 @@ func (c *Core) WriteBlock(block *types.WorkObject) {
 		// Only add non dom blocks to the append queue
 		_, order, err := c.CalcOrder(block)
 		if err != nil {
+			c.logger.WithField("err", err).Error("Error calculating the order in WriteBlock")
 			return
 		}
 		if order == nodeCtx {
@@ -595,11 +637,12 @@ func (c *Core) WriteBlock(block *types.WorkObject) {
 
 }
 
-func (c *Core) Append(header *types.WorkObject, manifest types.BlockManifest, domPendingHeader *types.WorkObject, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.Transactions) (types.Transactions, bool, error) {
+func (c *Core) Append(header *types.WorkObject, manifest types.BlockManifest, domTerminus common.Hash, domOrigin bool, newInboundEtxs types.Transactions) (types.Transactions, error) {
 	nodeCtx := c.NodeCtx()
 	// Set the coinbase into the right interface before calling append in the sub
-	header.WorkObjectHeader().SetCoinbase(common.BytesToAddress(header.Coinbase().Bytes(), c.NodeLocation()))
-	newPendingEtxs, setHead, err := c.sl.Append(header, domPendingHeader, domTerminus, domOrigin, newInboundEtxs)
+	header.WorkObjectHeader().SetPrimaryCoinbase(common.BytesToAddress(header.PrimaryCoinbase().Bytes(), c.NodeLocation()))
+	header.Body().Header().SetSecondaryCoinbase(common.BytesToAddress(header.SecondaryCoinbase().Bytes(), c.NodeLocation()))
+	newPendingEtxs, err := c.sl.Append(header, domTerminus, domOrigin, newInboundEtxs)
 	if err != nil {
 		if err.Error() == ErrBodyNotFound.Error() || err.Error() == consensus.ErrUnknownAncestor.Error() || err.Error() == ErrSubNotSyncedToDom.Error() {
 			// Fetch the blocks for each hash in the manifest
@@ -623,9 +666,11 @@ func (c *Core) Append(header *types.WorkObject, manifest types.BlockManifest, do
 			} else {
 				c.addToQueueIfNotAppended(block)
 			}
+		} else {
+			c.logger.WithField("err", err).Error("Error in Dom Append in Core")
 		}
 	}
-	return newPendingEtxs, setHead, err
+	return newPendingEtxs, err
 }
 
 func (c *Core) DownloadBlocksInManifest(blockHash common.Hash, manifest types.BlockManifest, entropy *big.Int) {
@@ -656,14 +701,6 @@ func (c *Core) ConstructLocalMinedBlock(woHeader *types.WorkObject) (*types.Work
 
 func (c *Core) GetPendingBlockBody(woHeader *types.WorkObjectHeader) *types.WorkObject {
 	return c.sl.GetPendingBlockBody(woHeader)
-}
-
-func (c *Core) SubRelayPendingHeader(slPendingHeader types.PendingHeader, newEntropy *big.Int, location common.Location, subReorg bool, order int, updateDomLocation common.Location) {
-	c.sl.SubRelayPendingHeader(slPendingHeader, newEntropy, location, subReorg, order, updateDomLocation)
-}
-
-func (c *Core) UpdateDom(oldDomReference common.Hash, pendingHeader *types.WorkObject, location common.Location) {
-	c.sl.UpdateDom(oldDomReference, pendingHeader, location)
 }
 
 func (c *Core) NewGenesisPendigHeader(pendingHeader *types.WorkObject, domTerminus common.Hash, genesisHash common.Hash) error {
@@ -774,6 +811,26 @@ func (c *Core) SanityCheckWorkObjectShareViewBody(wo *types.WorkObject) error {
 	return c.sl.validator.SanityCheckWorkObjectShareViewBody(wo)
 }
 
+func (c *Core) ApplyPoWFilter(wo *types.WorkObject) pubsub.ValidationResult {
+	return c.sl.validator.ApplyPoWFilter(wo)
+}
+
+func (c *Core) Database() ethdb.Database {
+	return c.sl.sliceDb
+}
+
+func (c *Core) GeneratePendingHeader(block *types.WorkObject, fill bool) (*types.WorkObject, error) {
+	return c.sl.GeneratePendingHeader(block, fill)
+}
+
+func (c *Core) MakeFullPendingHeader(primePh, regionPh, zonePh *types.WorkObject) *types.WorkObject {
+	return c.sl.MakeFullPendingHeader(primePh, regionPh, zonePh)
+}
+
+func (c *Core) GetPrimeBlock(blockHash common.Hash) *types.WorkObject {
+	return c.sl.GetPrimeBlock(blockHash)
+}
+
 //---------------------//
 // HeaderChain methods //
 //---------------------//
@@ -841,14 +898,18 @@ func (c *Core) CurrentHeader() *types.WorkObject {
 	return c.sl.hc.CurrentHeader()
 }
 
-// CurrentLogEntropy returns the logarithm of the total entropy reduction since genesis for our current head block
-func (c *Core) CurrentLogEntropy() *big.Int {
-	return c.engine.TotalLogS(c, c.sl.hc.CurrentHeader())
+func (c *Core) ComputeExpansionNumber(parent *types.WorkObject) (uint8, error) {
+	return c.sl.hc.ComputeExpansionNumber(parent)
 }
 
-// TotalLogS returns the total entropy reduction if the chain since genesis to the given header
-func (c *Core) TotalLogS(header *types.WorkObject) *big.Int {
-	return c.engine.TotalLogS(c, header)
+// CurrentLogEntropy returns the logarithm of the total entropy reduction since genesis for our current head block
+func (c *Core) CurrentLogEntropy() *big.Int {
+	return c.engine.TotalLogEntropy(c, c.sl.hc.CurrentHeader())
+}
+
+// TotalLogEntropy returns the total entropy reduction if the chain since genesis to the given header
+func (c *Core) TotalLogEntropy(header *types.WorkObject) *big.Int {
+	return c.engine.TotalLogEntropy(c, header)
 }
 
 // CalcOrder returns the order of the block within the hierarchy of chains
@@ -860,6 +921,14 @@ func (c *Core) CalcOrder(header *types.WorkObject) (*big.Int, int, error) {
 // found.
 func (c *Core) GetHeaderByHash(hash common.Hash) *types.WorkObject {
 	return c.sl.hc.GetHeaderByHash(hash)
+}
+
+func (c *Core) CheckInCalcOrderCache(hash common.Hash) (*big.Int, int, bool) {
+	return c.sl.hc.CheckInCalcOrderCache(hash)
+}
+
+func (c *Core) AddToCalcOrderCache(hash common.Hash, order int, intrinsicS *big.Int) {
+	c.sl.hc.AddToCalcOrderCache(hash, order, intrinsicS)
 }
 
 // GetHeaderOrCandidateByHash retrieves a block header from the database by hash, caching it if
@@ -894,6 +963,12 @@ func (c *Core) GetAncestor(hash common.Hash, number, ancestor uint64, maxNonCano
 	return c.sl.hc.GetAncestor(hash, number, ancestor, maxNonCanonical)
 }
 
+// WorkShareDistance calculates the geodesic distance between the
+// workshare and the workobject in which that workshare is included.
+func (c *Core) WorkShareDistance(wo *types.WorkObject, ws *types.WorkObjectHeader) (*big.Int, error) {
+	return c.sl.hc.WorkShareDistance(wo, ws)
+}
+
 // Genesis retrieves the chain's genesis block.
 func (c *Core) Genesis() *types.WorkObject {
 	return c.GetBlockByHash(c.sl.hc.genesisHeader.Hash())
@@ -923,7 +998,7 @@ func (c *Core) SubscribeChainSideEvent(ch chan<- ChainSideEvent) event.Subscript
 // ComputeEfficiencyScore computes the efficiency score for the given prime
 // block This data is is only valid if called from Prime context, otherwise
 // there is no guarantee for this data to be accurate
-func (c *Core) ComputeEfficiencyScore(header *types.WorkObject) uint16 {
+func (c *Core) ComputeEfficiencyScore(header *types.WorkObject) (uint16, error) {
 	return c.sl.hc.ComputeEfficiencyScore(header)
 }
 
@@ -954,6 +1029,18 @@ func (c *Core) WriteAddressOutpoints(outpoints map[string]map[string]*types.Outp
 
 func (c *Core) GetMaxTxInWorkShare() uint64 {
 	return c.sl.hc.GetMaxTxInWorkShare()
+}
+
+func (c *Core) TxMiningEnabled() bool {
+	return c.workShareMining
+}
+
+func (c *Core) GetWorkShareThreshold() int {
+	return c.workShareThreshold
+}
+
+func (c *Core) GetMinerEndpoints() []string {
+	return c.endpoints
 }
 
 //--------------------//
@@ -1002,7 +1089,7 @@ func (c *Core) Snapshots() *snapshot.Tree {
 }
 
 func (c *Core) TxLookupLimit() uint64 {
-	return 0
+	return c.Processor().txLookupLimit
 }
 
 func (c *Core) SetExtra(extra []byte) error {
@@ -1066,8 +1153,12 @@ func (c *Core) PendingBlockAndReceipts() (*types.WorkObject, types.Receipts) {
 	return c.sl.miner.PendingBlockAndReceipts()
 }
 
-func (c *Core) SetEtherbase(addr common.Address) {
-	c.sl.miner.SetEtherbase(addr)
+func (c *Core) SetPrimaryCoinbase(addr common.Address) {
+	c.sl.miner.SetPrimaryCoinbase(addr)
+}
+
+func (c *Core) SetSecondaryCoinbase(addr common.Address) {
+	c.sl.miner.SetSecondaryCoinbase(addr)
 }
 
 // SubscribePendingLogs starts delivering logs from pending transactions
@@ -1123,8 +1214,8 @@ func (c *Core) State() (*state.StateDB, error) {
 }
 
 // StateAt returns a new mutable state based on a particular point in time.
-func (c *Core) StateAt(root, utxoRoot, etxRoot common.Hash) (*state.StateDB, error) {
-	return c.sl.hc.bc.processor.StateAt(root, utxoRoot, etxRoot)
+func (c *Core) StateAt(root, etxRoot common.Hash, quaiStateSize *big.Int) (*state.StateDB, error) {
+	return c.sl.hc.bc.processor.StateAt(root, etxRoot, quaiStateSize)
 }
 
 // StateCache returns the caching database underpinning the blockchain instance.
@@ -1161,7 +1252,7 @@ func (c *Core) GetUTXOsByAddressAtState(state *state.StateDB, address common.Add
 	utxos := make([]*types.UtxoEntry, 0, len(outpointsForAddress))
 
 	for _, outpoint := range outpointsForAddress {
-		entry := state.GetUTXO(outpoint.TxHash, outpoint.Index)
+		entry := rawdb.GetUTXO(c.sl.sliceDb, outpoint.TxHash, outpoint.Index)
 		if entry == nil {
 			return nil, errors.New("failed to get UTXO for address")
 		}
@@ -1204,9 +1295,20 @@ func (c *Core) Get(hash common.Hash) *types.Transaction {
 func (c *Core) Nonce(addr common.Address) uint64 {
 	internal, err := addr.InternalAndQuaiAddress()
 	if err != nil {
+		c.logger.WithField("err", err).Error("Error calculating the nonce")
 		return 0
 	}
 	return c.sl.txPool.Nonce(internal)
+}
+
+// GetMinGasPrice returns the minimum gas price needed to be included in the current block
+func (c *Core) GetMinGasPrice() *big.Int {
+	return c.sl.txPool.GetMinGasPrice()
+}
+
+// GetPoolGasPrice returns the pool gas price set by the node
+func (c *Core) GetPoolGasPrice() *big.Int {
+	return c.sl.txPool.GasPrice()
 }
 
 func (c *Core) Stats() (int, int, int) {
@@ -1220,7 +1322,16 @@ func (c *Core) Content() (map[common.InternalAddress]types.Transactions, map[com
 func (c *Core) ContentFrom(addr common.Address) (types.Transactions, types.Transactions) {
 	internal, err := addr.InternalAndQuaiAddress()
 	if err != nil {
+		c.logger.WithField("err", err).Error("Error checking the address in ContentFrom in Core")
 		return nil, nil
 	}
 	return c.sl.txPool.ContentFrom(internal)
+}
+
+func (c *Core) SuggestFinalityDepth(qiValue *big.Int, correlatedRisk *big.Int) *big.Int {
+	qiRewardPerBlock := misc.CalculateQiReward(c.CurrentHeader().WorkObjectHeader())
+
+	// Finality qiValue * correlatedRisk / qiRewardPerBlock
+	finalityDepth := new(big.Int).Div(new(big.Int).Mul(qiValue, correlatedRisk), qiRewardPerBlock)
+	return finalityDepth
 }
