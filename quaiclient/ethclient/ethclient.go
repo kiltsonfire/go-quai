@@ -307,6 +307,12 @@ func (ec *Client) SubscribePendingHeader(ctx context.Context, ch chan<- *types.W
 	return ec.c.EthSubscribe(ctx, ch, "pendingHeader")
 }
 
+// SubscribeNewWorkshares subscribes to notifications about new workshares received via P2P.
+func (ec *Client) SubscribeNewWorkshares(ctx context.Context, ch chan<- *types.WorkObject) (quai.Subscription, error) {
+	return ec.c.EthSubscribe(ctx, ch, "newWorkshares")
+}
+
+
 // State Access
 
 // NetworkID returns the network ID (also known as the chain ID) for this chain.

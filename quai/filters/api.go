@@ -298,12 +298,7 @@ func (api *PublicFilterAPI) NewWorkshares(ctx context.Context) (*rpc.Subscriptio
 				target := new(big.Int).Div(common.Big2e256, header.Difficulty())
 
 				// Get the PoW hash from the engine
-				powHash := common.Hash{}
-				if progpow, ok := api.backend.Engine().(*progpow.Progpow); ok {
-					if hash, err := progpow.ComputePowHash(header); err == nil {
-						powHash = hash
-					}
-				}
+				powHash := api.backend.Engine(header).ComputePowHash(header)
 
 				// If it meets the full difficulty target, it's a block, not a workshare
 				if new(big.Int).SetBytes(powHash.Bytes()).Cmp(target) <= 0 {

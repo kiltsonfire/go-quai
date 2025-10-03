@@ -93,6 +93,17 @@ func (ec *Client) SubscribePendingHeader(ctx context.Context, ch chan<- []byte) 
 	return ec.c.QuaiSubscribe(ctx, ch, "pendingHeader")
 }
 
+// SubscribeNewWorkshares subscribes to notifications about new workshares received via P2P.
+func (ec *Client) SubscribeNewWorkshares(ctx context.Context, ch chan<- *types.WorkObject) (quai.Subscription, error) {
+	return ec.c.QuaiSubscribe(ctx, ch, "newWorkshares")
+}
+
+// SubscribeNewHead subscribes to notifications about the current blockchain head
+// on the given channel.
+func (ec *Client) SubscribeNewHead(ctx context.Context, ch chan<- *types.WorkObject) (quai.Subscription, error) {
+	return ec.c.QuaiSubscribe(ctx, ch, "newHeads")
+}
+
 func (ec *Client) HeaderByHash(ctx context.Context, hash common.Hash) *types.Header {
 	var raw json.RawMessage
 	ec.c.CallContext(ctx, &raw, "quai_getHeaderByHash", hash)
