@@ -30,17 +30,17 @@ const (
 
 // Predefined errors for MuSig2 operations
 var (
-	ErrInvalidPrivateKey     = errors.New("invalid private key")
-	ErrInvalidPublicKey      = errors.New("invalid public key")
-	ErrInvalidNonceSize      = errors.New("invalid nonce size")
-	ErrInvalidSignatureSize = errors.New("invalid signature size")
-	ErrInvalidMessageSize   = errors.New("invalid message size")
+	ErrInvalidPrivateKey       = errors.New("invalid private key")
+	ErrInvalidPublicKey        = errors.New("invalid public key")
+	ErrInvalidNonceSize        = errors.New("invalid nonce size")
+	ErrInvalidSignatureSize    = errors.New("invalid signature size")
+	ErrInvalidMessageSize      = errors.New("invalid message size")
 	ErrInvalidParticipantIndex = errors.New("invalid participant index")
-	ErrSelfSigning          = errors.New("cannot sign with ourselves")
-	ErrInsufficientSigners  = errors.New("insufficient signers for 2-of-3 MuSig2")
-	ErrSignatureVerification = errors.New("signature verification failed")
-	ErrMissingNonces        = errors.New("don't have all nonces yet")
-	ErrKeyMismatch          = errors.New("private key does not match any of the configured public keys")
+	ErrSelfSigning             = errors.New("cannot sign with ourselves")
+	ErrInsufficientSigners     = errors.New("insufficient signers for 2-of-3 MuSig2")
+	ErrSignatureVerification   = errors.New("signature verification failed")
+	ErrMissingNonces           = errors.New("don't have all nonces yet")
+	ErrKeyMismatch             = errors.New("private key does not match any of the configured public keys")
 )
 
 // MuSig2Manager defines the interface for MuSig2 operations

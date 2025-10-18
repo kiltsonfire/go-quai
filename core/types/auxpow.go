@@ -290,49 +290,30 @@ func (at *AuxTemplate) Hash() [32]byte {
 	return sha256.Sum256(templateData)
 }
 
-// VerifySignature verifies the signature on this AuxTemplate by trying all possible 2-of-3 key combinations
-// Returns true if any valid 2-of-3 signature is found, false otherwise
+// VerifySignature verifies the composite MuSig2 signature over this AuxTemplate.
+// It tries all possible 2-of-3 signer index combinations. If 'signature' is nil or empty,
+// it falls back to using the embedded at.sigs. Returns true on any valid combination.
 func (at *AuxTemplate) VerifySignature() bool {
-	// Check if we have any signatures
+	// Check Signature presence
 	if len(at.sigs) == 0 {
 		return false
 	}
 
-	// Get the first signature (assuming single signature for now)
-	if len(at.sigs) == 0 {
-		return false
-	}
+	// Build the canonical message from the template (Sigs excluded internally)
+	msgHash := at.Hash()
+	message := msgHash[:]
 
-	// Get the message hash using the new Hash() method
-	messageHash := at.Hash()
-	message := messageHash[:]
-
-	// Get the signature
-	signature := at.Sigs()
-
-	// Try all possible 2-of-3 key combinations (including order variations)
-	// We have 3 keys (indices 0, 1, 2) and need to try all combinations of 2
-	// MuSig2 signatures are order-dependent, so we need to try both orders
+	// Try all 2-of-3 combinations in both orders (order-dependent)
 	combinations := [][]int{
-		{0, 1}, // Keys 0 and 1
-		{1, 0}, // Keys 1 and 0 (reverse order)
-		{0, 2}, // Keys 0 and 2
-		{2, 0}, // Keys 2 and 0 (reverse order)
-		{1, 2}, // Keys 1 and 2
-		{2, 1}, // Keys 2 and 1 (reverse order)
+		{0, 1}, {1, 0},
+		{0, 2}, {2, 0},
+		{1, 2}, {2, 1},
 	}
-
-	// Import the musig2 package for verification
-	// We'll use the existing VerifyCompositeSignature function
 	for _, signerIndices := range combinations {
-		err := musig2.VerifyCompositeSignature(message, signature, signerIndices)
-		if err == nil {
-			// Found a valid signature with this combination
+		if err := musig2.VerifyCompositeSignature(message, at.sigs, signerIndices); err == nil {
 			return true
 		}
 	}
-
-	// No valid signature found with any combination
 	return false
 }
 

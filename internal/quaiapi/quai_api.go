@@ -18,7 +18,6 @@ package quaiapi
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -29,8 +28,6 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcd/btcec/v2"
-	"github.com/btcsuite/btcd/btcec/v2/schnorr"
-	schnorrMusig2 "github.com/btcsuite/btcd/btcec/v2/schnorr/musig2"
 	"github.com/dominant-strategies/go-quai/common"
 	"github.com/dominant-strategies/go-quai/common/hexutil"
 	"github.com/dominant-strategies/go-quai/consensus/misc"
@@ -1543,6 +1540,8 @@ type SignAuxTemplateResponse struct {
 	PublicNonce      string `json:"publicNonce"`
 	PartialSignature string `json:"partialSignature"`
 	MessageHash      string `json:"messageHash"`
+	PublicKey        string `json:"publicKey"`        // hex-encoded compressed pubkey (33 bytes)
+	ParticipantIndex int    `json:"participantIndex"` // local index in the agreed signer set
 }
 
 // SignAuxTemplate initiates MuSig2 signing for an AuxTemplate
@@ -1656,10 +1655,13 @@ func (s *PublicBlockChainQuaiAPI) SignAuxTemplate(ctx context.Context, templateD
 	go cleanupOldSessions()
 
 	response := &SignAuxTemplateResponse{
-		PublicNonce: hex.EncodeToString(ourNonce),
-		MessageHash: hex.EncodeToString(message[:]),
+		PublicNonce:      hex.EncodeToString(ourNonce),
+		MessageHash:      hex.EncodeToString(message[:]),
+		PartialSignature: "",
+		// Expose our pubkey and local index to help the counterparty construct a canonical signer set
+		PublicKey:        hex.EncodeToString(keyManager.PublicKey.SerializeCompressed()),
+		ParticipantIndex: signingManager.GetParticipantIndex(),
 	}
-
 	if len(partialSig) > 0 {
 		response.PartialSignature = hex.EncodeToString(partialSig)
 	}
@@ -1686,12 +1688,7 @@ func (s *PublicBlockChainQuaiAPI) SubmitAuxTemplate(ctx context.Context, templat
 		return fmt.Errorf("failed to unmarshal AuxTemplate: %w", err)
 	}
 
-	// Verify the template has signatures
-	if len(protoTemplate.Sigs) == 0 {
-		return fmt.Errorf("AuxTemplate has no signatures")
-	}
-
-	// Create AuxTemplate from proto to use the new methods
+	// Create AuxTemplate from proto for logging and broadcast
 	auxTemplate := &types.AuxTemplate{}
 	err = auxTemplate.ProtoDecode(protoTemplate)
 	if err != nil {
@@ -1699,99 +1696,23 @@ func (s *PublicBlockChainQuaiAPI) SubmitAuxTemplate(ctx context.Context, templat
 		return fmt.Errorf("failed to decode AuxTemplate: %w", err)
 	}
 
-	// Get message hash using the new Hash() method
+	// For observability and signing message
 	messageHash := auxTemplate.Hash()
 	messageHashHex := hex.EncodeToString(messageHash[:])
-
 	s.b.Logger().WithFields(log.Fields{
 		"messageHash":  messageHashHex,
 		"templateSize": len(templateData),
 	}).Info("SubmitAuxTemplate - Message hash for verification")
 
-	// Verify the signature using the new VerifySignature() method
+	// Verify the embedded MuSig2 composite signature in the AuxTemplate
 	if !auxTemplate.VerifySignature() {
-		s.b.Logger().WithFields(log.Fields{
-			"messageHash": messageHashHex,
-		}).Error("Signature verification failed")
-		return fmt.Errorf("signature verification failed")
-	}
-
-	ProtoSignerEnvelope := &types.ProtoSignerEnvelope{}
-	err = proto.Unmarshal(signerEnvelope, ProtoSignerEnvelope)
-	if err != nil {
-		s.b.Logger().WithField("error", err).Error("API: Failed to unmarshal signer envelope protobuf")
-		return fmt.Errorf("failed to unmarshal signer envelope: %w", err)
-	}
-
-	sigEnvelope := &types.SignerEnvelope{}
-	err = sigEnvelope.ProtoDecode(ProtoSignerEnvelope)
-	if err != nil {
-		s.b.Logger().WithField("error", err).Error("API: Failed to decode signer envelope")
-		return fmt.Errorf("failed to decode signer envelope: %w", err)
-	}
-
-	// Verify the MuSig2 signature if keys are configured and template has signatures
-	keyManager, _ := GetMuSig2Keys()
-	if keyManager != nil && len(auxTemplate.Sigs()) > 0 {
-
-		// Parse signer ID to extract indices (format: "musig2_idx1_idx2")
-		var signerIndices []int
-		if signerID := sigEnvelope.SignerID(); signerID != "" {
-			// Parse the signer ID to get indices
-			var idx1, idx2 int
-			if _, err := fmt.Sscanf(signerID, "musig2_%d_%d", &idx1, &idx2); err == nil {
-				signerIndices = []int{idx1, idx2}
-			}
-		}
-
-		if len(signerIndices) == 2 {
-			// Get the public keys of the signers
-			var signerKeys []*btcec.PublicKey
-			for _, idx := range signerIndices {
-				if idx < 0 || idx > 2 {
-					return fmt.Errorf("invalid signer index: %d", idx)
-				}
-				signerKeys = append(signerKeys, keyManager.AllPublicKeys[idx])
-			}
-
-			// Aggregate the public keys
-			aggKey, _, _, err := schnorrMusig2.AggregateKeys(signerKeys, false)
-			if err != nil {
-				s.b.Logger().WithField("error", err).Error("API: Failed to aggregate signer keys")
-				return fmt.Errorf("failed to aggregate signer keys: %w", err)
-			}
-
-			// Create template data for verification (template without signatures)
-			protoTemplateCopy := proto.Clone(protoTemplate).(*types.ProtoAuxTemplate)
-			protoTemplateCopy.Sigs = nil
-			templateDataForSigning, err := proto.Marshal(protoTemplateCopy)
-			if err != nil {
-				return fmt.Errorf("failed to marshal template for verification: %w", err)
-			}
-
-			// Verify the Schnorr signature
-			msgHash := sha256.Sum256(templateDataForSigning)
-			sig, err := schnorr.ParseSignature(sigEnvelope.Signature())
-			if err != nil {
-				s.b.Logger().WithField("error", err).Error("API: Failed to parse signature")
-				return fmt.Errorf("failed to parse signature: %w", err)
-			}
-
-			if !sig.Verify(msgHash[:], aggKey.FinalKey) {
-				s.b.Logger().Error("API: Invalid signature on AuxTemplate")
-				return fmt.Errorf("invalid signature on AuxTemplate")
-			}
-
-			s.b.Logger().WithFields(log.Fields{
-				"signerIndices": signerIndices,
-			}).Info("Successfully verified MuSig2 signature")
-		}
+		s.b.Logger().Error("API: Invalid signature on AuxTemplate (embedded)")
+		return fmt.Errorf("invalid signature on AuxTemplate (embedded)")
 	}
 
 	s.b.Logger().WithFields(log.Fields{
-		"messageHash":    messageHashHex,
-		"signatureCount": len(auxTemplate.Sigs()),
-	}).Info("✅ Signature verification successful")
+		"messageHash": messageHashHex,
+	}).Info("✅ Signature verification (embedded) successful")
 
 	// Log the received template
 	s.b.Logger().WithFields(log.Fields{
@@ -1799,10 +1720,9 @@ func (s *PublicBlockChainQuaiAPI) SubmitAuxTemplate(ctx context.Context, templat
 		"height":   auxTemplate.Height(),
 		"nBits":    fmt.Sprintf("0x%08x", auxTemplate.NBits()),
 		"prevHash": fmt.Sprintf("%x", auxTemplate.PrevHash()),
-		"hasSigs":  len(protoTemplate.Sigs) > 0,
 	}).Info("Received signed AuxTemplate")
 
-	// Broadcast the template to the network
+	// Broadcast the template to the network. The final signature is embedded in the template.
 	err = s.b.BroadcastAuxTemplate(auxTemplate, s.b.NodeLocation())
 	if err != nil {
 		s.b.Logger().WithField("error", err).Error("Failed to broadcast AuxTemplate")

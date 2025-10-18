@@ -486,6 +486,11 @@ func (g *PubsubManager) ValidatorFunc() func(ctx context.Context, id p2p.PeerID,
 				return pubsub.ValidationReject
 			}
 
+			// Verify using the embedded signature bytes (if present)
+			if !auxTemplate.VerifySignature() {
+				return pubsub.ValidationReject
+			}
+
 			// AuxTemplate specific checks
 			// TODO: Add sanity checks for AuxTemplate
 
@@ -502,11 +507,6 @@ func (g *PubsubManager) ValidatorFunc() func(ctx context.Context, id p2p.PeerID,
 			// AuxTemplate nTimeMask cannot be too far in the future
 			if currentHeader.Time() > uint64(time)+params.AuxTemplateLivenessTime {
 				return pubsub.ValidationIgnore
-			}
-
-			if !auxTemplate.VerifySignature() {
-				backend.Logger().WithField("err", err).Warn("AuxTemplate signature verification failed")
-				return pubsub.ValidationReject
 			}
 		}
 		return pubsub.ValidationAccept
