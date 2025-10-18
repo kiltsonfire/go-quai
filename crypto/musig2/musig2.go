@@ -1,7 +1,7 @@
 package musig2
 
 import (
-	"crypto/sha256"
+	// removed: "crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -26,6 +26,8 @@ const (
 	TotalSigners = 3
 	// MaxMessageSize is the maximum allowed message size in bytes
 	MaxMessageSize = 1024 * 1024 // 1MB
+	// MessageDigestSize is the expected size of a BIP340 message digest.
+	MessageDigestSize = 32
 )
 
 // Predefined errors for MuSig2 operations
@@ -162,12 +164,9 @@ func sortKeys(keys []*btcec.PublicKey) []*btcec.PublicKey {
 
 // NewSigningSession creates a new signing session for a message with another participant
 func (m *Manager) NewSigningSession(message []byte, otherParticipantIndex int) (MuSig2SigningSession, error) {
-	// Validate message
-	if len(message) == 0 {
-		return nil, fmt.Errorf("message cannot be empty: %w", ErrInvalidMessageSize)
-	}
-	if len(message) > MaxMessageSize {
-		return nil, fmt.Errorf("message size %d exceeds maximum %d: %w", len(message), MaxMessageSize, ErrInvalidMessageSize)
+	// Validate message digest length (expect 32-byte BIP340 digest)
+	if len(message) != MessageDigestSize {
+		return nil, fmt.Errorf("message digest must be %d bytes, got %d: %w", MessageDigestSize, len(message), ErrInvalidMessageSize)
 	}
 
 	// Validate participant index
@@ -213,7 +212,9 @@ func (m *Manager) NewSigningSession(message []byte, otherParticipantIndex int) (
 		return nil, fmt.Errorf("failed to create session: %w", err)
 	}
 
-	msgHash := sha256.Sum256(message)
+	// Treat message as already-digested (32 bytes)
+	var msgHash [32]byte
+	copy(msgHash[:], message)
 
 	return &SigningSession{
 		manager:    m,
@@ -311,12 +312,9 @@ func CombinePartialSignatures(session *SigningSession, ourPartialSig, theirParti
 
 // VerifyCompositeSignature verifies a composite Schnorr signature
 func VerifyCompositeSignature(message []byte, signature []byte, signerIndices []int) error {
-	// Validate message
-	if len(message) == 0 {
-		return fmt.Errorf("message cannot be empty: %w", ErrInvalidMessageSize)
-	}
-	if len(message) > MaxMessageSize {
-		return fmt.Errorf("message size %d exceeds maximum %d: %w", len(message), MaxMessageSize, ErrInvalidMessageSize)
+	// Validate message digest length
+	if len(message) != MessageDigestSize {
+		return fmt.Errorf("message digest must be %d bytes, got %d: %w", MessageDigestSize, len(message), ErrInvalidMessageSize)
 	}
 
 	// Validate signature
@@ -376,11 +374,8 @@ func VerifyCompositeSignature(message []byte, signature []byte, signerIndices []
 		return fmt.Errorf("failed to parse signature: %w", err)
 	}
 
-	// Hash the message
-	msgHash := sha256.Sum256(message)
-
-	// Verify the signature
-	if !sig.Verify(msgHash[:], aggregatedKey.FinalKey) {
+	// Verify: message is already a 32-byte digest
+	if !sig.Verify(message, aggregatedKey.FinalKey) {
 		return fmt.Errorf("signature verification failed: %w", ErrSignatureVerification)
 	}
 

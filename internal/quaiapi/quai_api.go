@@ -1675,7 +1675,7 @@ func (s *PublicBlockChainQuaiAPI) SignAuxTemplate(ctx context.Context, templateD
 }
 
 // SubmitAuxTemplate receives and processes a fully signed AuxTemplate
-func (s *PublicBlockChainQuaiAPI) SubmitAuxTemplate(ctx context.Context, templateData hexutil.Bytes, signerEnvelope hexutil.Bytes) error {
+func (s *PublicBlockChainQuaiAPI) SubmitAuxTemplate(ctx context.Context, templateData hexutil.Bytes) error {
 	s.b.Logger().WithFields(log.Fields{
 		"dataSize": len(templateData),
 	}).Debug("API: SubmitAuxTemplate called")
@@ -1696,31 +1696,22 @@ func (s *PublicBlockChainQuaiAPI) SubmitAuxTemplate(ctx context.Context, templat
 		return fmt.Errorf("failed to decode AuxTemplate: %w", err)
 	}
 
-	// For observability and signing message
-	messageHash := auxTemplate.Hash()
-	messageHashHex := hex.EncodeToString(messageHash[:])
-	s.b.Logger().WithFields(log.Fields{
-		"messageHash":  messageHashHex,
-		"templateSize": len(templateData),
-	}).Info("SubmitAuxTemplate - Message hash for verification")
-
 	// Verify the embedded MuSig2 composite signature in the AuxTemplate
 	if !auxTemplate.VerifySignature() {
 		s.b.Logger().Error("API: Invalid signature on AuxTemplate (embedded)")
 		return fmt.Errorf("invalid signature on AuxTemplate (embedded)")
 	}
 
+	// For observability and signing message
+	messageHash := auxTemplate.Hash()
+	messageHashHex := hex.EncodeToString(messageHash[:])
 	s.b.Logger().WithFields(log.Fields{
+		"powID":       auxTemplate.PowID(),
+		"height":      auxTemplate.Height(),
+		"nBits":       fmt.Sprintf("0x%08x", auxTemplate.NBits()),
+		"prevHash":    fmt.Sprintf("%x", auxTemplate.PrevHash()),
 		"messageHash": messageHashHex,
-	}).Info("✅ Signature verification (embedded) successful")
-
-	// Log the received template
-	s.b.Logger().WithFields(log.Fields{
-		"powID":    auxTemplate.PowID(),
-		"height":   auxTemplate.Height(),
-		"nBits":    fmt.Sprintf("0x%08x", auxTemplate.NBits()),
-		"prevHash": fmt.Sprintf("%x", auxTemplate.PrevHash()),
-	}).Info("Received signed AuxTemplate")
+	}).Info("✅ Received signed AuxTemplate with valid Signature")
 
 	// Broadcast the template to the network. The final signature is embedded in the template.
 	err = s.b.BroadcastAuxTemplate(auxTemplate, s.b.NodeLocation())
