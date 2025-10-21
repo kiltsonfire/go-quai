@@ -1545,14 +1545,15 @@ type SignAuxTemplateResponse struct {
 }
 
 // SignAuxTemplate initiates MuSig2 signing for an AuxTemplate
-func (s *PublicBlockChainQuaiAPI) SignAuxTemplate(ctx context.Context, templateData hexutil.Bytes, otherParticipantIndex int, otherNonce hexutil.Bytes) (*SignAuxTemplateResponse, error) {
+// otherParticipantPubKey: compressed pubkey (33 bytes) of the other signer
+func (s *PublicBlockChainQuaiAPI) SignAuxTemplate(ctx context.Context, templateData hexutil.Bytes, otherParticipantPubKey hexutil.Bytes, otherNonce hexutil.Bytes) (*SignAuxTemplateResponse, error) {
 	// Try direct fmt.Println to ensure we're hitting this method
-	fmt.Println("DEBUG: SignAuxTemplate called with dataSize:", len(templateData), "otherIndex:", otherParticipantIndex, "nonceSize:", len(otherNonce))
+	fmt.Println("DEBUG: SignAuxTemplate called with dataSize:", len(templateData), "otherPubKeyLen:", len(otherParticipantPubKey), "nonceSize:", len(otherNonce))
 
 	s.b.Logger().WithFields(log.Fields{
-		"dataSize":   len(templateData),
-		"otherIndex": otherParticipantIndex,
-		"nonceSize":  len(otherNonce),
+		"dataSize":       len(templateData),
+		"otherPubKeyLen": len(otherParticipantPubKey),
+		"nonceSize":      len(otherNonce),
 	}).Info("API: SignAuxTemplate called - START")
 
 	// Get the MuSig2 key manager
@@ -1573,7 +1574,6 @@ func (s *PublicBlockChainQuaiAPI) SignAuxTemplate(ctx context.Context, templateD
 		return nil, fmt.Errorf("failed to unmarshal AuxTemplate: %w", err)
 	}
 
-	// Create signing message from AuxTemplate using the new Hash() method
 	// Convert ProtoAuxTemplate to AuxTemplate to use the Hash() method
 	auxTemplate := &types.AuxTemplate{}
 	if err := auxTemplate.ProtoDecode(protoTemplate); err != nil {
@@ -1587,6 +1587,28 @@ func (s *PublicBlockChainQuaiAPI) SignAuxTemplate(ctx context.Context, templateD
 		"templateSize": len(templateData),
 	}).Info("Creating signing message from AuxTemplate")
 
+	// Parse other participant pubkey and derive index from configured set
+	if len(otherParticipantPubKey) == 0 {
+		return nil, fmt.Errorf("other participant pubkey is required")
+	}
+	parsedOtherPK, err := btcec.ParsePubKey(otherParticipantPubKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse other participant pubkey: %w", err)
+	}
+	otherParticipantIndex := -1
+	for i := 0; i < len(keyManager.AllPublicKeys); i++ {
+		if keyManager.AllPublicKeys[i] != nil && keyManager.AllPublicKeys[i].IsEqual(parsedOtherPK) {
+			otherParticipantIndex = i
+			break
+		}
+	}
+	if otherParticipantIndex == -1 {
+		return nil, fmt.Errorf("other participant pubkey not found in configured MuSig2 public keys")
+	}
+	if otherParticipantIndex == keyManager.ParticipantIndex {
+		return nil, fmt.Errorf("other participant cannot be the same as this participant")
+	}
+
 	// Create a musig2.Manager from the key manager's private key
 	signingManager, err := musig2.NewManager(keyManager.PrivateKey)
 	if err != nil {
@@ -1598,6 +1620,7 @@ func (s *PublicBlockChainQuaiAPI) SignAuxTemplate(ctx context.Context, templateD
 	s.b.Logger().WithFields(log.Fields{
 		"participantIndex": signingManager.GetParticipantIndex(),
 		"expectedIndex":    keyManager.ParticipantIndex,
+		"otherIndex":       otherParticipantIndex,
 	}).Info("Created MuSig2 signing manager")
 
 	// Create signing session

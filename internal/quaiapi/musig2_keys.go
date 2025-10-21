@@ -96,28 +96,3 @@ func GetMuSig2Keys() (*MuSig2KeyManager, error) {
 	}
 	return musig2Keys, nil
 }
-
-// GetSigningSet returns the 2 keys to use for signing based on which participants are involved
-// For 2-of-3, we need to know which 2 participants are signing
-func (km *MuSig2KeyManager) GetSigningSet(otherParticipantIndex int) ([]*btcec.PublicKey, error) {
-	if otherParticipantIndex < 0 || otherParticipantIndex > 2 {
-		return nil, fmt.Errorf("invalid participant index: %d", otherParticipantIndex)
-	}
-
-	if otherParticipantIndex == km.ParticipantIndex {
-		return nil, fmt.Errorf("other participant index cannot be the same as ours")
-	}
-
-	// Return the 2 keys in order
-	if km.ParticipantIndex < otherParticipantIndex {
-		return []*btcec.PublicKey{
-			km.AllPublicKeys[km.ParticipantIndex],
-			km.AllPublicKeys[otherParticipantIndex],
-		}, nil
-	} else {
-		return []*btcec.PublicKey{
-			km.AllPublicKeys[otherParticipantIndex],
-			km.AllPublicKeys[km.ParticipantIndex],
-		}, nil
-	}
-}
