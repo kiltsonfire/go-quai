@@ -1169,7 +1169,7 @@ func (p *StateProcessor) Process(block *types.WorkObject, batch ethdb.Batch) (ty
 		// Once the total entropy is calculated, the block reward is split
 		// between the blocks, uncles and workshares proportional to the block
 		// weight
-		blockRewardAtTargetBlock := misc.CalculateQuaiReward(targetBlock.Difficulty(), exchangeRate)
+		blockRewardAtTargetBlock := misc.CalculateQuaiReward(targetBlock.WorkObjectHeader(), targetBlock.Difficulty(), exchangeRate)
 		// add the fee capacitor value
 		blockRewardAtTargetBlock = new(big.Int).Add(blockRewardAtTargetBlock, targetBlock.AvgTxFees())
 		// add half the fees generated in the block

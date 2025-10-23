@@ -236,70 +236,72 @@ func (hc *HeaderChain) GetEngineForHeader(header *types.WorkObjectHeader) consen
 func (hc *HeaderChain) WorkShareLogEntropy(wo *types.WorkObject) (*big.Int, error) {
 	workShares := wo.Uncles()
 	totalWsEntropy := big.NewInt(0)
-	for _, ws := range workShares {
-		wsType := hc.UncleWorkShareClassification(ws)
-		if wsType == types.Sub || wsType == types.Invalid {
-			return nil, errors.New("invalid workshare detected")
-		}
-		cBigBits, err := hc.IntrinsicLogEntropy(ws)
-		if err != nil {
-			return nil, errors.New("cannot compute intrinsic log entropy for the workshare")
-		}
-		// Two discounts need to be applied to the weight of each work share
-		// 1) Discount based on the amount of number of other possible work
-		// shares for the same entropy value
-		// 2) Discount based on the staleness of inclusion, for every block
-		// delay the weight gets reduced by the factor of 2
-
-		// Discount 1) only applies if the workshare has less weight than the
-		// work object threshold
-		var wsEntropy *big.Int
-		woDiff := new(big.Int).Set(wo.Difficulty())
-		target := new(big.Int).Div(common.Big2e256, woDiff)
-		if wsType == types.Valid {
-			// The work share that has less than threshold weight needs to add
-			// an extra bit for each level
-			// This is achieved using three steps
-			// 1) Find the difference in entropy between the work share and
-			// threshold in the 2^mantBits bits field because otherwise the precision
-			// is lost due to integer division
-			// 2) Divide this difference with the 2^mantBits to get the number
-			// of bits of difference to discount the workshare entropy
-			// 3) Divide the entropy difference with 2^(extraBits+1) to get the
-			// actual work share weight here +1 is done to the extraBits because
-			// of Quo and if the difference is less than 0, its within the first
-			// level
-
-			// TODO: NEED TO CALCULATE THE ENTROPY CONTRIBUTED BY SHA AND SCRYPT SHARES properly
-			var thresholdBigBits *big.Int
-			if ws.AuxPow() != nil && ws.AuxPow().PowID() > types.Kawpow {
-				continue // skip sha and scrypt workshares for now
-			} else {
-				thresholdBigBits = common.IntrinsicLogEntropy(common.BytesToHash(target.Bytes()))
-				wsEntropy = new(big.Int).Sub(thresholdBigBits, cBigBits)
+	if wo.PrimeTerminusNumber().Uint64() < params.KawPowForkBlock {
+		for _, ws := range workShares {
+			engine := hc.GetEngineForHeader(ws)
+			powHash, err := engine.ComputePowHash(ws)
+			if err != nil {
+				return big.NewInt(0), err
 			}
+			// Two discounts need to be applied to the weight of each work share
+			// 1) Discount based on the amount of number of other possible work
+			// shares for the same entropy value
+			// 2) Discount based on the staleness of inclusion, for every block
+			// delay the weight gets reduced by the factor of 2
 
-			extraBits := new(big.Float).Quo(new(big.Float).SetInt(wsEntropy), new(big.Float).SetInt(common.Big2e64))
-
-			wsEntropyAdj := new(big.Float).Quo(new(big.Float).SetInt(common.Big2e64), bigMath.TwoToTheX(extraBits))
-			wsEntropy, _ = wsEntropyAdj.Int(wsEntropy)
-		} else if wsType == types.Block {
-			thresholdBigBits := common.IntrinsicLogEntropy(common.BytesToHash(target.Bytes()))
-			wsEntropy = new(big.Int).Sub(cBigBits, thresholdBigBits)
+			// Discount 1) only applies if the workshare has less weight than the
+			// work object threshold
+			var wsEntropy *big.Int
+			woDiff := new(big.Int).Set(wo.Difficulty())
+			target := new(big.Int).Div(common.Big2e256, woDiff)
+			if new(big.Int).SetBytes(powHash.Bytes()).Cmp(target) > 0 { // powHash > target
+				// The work share that has less than threshold weight needs to add
+				// an extra bit for each level
+				// This is achieved using three steps
+				// 1) Find the difference in entropy between the work share and
+				// threshold in the 2^mantBits bits field because otherwise the precision
+				// is lost due to integer division
+				// 2) Divide this difference with the 2^mantBits to get the number
+				// of bits of difference to discount the workshare entropy
+				// 3) Divide the entropy difference with 2^(extraBits+1) to get the
+				// actual work share weight here +1 is done to the extraBits because
+				// of Quo and if the difference is less than 0, its within the first
+				// level
+				cBigBits := common.IntrinsicLogEntropy(powHash)
+				thresholdBigBits := common.IntrinsicLogEntropy(common.BytesToHash(target.Bytes()))
+				wsEntropy = new(big.Int).Sub(thresholdBigBits, cBigBits)
+				extraBits := new(big.Float).Quo(new(big.Float).SetInt(wsEntropy), new(big.Float).SetInt(common.Big2e64))
+				wsEntropyAdj := new(big.Float).Quo(new(big.Float).SetInt(common.Big2e64), bigMath.TwoToTheX(extraBits))
+				wsEntropy, _ = wsEntropyAdj.Int(wsEntropy)
+			} else {
+				cBigBits := common.IntrinsicLogEntropy(powHash)
+				thresholdBigBits := common.IntrinsicLogEntropy(common.BytesToHash(target.Bytes()))
+				wsEntropy = new(big.Int).Sub(cBigBits, thresholdBigBits)
+			}
+			// Discount 2) applies to all shares regardless of the weight
+			// a workshare cannot reference another workshare, it has to be either a block or an uncle
+			// check that the parent hash referenced by the workshare is an uncle or a canonical block
+			// then if its an uncle, traverse back until we hit a canonical block, other wise, use that
+			// as a reference to calculate the distance
+			distance, err := hc.WorkShareDistance(wo, ws)
+			if err != nil {
+				return big.NewInt(0), err
+			}
+			wsEntropy = new(big.Int).Div(wsEntropy, new(big.Int).Exp(big.NewInt(2), distance, nil))
+			// Add the entropy into the total entropy once the discount calculation is done
+			totalWsEntropy.Add(totalWsEntropy, wsEntropy)
 		}
-		// Discount 2) applies to all shares regardless of the weight
-		// a workshare cannot reference another workshare, it has to be either a block or an uncle
-		// check that the parent hash referenced by the workshare is an uncle or a canonical block
-		// then if its an uncle, traverse back until we hit a canonical block, other wise, use that
-		// as a reference to calculate the distance
-		distance, err := hc.WorkShareDistance(wo, ws)
+	} else {
+		totalShares := big.NewInt(int64(len(workShares)))
+		bigBitsTotalShares := common.LogBig(totalShares)
+		bigBitsIntrinsic, err := hc.IntrinsicLogEntropy(wo.WorkObjectHeader())
 		if err != nil {
 			return big.NewInt(0), err
 		}
-		wsEntropy = new(big.Int).Div(wsEntropy, new(big.Int).Exp(big.NewInt(2), distance, nil))
-		// Add the entropy into the total entropy once the discount calculation is done
-		totalWsEntropy.Add(totalWsEntropy, wsEntropy)
-
+		// TotalEntropy = IntrinsicEntropy/Gamma + Alpha*Log2(TotalShares)
+		adjustedIntrinsic := new(big.Int).Div(bigBitsIntrinsic, params.GammaInverse)
+		adjustedShares := new(big.Int).Div(bigBitsTotalShares, params.AlphaInverse)
+		totalWsEntropy = big.NewInt(0).Add(adjustedIntrinsic, adjustedShares)
 	}
 	return totalWsEntropy, nil
 }

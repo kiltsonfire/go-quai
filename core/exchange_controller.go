@@ -168,7 +168,7 @@ func NormalizeConversionValueToBlock(block *types.WorkObject, exchangeRate *big.
 	if chooseQi {
 		reward = misc.CalculateQiReward(block.WorkObjectHeader(), block.MinerDifficulty())
 	} else {
-		reward = misc.CalculateQuaiReward(block.MinerDifficulty(), exchangeRate)
+		reward = misc.CalculateQuaiReward(block.WorkObjectHeader(), block.MinerDifficulty(), exchangeRate)
 	}
 
 	numBlocks := int(new(big.Int).Quo(value, reward).Uint64())

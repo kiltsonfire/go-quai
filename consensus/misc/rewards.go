@@ -1,9 +1,11 @@
 package misc
 
 import (
+	"fmt"
 	"math/big"
 
 	"github.com/dominant-strategies/go-quai/common"
+	"github.com/dominant-strategies/go-quai/common/math"
 	"github.com/dominant-strategies/go-quai/consensus"
 	"github.com/dominant-strategies/go-quai/core/types"
 	"github.com/dominant-strategies/go-quai/params"
@@ -15,7 +17,7 @@ func CalculateReward(header *types.WorkObjectHeader, difficulty *big.Int, exchan
 	if header.PrimaryCoinbase().IsInQiLedgerScope() {
 		reward = new(big.Int).Set(CalculateQiReward(header, difficulty))
 	} else {
-		reward = new(big.Int).Set(CalculateQuaiReward(difficulty, exchangeRate))
+		reward = new(big.Int).Set(CalculateQuaiReward(header, difficulty, exchangeRate))
 	}
 
 	return reward
@@ -23,14 +25,14 @@ func CalculateReward(header *types.WorkObjectHeader, difficulty *big.Int, exchan
 
 // Calculate the amount of Quai that Qi can be converted to. Expect the current Header and the Qi amount in "qits", returns the quai amount in "its"
 func QiToQuai(block *types.WorkObject, exchangeRate *big.Int, difficulty *big.Int, qiAmt *big.Int) *big.Int {
-	quaiByQi := new(big.Int).Mul(CalculateQuaiReward(difficulty, exchangeRate), qiAmt)
+	quaiByQi := new(big.Int).Mul(CalculateQuaiReward(block.WorkObjectHeader(), difficulty, exchangeRate), qiAmt)
 	return new(big.Int).Quo(quaiByQi, CalculateQiReward(block.WorkObjectHeader(), difficulty))
 }
 
 // Calculate the amount of Qi that Quai can be converted to. Expect the current Header and the Quai amount in "its", returns the Qi amount in "qits"
 func QuaiToQi(block *types.WorkObject, exchangeRate *big.Int, difficulty *big.Int, quaiAmt *big.Int) *big.Int {
 	qiByQuai := new(big.Int).Mul(CalculateQiReward(block.WorkObjectHeader(), difficulty), quaiAmt)
-	return new(big.Int).Quo(qiByQuai, CalculateQuaiReward(difficulty, exchangeRate))
+	return new(big.Int).Quo(qiByQuai, CalculateQuaiReward(block.WorkObjectHeader(), difficulty, exchangeRate))
 }
 
 // ComputeConversionAmountInQuai computes the amount of conversion volume in
@@ -154,7 +156,10 @@ func CalculateKQuai(parentExchangeRate *big.Int, minerDifficulty *big.Int, block
 	return final
 }
 
-func CalculateQuaiReward(difficulty *big.Int, exchangeRate *big.Int) *big.Int {
+func CalculateQuaiReward(header *types.WorkObjectHeader, difficulty *big.Int, exchangeRate *big.Int) *big.Int {
+	if header.PrimeTerminusNumber().Uint64() >= params.KawPowForkBlock {
+		difficulty = KawPowEquivalentDifficulty(header, difficulty)
+	}
 	numerator := new(big.Int).Mul(exchangeRate, LogBig(difficulty))
 	reward := new(big.Int).Quo(numerator, common.Big2e64)
 	if reward.Cmp(common.Big0) == 0 {
@@ -165,11 +170,38 @@ func CalculateQuaiReward(difficulty *big.Int, exchangeRate *big.Int) *big.Int {
 
 // CalculateQiReward caculates the qi that can be received for mining a block and returns value in qits
 func CalculateQiReward(header *types.WorkObjectHeader, difficulty *big.Int) *big.Int {
-	qiReward := new(big.Int).Quo(difficulty, params.OneOverKqi(header.NumberU64()))
+	var qiReward *big.Int
+	if header.PrimeTerminusNumber().Uint64() >= params.KawPowForkBlock {
+		difficulty = KawPowEquivalentDifficulty(header, difficulty)
+	}
+	qiReward = new(big.Int).Quo(difficulty, params.OneOverKqi(header.NumberU64()))
 	if qiReward.Cmp(common.Big0) == 0 {
 		qiReward = big.NewInt(1)
 	}
 	return qiReward
+}
+
+// Find the KawPow equivalent difficulty by adjusting for various algos in the hash shares
+func KawPowEquivalentDifficulty(header *types.WorkObjectHeader, difficulty *big.Int) *big.Int {
+	// Need to adjust the difficulty based on the current average reported sha and scrypt shares
+	scryptShares := header.ScryptDiffAndCount().Count() //This is in 2^32 units
+	shaShares := header.ShaDiffAndCount().Count()
+
+	// Difficulty Adjustment formula base 10:
+	// Where:
+	// expectedShares = 2^WorkSharesThresholdDiff + 1
+	// Diff_adjusted = (Diff_original * expectedShares / (expectedShares - Max(scryptShares + shaShares, expectedShares - 1))
+	//
+	// Difficulty adjustment formula: Diff_adjusted = (Diff_original * (2^32 * 2^WorkSharesThresholdDiff)) / (2^32 * 2^WorkShareThresholdDiff - Max(scryptShares + shaShares, 2^32*2^WorkSharesThresholdDiff - 2^32))
+	expectedTotalShares := new(big.Int).Mul(big.NewInt(int64(2^params.WorkSharesThresholdDiff+1)), common.Big2e32)                        // Expected total shares in 2^32 units
+	totalMultiAlgoShares := math.BigMin(new(big.Int).Add(scryptShares, shaShares), new(big.Int).Sub(expectedTotalShares, common.Big2e32)) // Make sure we don't exceed expected shares
+	numerator := new(big.Int).Mul(header.Difficulty(), expectedTotalShares)
+	denominator := new(big.Int).Sub(expectedTotalShares, totalMultiAlgoShares)
+	adjustedDifficulty := new(big.Int).Div(numerator, denominator)
+
+	// Add print for debugging
+	fmt.Printf("KawPowEquivalentDifficulty: Header Difficulty: %s, Scrypt Shares: %s, Sha Shares: %s, Adjusted Difficulty: %s\n", header.Difficulty().String(), scryptShares.String(), shaShares.String(), adjustedDifficulty.String())
+	return adjustedDifficulty
 }
 
 // FindMinDenominations finds the minimum number of denominations to make up the reward

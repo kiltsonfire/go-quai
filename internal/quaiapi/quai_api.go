@@ -26,7 +26,6 @@ import (
 	"math"
 	"math/big"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/btcsuite/btcd/btcec/v2"
@@ -52,17 +51,8 @@ var (
 	maxOutpointsRange    = uint32(1000)
 
 	// MuSig2 session management
-	musig2Sessions     = make(map[string]*MuSig2Session)
-	musig2SessionsLock sync.RWMutex
-	musig2Manager      musig2.MuSig2Manager
+	musig2Manager musig2.MuSig2Manager
 )
-
-// MuSig2Session stores an active signing session
-type MuSig2Session struct {
-	Session     musig2.MuSig2SigningSession
-	AuxTemplate *types.ProtoAuxTemplate
-	CreatedAt   time.Time
-}
 
 // PublicQuaiAPI provides an API to access Quai related information.
 // It offers only methods that operate on public data that is freely available to anyone.
@@ -2043,19 +2033,6 @@ func (s *PublicBlockChainQuaiAPI) SignAuxTemplate(ctx context.Context, templateD
 		}).Info("Created partial signature")
 	}
 
-	// Store session for potential future use
-	sessionID := hex.EncodeToString(message[:])
-	musig2SessionsLock.Lock()
-	musig2Sessions[sessionID] = &MuSig2Session{
-		Session:     session,
-		AuxTemplate: protoTemplate,
-		CreatedAt:   time.Now(),
-	}
-	musig2SessionsLock.Unlock()
-
-	// Clean up old sessions (older than 5 minutes)
-	go cleanupOldSessions()
-
 	response := &SignAuxTemplateResponse{
 		PublicNonce:      hex.EncodeToString(ourNonce),
 		MessageHash:      hex.EncodeToString(message[:]),
@@ -2135,19 +2112,6 @@ func (s *PublicBlockChainQuaiAPI) SubmitAuxTemplate(ctx context.Context, templat
 
 	s.b.Logger().Info("Successfully submitted and broadcast signed AuxTemplate")
 	return nil
-}
-
-// cleanupOldSessions removes sessions older than 5 minutes
-func cleanupOldSessions() {
-	musig2SessionsLock.Lock()
-	defer musig2SessionsLock.Unlock()
-
-	cutoff := time.Now().Add(-120 * time.Minute)
-	for id, session := range musig2Sessions {
-		if session.CreatedAt.Before(cutoff) {
-			delete(musig2Sessions, id)
-		}
-	}
 }
 
 // HashesPerQits returns the number of hashes needed to mine the given number of Qits at a given block.

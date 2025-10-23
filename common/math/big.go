@@ -139,17 +139,35 @@ func BigPow(a, b int64) *big.Int {
 }
 
 // BigMax returns the larger of x or y.
+// It returns a reference to one of the inputs (no allocation).
+// If one input is nil, the other is returned. If both are nil, nil is returned.
+// Callers must not mutate the returned value unless they own it.
 func BigMax(x, y *big.Int) *big.Int {
+	if x == nil {
+		return y
+	}
+	if y == nil {
+		return x
+	}
 	if x.Cmp(y) < 0 {
 		return y
 	}
-	return x
+	return new(big.Int).Set(x)
 }
 
 // BigMin returns the smaller of x or y.
+// It returns a reference to one of the inputs (no allocation).
+// If one input is nil, the other is returned. If both are nil, nil is returned.
+// Callers must not mutate the returned value unless they own it.
 func BigMin(x, y *big.Int) *big.Int {
-	if x.Cmp(y) > 0 {
+	if x == nil {
 		return y
+	}
+	if y == nil {
+		return x
+	}
+	if x.Cmp(y) > 0 {
+		return new(big.Int).Set(y)
 	}
 	return x
 }

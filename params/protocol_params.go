@@ -262,6 +262,8 @@ var (
 	TotalPowEngines            uint64 = 2  // Total number of PoW engines supported (Progpow, Kawpow)
 	AuxTemplateLivenessTime    uint64 = 15
 	ShareDiffRelativeThreshold        = big.NewInt(90) // 90% of the current header diff
+	GammaInverse                      = big.NewInt(1)
+	AlphaInverse                      = big.NewInt(1)
 
 	// PoW share difficulty parameters
 	InitialShaDiff    = big.NewInt(20e12) // Minimum difficulty for a SHA work share, With 4TH/s, diff to get a share every 5 secs 20e12

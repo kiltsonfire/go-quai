@@ -728,7 +728,7 @@ func (w *worker) GeneratePendingHeader(block *types.WorkObject, fill bool) (*typ
 			// between the blocks, uncles and workshares proportional to the block
 			// weight
 			// get the reward in quai
-			blockRewardAtTargetBlock := misc.CalculateQuaiReward(targetBlock.Difficulty(), exchangeRate)
+			blockRewardAtTargetBlock := misc.CalculateQuaiReward(targetBlock.WorkObjectHeader(), targetBlock.Difficulty(), exchangeRate)
 			// add the fee capacitor value
 			blockRewardAtTargetBlock = new(big.Int).Add(blockRewardAtTargetBlock, targetBlock.AvgTxFees())
 			// add half the fees generated in the block
