@@ -2190,6 +2190,7 @@ func (w *worker) prepareWork(genParams *generateParams, wo *types.WorkObject) (*
 			newShaDiff, newShaCount = w.hc.CalculatePowDiffAndCount(parent.WorkObjectHeader().ShaDiffAndCount(), bigCountSha, types.SHA_BTC)
 			newScryptDiff, newScryptCount = w.hc.CalculatePowDiffAndCount(parent.WorkObjectHeader().ScryptDiffAndCount(), bigCountScrypt, types.Scrypt)
 		}
+		fmt.Println("parent.WorkObjectHeader().ShaDiffAndCount(): ", parent.WorkObjectHeader().ShaDiffAndCount().Difficulty(), parent.WorkObjectHeader().ShaDiffAndCount().Count())
 
 		// Set the new diff and count values
 		newWo.WorkObjectHeader().SetKawpowDiffAndCount(types.NewPowShareDiffAndCount(newKawpowDiff, newKawpowCount))

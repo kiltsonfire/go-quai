@@ -983,7 +983,7 @@ func (hc *HierarchicalCoordinator) BuildPendingHeaders(wo *types.WorkObject, ord
 	log.Global.WithField("len", startingLen).Info("PendingHeadersOrder")
 	for i := startingLen - 1; i >= 0; i-- {
 		entropy = hc.pendingHeaders.order[i]
-		log.Global.Debug("Entropy: ", common.BigBitsToBits(entropy))
+		//log.Global.Debug("Entropy: ", common.BigBitsToBits(entropy))
 		nodeSet, exists := hc.Get(entropy)
 		if !exists {
 			log.Global.WithFields(log.Fields{"entropy": common.BigBitsToBits(entropy), "order": order, "number": wo.NumberArray(), "hash": wo.Hash()}).Trace("NodeSet not found for entropy")

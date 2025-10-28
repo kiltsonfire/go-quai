@@ -128,9 +128,13 @@ func (p *PowShareDiffAndCount) Clone() *PowShareDiffAndCount {
 	if p.difficulty != nil {
 		difficulty = new(big.Int).Set(p.difficulty)
 	}
+	var count *big.Int
+	if p.count != nil {
+		count = new(big.Int).Set(p.count)
+	}
 	return &PowShareDiffAndCount{
 		difficulty: difficulty,
-		count:      p.count,
+		count:      count,
 	}
 }
 
@@ -159,9 +163,17 @@ func (p *PowShareDiffAndCount) ProtoEncode() *ProtoPowShareDiffAndCount {
 	}
 	protoShare := &ProtoPowShareDiffAndCount{}
 
-	protoShare.Difficulty = p.difficulty.Bytes()
-	protoShare.Count = p.count.Bytes()
-
+	// Encode zero explicitly so it round-trips as 0 instead of nil.
+	if p.difficulty.Sign() == 0 {
+		protoShare.Difficulty = []byte{0}
+	} else {
+		protoShare.Difficulty = p.difficulty.Bytes()
+	}
+	if p.count.Sign() == 0 {
+		protoShare.Count = []byte{0}
+	} else {
+		protoShare.Count = p.count.Bytes()
+	}
 	return protoShare
 }
 

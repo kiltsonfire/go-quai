@@ -292,8 +292,14 @@ func (hc *HeaderChain) WorkShareLogEntropy(wo *types.WorkObject) (*big.Int, erro
 			totalWsEntropy.Add(totalWsEntropy, wsEntropy)
 		}
 	} else {
-		totalShares := big.NewInt(int64(len(workShares)))
-		bigBitsTotalShares := common.LogBig(totalShares)
+		var bigBitsTotalShares *big.Int
+		if len(workShares) > 0 {
+			totalShares := big.NewInt(int64(len(workShares)))
+			bigBitsTotalShares = common.LogBig(totalShares)
+
+		} else {
+			bigBitsTotalShares = big.NewInt(0)
+		}
 		bigBitsIntrinsic, err := hc.IntrinsicLogEntropy(wo.WorkObjectHeader())
 		if err != nil {
 			return big.NewInt(0), err
@@ -302,6 +308,7 @@ func (hc *HeaderChain) WorkShareLogEntropy(wo *types.WorkObject) (*big.Int, erro
 		adjustedIntrinsic := new(big.Int).Div(bigBitsIntrinsic, params.GammaInverse)
 		adjustedShares := new(big.Int).Div(bigBitsTotalShares, params.AlphaInverse)
 		totalWsEntropy = big.NewInt(0).Add(adjustedIntrinsic, adjustedShares)
+
 	}
 	return totalWsEntropy, nil
 }
