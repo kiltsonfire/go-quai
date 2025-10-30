@@ -2422,21 +2422,11 @@ func (w *worker) FinalizeAssemble(chain consensus.ChainHeaderReader, newWo *type
 func (w *worker) AddPendingWorkObjectBody(wo *types.WorkObject) {
 	// do not include the tx hash while storing the body
 	woHeaderCopy := types.CopyWorkObjectHeader(wo.WorkObjectHeader())
-	auxpowCopy := types.CopyAuxPow(woHeaderCopy.AuxPow())
-
-	var powId types.PowID
-	if woHeaderCopy.AuxPow() == nil {
-		powId = types.Progpow
-	} else {
-		powId = woHeaderCopy.AuxPow().PowID()
-	}
 
 	// Remove auxpow wo, because we want to be able to map multiple auxpows to
 	// the same sealhash, so storing the auxpow separately
 	woHeaderCopy.SetAuxPow(nil)
 	w.pendingBlockBody.Add(woHeaderCopy.SealHash(), *wo)
-
-	w.AddPendingAuxPow(powId, woHeaderCopy.SealHash(), auxpowCopy)
 }
 
 func (w *worker) AddPendingAuxPow(powId types.PowID, sealHash common.Hash, auxpow *types.AuxPow) {
