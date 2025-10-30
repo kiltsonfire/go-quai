@@ -264,7 +264,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, db ethdb.Databas
 	phBodyCache, _ := lru.New[common.Hash, types.WorkObject](pendingBlockBodyLimit)
 	worker.pendingBlockBody = phBodyCache
 
-	auxPowCache, _ := lru.New[[33]byte, types.AuxPow](pendingBlockBodyLimit)
+	auxPowCache, _ := lru.New[[33]byte, types.AuxPow](1000)
 	worker.pendingAuxPow = auxPowCache
 
 	// Sanitize recommit interval if the user-specified one is too short.
