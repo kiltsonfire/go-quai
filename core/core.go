@@ -33,6 +33,7 @@ import (
 	"github.com/dominant-strategies/go-quai/core/vm"
 	"github.com/dominant-strategies/go-quai/ethdb"
 	"github.com/dominant-strategies/go-quai/event"
+	"github.com/dominant-strategies/go-quai/internal/telemetry"
 	"github.com/dominant-strategies/go-quai/log"
 	"github.com/dominant-strategies/go-quai/params"
 	"github.com/dominant-strategies/go-quai/trie"
@@ -1356,6 +1357,10 @@ func (c *Core) GetWorkShareThreshold() int {
 
 func (c *Core) GetMinerEndpoints() []string {
 	return c.endpoints
+}
+
+func (c *Core) GetWorkshareLRUDump(limit int) map[string]interface{} {
+	return telemetry.BuildWorkshareLRUDump(limit)
 }
 
 //--------------------//
