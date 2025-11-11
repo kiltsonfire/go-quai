@@ -119,6 +119,16 @@ func GetTarget(diff *big.Int) *big.Int {
 	return target
 }
 
+// GetDifficultyFromBits calculates the quai difficulty from the given bits
+func GetDifficultyFromBits(bits uint32) *big.Int {
+	// Conert to Big from compact
+	target := new(big.Int).Set(blockchain.CompactToBig(bits))
+
+	// Difficulty = 2^256 / target
+	diff := new(big.Int).Div(Big2e256, target)
+	return diff
+}
+
 // GetTargetInHex calculates the target from the given quai difficulty
 func GetTargetInHex(diff *big.Int) string {
 	target := GetTarget(diff)

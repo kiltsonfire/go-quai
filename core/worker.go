@@ -2199,8 +2199,8 @@ func (w *worker) prepareWork(genParams *generateParams, wo *types.WorkObject) (*
 	}
 
 	if nodeCtx == common.ZONE_CTX && newWo.PrimeTerminusNumber().Uint64() >= params.KawPowForkBlock {
-		newWo.WorkObjectHeader().SetShaShareTarget(w.hc.CalculateShareTarget(types.SHA_BTC))
-		newWo.WorkObjectHeader().SetScryptShareTarget(w.hc.CalculateShareTarget(types.Scrypt))
+		newWo.WorkObjectHeader().SetShaShareTarget(w.hc.CalculateShareTarget(parent))
+		newWo.WorkObjectHeader().SetScryptShareTarget(w.hc.CalculateShareTarget(parent))
 	}
 
 	// Only zone should calculate state

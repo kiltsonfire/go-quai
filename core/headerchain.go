@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dominant-strategies/go-quai/common"
+	"github.com/dominant-strategies/go-quai/common/math"
 	bigMath "github.com/dominant-strategies/go-quai/common/math"
 	"github.com/dominant-strategies/go-quai/consensus"
 	"github.com/dominant-strategies/go-quai/consensus/misc"
@@ -349,6 +350,35 @@ func (hc *HeaderChain) IntrinsicLogEntropy(ws *types.WorkObjectHeader) (*big.Int
 	}
 }
 
+// WorkshareAllocation computes the number of shares available per algorithm
+func (hc *HeaderChain) CalculateShareTarget(parent *types.WorkObject) (nonKawpowShares *big.Int) {
+	if parent.PrimeTerminusNumber().Uint64() == params.KawPowForkBlock {
+		return params.TargetShaShares
+	}
+
+	var newShareTarget *big.Int
+	if parent.AuxPow() != nil {
+		// Compare the current kawpow difficulty with the subsidy chain difficulty
+		subsidyChainDiff := common.GetDifficultyFromBits(parent.AuxPow().Header().Bits())
+		maximumSubsidyChainDiff := new(big.Int).Div(new(big.Int).Mul(subsidyChainDiff, params.MaxSubsidyNumerator), params.MaxSubsidyDenominator)
+
+		// calculate the difference
+		difference := new(big.Int).Sub(parent.Difficulty(), maximumSubsidyChainDiff)
+		newShareTarget = new(big.Int).Mul(difference, parent.ShaShareTarget())
+		newShareTarget = newShareTarget.Div(newShareTarget, parent.Difficulty())
+		newShareTarget = newShareTarget.Add(newShareTarget, parent.ShaShareTarget())
+	} else {
+		newShareTarget = parent.ShaShareTarget()
+	}
+
+	// Make sure the new share target is within bounds
+	newShareTarget = math.BigMax(newShareTarget, params.TargetShaShares)
+	newShareTarget = math.BigMin(newShareTarget, params.MaxShaShares)
+
+	return newShareTarget
+}
+
+// CalculatePowDiffAndCount calculates the new PoW difficulty and average number of work shares
 func (hc *HeaderChain) CalculatePowDiffAndCount(shares *types.PowShareDiffAndCount, numShares *big.Int, powId types.PowID) (newDiff, newAverageShares *big.Int) {
 
 	// numShares is the EMA of the number of work shares over last N blocks * 2^32
@@ -590,11 +620,6 @@ func (hc *HeaderChain) CheckPowIdValidityForWorkshare(wo *types.WorkObjectHeader
 		}
 	}
 	return nil
-}
-
-func (hc *HeaderChain) CalculateShareTarget(powId types.PowID) *big.Int {
-	// Placeholder implementation, replace with actual calculation logic
-	return big.NewInt(0)
 }
 
 // Append

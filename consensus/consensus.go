@@ -109,7 +109,7 @@ type ChainHeaderReader interface {
 
 	CountWorkSharesByAlgo(wo *types.WorkObject) (int, int, int)
 
-	CalculateShareTarget(powid types.PowID) *big.Int
+	CalculateShareTarget(wo *types.WorkObject) *big.Int
 
 	BlockReader
 }

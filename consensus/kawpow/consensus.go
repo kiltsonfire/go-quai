@@ -576,6 +576,23 @@ func (kawpow *Kawpow) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 				return fmt.Errorf("scrypt diff and count must be nil before kawpow fork block")
 			}
 		}
+		if header.PrimeTerminusNumber().Uint64() >= params.KawPowForkBlock {
+			shaShareTarget := chain.CalculateShareTarget(header)
+			if header.WorkObjectHeader().ShaShareTarget().Cmp(shaShareTarget) != 0 {
+				return fmt.Errorf("invalid sha share target: have %v, want %v", header.WorkObjectHeader().ShaShareTarget(), shaShareTarget)
+			}
+			scryptShareTarget := chain.CalculateShareTarget(header)
+			if header.WorkObjectHeader().ScryptShareTarget().Cmp(scryptShareTarget) != 0 {
+				return fmt.Errorf("invalid scrypt share target: have %v, want %v", header.WorkObjectHeader().ScryptShareTarget(), scryptShareTarget)
+			}
+		} else {
+			if header.WorkObjectHeader().ShaShareTarget() != nil {
+				return fmt.Errorf("sha share target must be nil before kawpow fork block")
+			}
+			if header.WorkObjectHeader().ScryptShareTarget() != nil {
+				return fmt.Errorf("scrypt share target must be nil before kawpow fork block")
+			}
+		}
 	}
 	// Verify that the block number is parent's +1
 	parentNumber := parent.Number(nodeCtx)

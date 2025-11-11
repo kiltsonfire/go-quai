@@ -273,8 +273,13 @@ var (
 
 	// Target number of shares per algo times 2^32
 	TargetShaShares    = big.NewInt(12884901888)
+	MaxShaShares       = big.NewInt(17179869184) // 2x the target
 	TargetScryptShares = big.NewInt(12884901888)
 	TargetKawpowShares = big.NewInt(12884901888)
+
+	// Maximum amount of hashrate allowed on subsidy chain
+	MaxSubsidyNumerator   = big.NewInt(4)
+	MaxSubsidyDenominator = big.NewInt(5)
 
 	// The number of blocks to use in the exponential moving average
 	WorkShareEmaBlocks = big.NewInt(17280) // About 1 day worth of blocks

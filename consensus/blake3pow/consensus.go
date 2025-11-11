@@ -562,11 +562,11 @@ func (blake3pow *Blake3pow) verifyHeader(chain consensus.ChainHeaderReader, head
 		}
 
 		if header.PrimeTerminusNumber().Uint64() >= params.KawPowForkBlock {
-			shaShareTarget := chain.CalculateShareTarget(types.SHA_BCH)
+			shaShareTarget := chain.CalculateShareTarget(header)
 			if header.WorkObjectHeader().ShaShareTarget().Cmp(shaShareTarget) != 0 {
 				return fmt.Errorf("invalid sha share target: have %v, want %v", header.WorkObjectHeader().ShaShareTarget(), shaShareTarget)
 			}
-			scryptShareTarget := chain.CalculateShareTarget(types.Scrypt)
+			scryptShareTarget := chain.CalculateShareTarget(header)
 			if header.WorkObjectHeader().ScryptShareTarget().Cmp(scryptShareTarget) != 0 {
 				return fmt.Errorf("invalid scrypt share target: have %v, want %v", header.WorkObjectHeader().ScryptShareTarget(), scryptShareTarget)
 			}
