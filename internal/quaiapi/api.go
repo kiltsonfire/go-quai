@@ -403,7 +403,7 @@ func (s *PublicBlockChainAPI) GetUncleByBlockNumberAndIndex(ctx context.Context,
 			}).Debug("Requested uncle not found")
 			return nil, nil
 		}
-		return uncles[index].RPCMarshalWorkObjectHeader(), nil
+		return uncles[index].RPCMarshalWorkObjectHeader(s.b.RpcVersion()), nil
 	}
 	return nil, err
 }
@@ -422,7 +422,7 @@ func (s *PublicBlockChainAPI) GetUncleByBlockHashAndIndex(ctx context.Context, b
 			}).Debug("Requested uncle not found")
 			return nil, nil
 		}
-		return uncles[index].RPCMarshalWorkObjectHeader(), nil
+		return uncles[index].RPCMarshalWorkObjectHeader(s.b.RpcVersion()), nil
 	}
 	return nil, err
 }

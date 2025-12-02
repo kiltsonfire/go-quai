@@ -39,7 +39,7 @@ func TestAuxPowRPCMarshaling(t *testing.T) {
 	)
 
 	// Test RPC marshaling
-	rpcData := workHeader.RPCMarshalWorkObjectHeader()
+	rpcData := workHeader.RPCMarshalWorkObjectHeader("v2")
 
 	// Convert to JSON to see the result
 	jsonData, err := json.MarshalIndent(rpcData, "", "  ")

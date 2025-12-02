@@ -57,6 +57,8 @@ type Backend interface {
 	GetBestAuxTemplate(powId types.PowID) *types.AuxTemplate
 	AddPendingAuxPow(powId types.PowID, sealHash common.Hash, auxpow *types.AuxPow)
 
+	RpcVersion() string
+
 	BloomStatus() (uint64, uint64)
 	ServiceFilter(ctx context.Context, session *bloombits.MatcherSession)
 	Logger() *log.Logger

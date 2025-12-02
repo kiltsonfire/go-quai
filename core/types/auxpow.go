@@ -21,6 +21,8 @@ import (
 type PowID uint32
 
 const (
+	// Progpow is default and only there so that engine can be accessed by the same
+	// type, technically progpow blocks dont have auxpow at all
 	Progpow PowID = iota
 	Kawpow
 	SHA_BTC
@@ -205,8 +207,7 @@ func (at *AuxTemplate) Hash() [32]byte {
 }
 
 // VerifySignature verifies the composite MuSig2 signature over this AuxTemplate.
-// It tries all possible 2-of-3 signer index combinations. If 'signature' is nil or empty,
-// it falls back to using the embedded at.sigs. Returns true on any valid combination.
+// It tries all possible 2-of-3 signer index combinations.
 func (at *AuxTemplate) VerifySignature() bool {
 	// Check Signature presence
 	if len(at.sigs) == 0 {
@@ -485,10 +486,10 @@ func (ac *AuxPowTx) Deserialize(r io.Reader, witness bool) error {
 type AuxPow struct {
 	powID        PowID         // PoW algorithm identifier
 	auxPow2      []byte        // Auxiliary proof-of-work data
-	header       *AuxPowHeader // 120B donor header for KAWPOW
-	signature    []byte        // Signature proving the work
+	header       *AuxPowHeader // donor header
+	signature    []byte        // Signature proving the validity of the AuxPow
 	merkleBranch [][]byte      // siblings for coinbase index=0 up to root (little endian 32-byte hashes)
-	transaction  []byte        // Full coinbase transaction (contains value in TxOut[0])
+	transaction  []byte        // Full coinbase transaction
 }
 
 func NewAuxPow(powID PowID, header *AuxPowHeader, auxPow2 []byte, signature []byte, merkleBranch [][]byte, transaction []byte) *AuxPow {
@@ -787,12 +788,4 @@ func AuxPowTxHash(PowID PowID, tx []byte) common.Hash {
 		return common.Hash(ltcchainhash.DoubleHashH(tx))
 	}
 	return common.Hash{}
-}
-
-func reverseBytesCopy(b []byte) []byte {
-	out := make([]byte, len(b))
-	for i := range b {
-		out[i] = b[len(b)-1-i]
-	}
-	return out
 }

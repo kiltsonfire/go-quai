@@ -785,29 +785,68 @@ func (sl *Slice) Append(header *types.WorkObject, domTerminus common.Hash, domOr
 
 	_, shaDiff, scryptDiff := sl.hc.DifficultyByAlgo(block)
 	kawpowShares, shaShares, scryptShares := sl.hc.CountWorkSharesByAlgo(block)
+
+	shaCount := big.NewInt(1)
+	scryptCount := big.NewInt(1)
+	shaTarget := big.NewInt(1)
+	scryptTarget := big.NewInt(1)
+
+	if shaDiffAndCount := block.ShaDiffAndCount(); shaDiffAndCount != nil && shaDiffAndCount.Count() != nil {
+		shaCount = shaDiffAndCount.Count()
+	}
+	if scryptDiffAndCount := block.ScryptDiffAndCount(); scryptDiffAndCount != nil && scryptDiffAndCount.Count() != nil {
+		scryptCount = scryptDiffAndCount.Count()
+	}
+	if shaShareTarget := block.ShaShareTarget(); shaShareTarget != nil {
+		shaTarget = new(big.Int).Set(shaShareTarget)
+	}
+	if scryptShareTarget := block.ScryptShareTarget(); scryptShareTarget != nil {
+		scryptTarget = new(big.Int).Set(scryptShareTarget)
+	}
+
+	var quaiDiffAsPercentOfRavencoin, quaiDiffAsPercentOfRavencoinInstantaneous *big.Int
+	if header.AuxPow() != nil {
+		// Compare the current kawpow difficulty with the subsidy chain difficulty
+		subsidyChainDiff := common.GetDifficultyFromBits(header.AuxPow().Header().Bits())
+		// Normalize the difficulty, to quai block time
+		subsidyChainDiff = new(big.Int).Div(subsidyChainDiff, params.RavenQuaiBlockTimeRatio)
+		quaiDiffAsPercentOfRavencoinInstantaneous = new(big.Int).Div(new(big.Int).Mul(header.Difficulty(), params.RavencoinDiffPercentage), subsidyChainDiff)
+	}
+
+	if header.KawpowDifficulty() != nil {
+		quaiDiffAsPercentOfRavencoin = new(big.Int).Div(new(big.Int).Mul(header.Difficulty(), params.RavencoinDiffPercentage), header.KawpowDifficulty())
+	}
+
 	sl.logger.WithFields(log.Fields{
-		"number":               block.NumberArray(),
-		"hash":                 block.Hash(),
-		"difficulty":           block.Difficulty(),
-		"shaDiff":              shaDiff,
-		"scryptDiff":           scryptDiff,
-		"workshares":           len(block.Uncles()),
-		"kawpowShares":         kawpowShares,
-		"shaShares":            shaShares,
-		"scryptShares":         scryptShares,
-		"totalTxs":             len(block.Transactions()),
-		"iworkShare":           common.BigBitsToBitsFloat(workShare),
-		"intrinsicS":           common.BigBitsToBits(intrinsicS),
-		"inboundEtxs from dom": len(newInboundEtxs),
-		"gas":                  block.GasUsed(),
-		"gasLimit":             block.GasLimit(),
-		"evmRoot":              block.EVMRoot(),
-		"utxoRoot":             block.UTXORoot(),
-		"etxSetRoot":           block.EtxSetRoot(),
-		"order":                order,
-		"location":             block.Location(),
-		"elapsed":              common.PrettyDuration(time.Since(start)),
-		"coinbaseType":         coinbaseType,
+		"number":                        block.NumberArray(),
+		"hash":                          block.Hash(),
+		"difficulty":                    block.Difficulty(),
+		"shaDiff":                       shaDiff,
+		"scryptDiff":                    scryptDiff,
+		"workshares":                    len(block.Uncles()),
+		"kawpowShares":                  kawpowShares,
+		"kawpowShareDiff":               CalculateKawpowShareDiff(block.WorkObjectHeader()),
+		"shaShares":                     shaShares,
+		"scryptShares":                  scryptShares,
+		"shaAvgShares":                  new(big.Float).Quo(new(big.Float).SetInt(shaCount), new(big.Float).SetInt(common.Big2e32)),
+		"scryptAvgShares":               new(big.Float).Quo(new(big.Float).SetInt(scryptCount), new(big.Float).SetInt(common.Big2e32)),
+		"shaTarget":                     new(big.Float).Quo(new(big.Float).SetInt(shaTarget), new(big.Float).SetInt(common.Big2e32)),
+		"scryptTarget":                  new(big.Float).Quo(new(big.Float).SetInt(scryptTarget), new(big.Float).SetInt(common.Big2e32)),
+		"totalTxs":                      len(block.Transactions()),
+		"iworkShare":                    common.BigBitsToBitsFloat(workShare),
+		"intrinsicS":                    common.BigBitsToBits(intrinsicS),
+		"inboundEtxs from dom":          len(newInboundEtxs),
+		"quai diff % of ravencoin":      quaiDiffAsPercentOfRavencoin,
+		"quai diff % of ravencoin inst": quaiDiffAsPercentOfRavencoinInstantaneous,
+		"gas":                           block.GasUsed(),
+		"gasLimit":                      block.GasLimit(),
+		"evmRoot":                       block.EVMRoot(),
+		"utxoRoot":                      block.UTXORoot(),
+		"etxSetRoot":                    block.EtxSetRoot(),
+		"order":                         order,
+		"location":                      block.Location(),
+		"elapsed":                       common.PrettyDuration(time.Since(start)),
+		"coinbaseType":                  coinbaseType,
 	}).Info("Appended new block")
 
 	if nodeCtx == common.ZONE_CTX {
@@ -1062,6 +1101,8 @@ func (sl *Slice) GetPendingHeader(powId types.PowID, coinbase common.Address) (*
 					phCopy.WorkObjectHeader().SetPrimaryCoinbase(coinbase)
 				}
 
+				phCopy.WorkObjectHeader().SetTime(uint64(time.Now().Unix()))
+
 				auxMerkleRoot := phCopy.SealHash()
 				if powId == types.Scrypt {
 					if len(auxTemplate.AuxPow2()) == 0 {
@@ -1184,6 +1225,16 @@ func (sl *Slice) SendPendingEtxsToDom(pEtxs types.PendingEtxs) error {
 func (sl *Slice) GetPEtxRollupAfterRetryThreshold(blockHash common.Hash, hash common.Hash, location common.Location) (types.PendingEtxsRollup, error) {
 	pEtx, exists := sl.pEtxRetryCache.Get(blockHash)
 	if !exists || pEtx.retries < c_pEtxRetryThreshold {
+		// Keeping track of the number of times pending etx fails and if it crossed the retry threshold
+		// ask the sub for the pending etx/rollup data
+		val, exist := sl.pEtxRetryCache.Get(blockHash)
+		var retry uint64
+		if exist {
+			pEtxCurrent := val
+			retry = pEtxCurrent.retries + 1
+		}
+		pEtxNew := pEtxRetry{hash: blockHash, retries: retry}
+		sl.pEtxRetryCache.Add(blockHash, pEtxNew)
 		return types.PendingEtxsRollup{}, ErrPendingEtxNotFound
 	}
 	return sl.GetPendingEtxsRollupFromSub(hash, location)
@@ -1218,6 +1269,16 @@ func (sl *Slice) GetPendingEtxsRollupFromSub(hash common.Hash, location common.L
 func (sl *Slice) GetPEtxAfterRetryThreshold(blockHash common.Hash, hash common.Hash, location common.Location) (types.PendingEtxs, error) {
 	pEtx, exists := sl.pEtxRetryCache.Get(blockHash)
 	if !exists || pEtx.retries < c_pEtxRetryThreshold {
+		// Keeping track of the number of times pending etx fails and if it crossed the retry threshold
+		// ask the sub for the pending etx/rollup data
+		val, exist := sl.pEtxRetryCache.Get(blockHash)
+		var retry uint64
+		if exist {
+			pEtxCurrent := val
+			retry = pEtxCurrent.retries + 1
+		}
+		pEtxNew := pEtxRetry{hash: blockHash, retries: retry}
+		sl.pEtxRetryCache.Add(blockHash, pEtxNew)
 		return types.PendingEtxs{}, ErrPendingEtxNotFound
 	}
 	return sl.GetPendingEtxsFromSub(hash, location)

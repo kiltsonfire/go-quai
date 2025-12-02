@@ -701,18 +701,21 @@ func (w *worker) GeneratePendingHeader(block *types.WorkObject, fill bool) (*typ
 				for _, uncle := range uncles {
 					var uncleEntropy *big.Int
 					if uncle.NumberU64() == targetBlockNumber {
-						_, err := w.hc.VerifySeal(uncle)
-						if err != nil {
-							uncleEntropy, err = w.hc.HeaderIntrinsicLogEntropy(uncle)
+						// Only run this before the fork
+						if work.wo.PrimeTerminusNumber().Uint64() < params.KawPowForkBlock {
+							_, err := w.hc.VerifySeal(uncle)
 							if err != nil {
-								return nil, err
+								uncleEntropy, err = w.hc.HeaderIntrinsicLogEntropy(uncle)
+								if err != nil {
+									return nil, err
+								}
+								totalEntropy = new(big.Int).Add(totalEntropy, uncleEntropy)
+							} else {
+								// Add the target weight into the uncles
+								target := new(big.Int).Div(common.Big2e256, uncle.Difficulty())
+								uncleEntropy = common.IntrinsicLogEntropy(common.BytesToHash(target.Bytes()))
+								totalEntropy = new(big.Int).Add(totalEntropy, uncleEntropy)
 							}
-							totalEntropy = new(big.Int).Add(totalEntropy, uncleEntropy)
-						} else {
-							// Add the target weight into the uncles
-							target := new(big.Int).Div(common.Big2e256, uncle.Difficulty())
-							uncleEntropy = common.IntrinsicLogEntropy(common.BytesToHash(target.Bytes()))
-							totalEntropy = new(big.Int).Add(totalEntropy, uncleEntropy)
 						}
 
 						if work.wo.PrimeTerminusNumber().Uint64() >= params.KawPowForkBlock {
@@ -759,7 +762,7 @@ func (w *worker) GeneratePendingHeader(block *types.WorkObject, fill bool) (*typ
 			// add half the fees generated in the block
 			blockRewardAtTargetBlock = new(big.Int).Add(blockRewardAtTargetBlock, new(big.Int).Div(targetBlock.TotalFees(), common.Big2))
 
-			rewardPerShare := new(big.Int).Div(blockRewardAtTargetBlock, big.NewInt(int64(params.ExpectedWorksharesPerBlock)))
+			rewardPerShare := new(big.Int).Div(blockRewardAtTargetBlock, big.NewInt(int64(params.ExpectedWorksharesPerBlock+1)))
 
 			// Add an etx for each workshare for it to be rewarded
 			for i, share := range sharesAtTargetBlockDepth {
@@ -768,6 +771,9 @@ func (w *worker) GeneratePendingHeader(block *types.WorkObject, fill bool) (*typ
 				if work.wo.PrimeTerminusNumber().Uint64() < params.KawPowForkBlock {
 					shareReward = new(big.Int).Mul(blockRewardAtTargetBlock, entropyOfSharesAtTargetBlockDepth[i])
 					shareReward = new(big.Int).Div(shareReward, totalEntropy)
+					if shareReward.Cmp(blockRewardAtTargetBlock) > 0 {
+						return nil, errors.New("share reward cannot be greater than the total block reward")
+					}
 				} else {
 
 					shareReward = new(big.Int).Set(rewardPerShare)
@@ -793,15 +799,11 @@ func (w *worker) GeneratePendingHeader(block *types.WorkObject, fill bool) (*typ
 						// the expectation
 						scritSig := types.ExtractScriptSigFromCoinbaseTx(share.AuxPow().Transaction())
 						signatureTime, err := types.ExtractSignatureTimeFromCoinbase(scritSig)
-						if err != nil || signatureTime+params.ShareLivenessTime < uint32(targetBlock.Time()) {
+						if err != nil || signatureTime+params.ShareLivenessTime < share.AuxPow().Header().Timestamp() {
 							shareReward = new(big.Int).Mul(shareReward, params.UnlivelySharePenalty)
 							shareReward = new(big.Int).Div(shareReward, params.ShareRewardPenaltyDivisor)
 						}
 					}
-				}
-
-				if shareReward.Cmp(blockRewardAtTargetBlock) > 0 {
-					return nil, errors.New("share reward cannot be greater than the total block reward")
 				}
 
 				uncleCoinbase := share.PrimaryCoinbase()
@@ -993,10 +995,8 @@ func (w *worker) commitUncle(env *environment, uncle *types.WorkObjectHeader) er
 
 		return err
 	}
-	if env.wo.PrimeTerminusNumber().Uint64() < params.KawPowForkBlock || uncle.AuxPow() == nil || uncle.AuxPow().PowID() == types.Kawpow {
-		if uncle.PrimaryCoinbase().IsInQiLedgerScope() && env.wo.PrimeTerminusNumber().Uint64() < params.ControllerKickInBlock {
-			return errors.New("workshare coinbase is in Qi, but Qi is disabled")
-		}
+	if uncle.PrimaryCoinbase().IsInQiLedgerScope() && env.wo.PrimeTerminusNumber().Uint64() < params.ControllerKickInBlock {
+		return errors.New("workshare coinbase is in Qi, but Qi is disabled")
 	}
 	// If the uncle is a workshare, we should allow siblings
 	validity := w.hc.UncleWorkShareClassification(uncle)
@@ -2628,7 +2628,7 @@ func (w *worker) AddAuxPowTemplate(auxTemplate *types.AuxTemplate) error {
 
 func (w *worker) AddWorkShare(workShare *types.WorkObjectHeader) error {
 	// Don't add the workshare into the list if its farther than the worksharefilterdist
-	if workShare.NumberU64()+uint64(params.WorkSharesInclusionDepth) < w.hc.CurrentHeader().NumberU64(common.ZONE_CTX) {
+	if workShare.NumberU64()+uint64(2*params.WorkSharesInclusionDepth) < w.hc.CurrentHeader().NumberU64(common.ZONE_CTX) {
 		return nil
 	}
 
@@ -2872,6 +2872,10 @@ func (w *worker) processQiTx(tx *types.Transaction, env *environment, primeTermi
 	txFeeInQuai := misc.QiToQuai(env.wo, exchangeRate, env.wo.Difficulty(), txFeeInQit)
 	if txFeeInQuai.Cmp(minimumFeeInQuai) < 0 {
 		return fmt.Errorf("tx %032x has insufficient fee for base fee * gas, have %d want %d", tx.Hash(), txFeeInQit.Uint64(), minimumFeeInQuai.Uint64())
+	}
+	if conversion && (env.wo.PrimeTerminusNumber().Uint64() > params.KawPowForkBlock &&
+		env.wo.PrimeTerminusNumber().Uint64() < params.KawPowForkBlock+params.KQuaiChangeHoldInterval) {
+		return fmt.Errorf("tx %032x is a qi to quai conversion transaction  not allowed for kquai hold interval %d after the kawpow fork block", tx.Hash(), params.KQuaiChangeHoldInterval)
 	}
 	if conversion || wrapping {
 		if conversion && wrapping {

@@ -213,10 +213,8 @@ func (hc *HeaderChain) VerifyUncles(block *types.WorkObject) error {
 		}
 		uncles.Add(hash)
 
-		if block.PrimeTerminusNumber().Uint64() < params.KawPowForkBlock || uncle.AuxPow() == nil || uncle.AuxPow().PowID() == types.Kawpow {
-			if uncle.PrimaryCoinbase().IsInQiLedgerScope() && block.PrimeTerminusNumber().Uint64() < params.ControllerKickInBlock {
-				return fmt.Errorf("uncle inclusion is not allowed before block %v", params.ControllerKickInBlock)
-			}
+		if uncle.PrimaryCoinbase().IsInQiLedgerScope() && block.PrimeTerminusNumber().Uint64() < params.ControllerKickInBlock {
+			return fmt.Errorf("uncle inclusion is not allowed before block %v", params.ControllerKickInBlock)
 		}
 
 		// Make sure the uncle has a valid ancestry
@@ -293,6 +291,20 @@ func (hc *HeaderChain) VerifyUncles(block *types.WorkObject) error {
 
 			scryptSig := types.ExtractScriptSigFromCoinbaseTx(uncle.AuxPow().Transaction())
 
+			signatureTime, err := types.ExtractSignatureTimeFromCoinbase(scryptSig)
+			if err != nil {
+				return err
+			}
+			// auxpow header time and quai block time cannot be less than the
+			// signature time in the coinbase (time at which the template was
+			// signed)
+			if uncle.AuxPow().Header().Timestamp() < signatureTime {
+				return fmt.Errorf("auxpow header time %v is less than signature time %v", uncle.AuxPow().Header().Timestamp(), signatureTime)
+			}
+			if uncle.Time() < uint64(signatureTime) {
+				return fmt.Errorf("quai block time %v is less than signature time %v", uncle.Time(), signatureTime)
+			}
+
 			coinbaseSealHash, err := types.ExtractSealHashFromCoinbase(scryptSig)
 			if err != nil {
 				return fmt.Errorf("coinbase seal hash not found in the auxpow: %v", err)
@@ -330,6 +342,10 @@ func (hc *HeaderChain) VerifyUncles(block *types.WorkObject) error {
 			expectedMerkleRoot := types.CalculateMerkleRoot(uncle.AuxPow().PowID(), uncle.AuxPow().Transaction(), uncle.AuxPow().MerkleBranch())
 			if uncle.AuxPow().Header().MerkleRoot() != expectedMerkleRoot {
 				return errors.New("invalid merkle root in auxpow")
+			}
+
+			if err := types.ValidatePrevOutPointIndexAndSequenceOfCoinbase(uncle.AuxPow().Transaction()); err != nil {
+				return fmt.Errorf("invalid prev out point index and sequence in coinbase transaction: %v", err)
 			}
 
 			if !uncle.AuxPow().ConvertToTemplate().VerifySignature() && !uncle.IsShaOrScryptShareWithInvalidAddress() {
@@ -569,6 +585,20 @@ func (hc *HeaderChain) verifyHeader(header, parent *types.WorkObject, uncle bool
 	if header.PrimeTerminusNumber().Uint64() >= params.KawPowForkBlock && header.AuxPow() != nil {
 		scryptSig := types.ExtractScriptSigFromCoinbaseTx(header.AuxPow().Transaction())
 
+		signatureTime, err := types.ExtractSignatureTimeFromCoinbase(scryptSig)
+		if err != nil {
+			return err
+		}
+		// auxpow header time and quai block time cannot be less than the
+		// signature time in the coinbase (time at which the template was
+		// signed)
+		if header.AuxPow().Header().Timestamp() < signatureTime {
+			return fmt.Errorf("auxpow header time %v is less than signature time %v", header.AuxPow().Header().Timestamp(), signatureTime)
+		}
+		if header.Time() < uint64(signatureTime) {
+			return fmt.Errorf("quai block time %v is less than signature time %v", header.Time(), signatureTime)
+		}
+
 		coinbaseSealHash, err := types.ExtractSealHashFromCoinbase(scryptSig)
 		if err != nil {
 			return fmt.Errorf("coinbase seal hash not found in the auxpow: %v", err)
@@ -605,6 +635,10 @@ func (hc *HeaderChain) verifyHeader(header, parent *types.WorkObject, uncle bool
 		expectedMerkleRoot := types.CalculateMerkleRoot(header.AuxPow().PowID(), header.AuxPow().Transaction(), header.AuxPow().MerkleBranch())
 		if header.AuxPow().Header().MerkleRoot() != expectedMerkleRoot {
 			return errors.New("invalid merkle root in auxpow")
+		}
+
+		if err := types.ValidatePrevOutPointIndexAndSequenceOfCoinbase(header.AuxPow().Transaction()); err != nil {
+			return fmt.Errorf("invalid prev out point index and sequence in coinbase transaction: %v", err)
 		}
 
 		if !header.AuxPow().ConvertToTemplate().VerifySignature() {

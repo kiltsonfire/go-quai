@@ -44,6 +44,10 @@ type QuaiAPIBackend struct {
 	quai          *Quai
 }
 
+func (b *QuaiAPIBackend) RpcVersion() string {
+	return b.quai.rpcVersion
+}
+
 // ChainConfig returns the active chain configuration.
 func (b *QuaiAPIBackend) ChainConfig() *params.ChainConfig {
 	return b.quai.core.Config()

@@ -178,7 +178,7 @@ var (
 	OrchardDurationLimit              = big.NewInt(5) // The decision boundary on the blocktime duration used to determine whether difficulty should go up or not.
 	LighthouseDurationLimit           = big.NewInt(5) // The decision boundary on the blocktime duration used to determine whether difficulty should go up or not.
 	LocalDurationLimit                = big.NewInt(1) // The decision boundary on the blocktime duration used to determine whether difficulty should go up or not.
-	TimeToStartTx              uint64 = 15 * BlocksPerDay
+	TimeToStartTx              uint64 = 100
 	BlocksPerDay               uint64 = new(big.Int).Div(big.NewInt(86400), DurationLimit).Uint64() // BlocksPerDay is the number of blocks per day assuming 5 second block time
 	BlocksPerWeek              uint64 = 7 * BlocksPerDay
 	BlocksPerMonth             uint64 = 30 * BlocksPerDay
@@ -194,10 +194,10 @@ var (
 	WorkSharesInclusionDepth          = 3 // Number of blocks upto which the work shares can be referenced and this is protocol enforced
 	MaxLockupByte                     = 3 // Max lockup byte allowed in the transactions for coinbase
 	LockupByteToBlockDepth            = [4]uint64{
-		ConversionLockPeriod, // 2 weeks
-		3 * BlocksPerMonth,   // 3 months
-		6 * BlocksPerMonth,   // 6 months
-		BlocksPerYear,        // 12 months
+		ConversionLockPeriod, // 100
+		200,                  // 200
+		300,                  // 300
+		400,                  // 400
 	}
 	// The first value represents the multiplier that represents interest rate
 	// for the first year, the second value represents the terminal rate these
@@ -217,7 +217,7 @@ var (
 	OneOverBaseFeeControllerAlpha               = big.NewInt(100)
 	BaseFeeMultiplier                           = big.NewInt(50)
 
-	ConversionLockPeriod uint64 = 2 * BlocksPerWeek
+	ConversionLockPeriod uint64 = 100
 	CoinbaseEpochBlocks  uint64 = 50000
 
 	// Controller related constants
@@ -270,9 +270,10 @@ var (
 	AlphaInverse                      = big.NewInt(1)
 
 	// PoW share difficulty parameters
-	InitialShaDiff    = big.NewInt(8e12) // Minimum difficulty for a SHA work share, With 4TH/s, diff to get a share every 5 secs 20e12
-	InitialScryptDiff = big.NewInt(8e8)  // Minimum difficulty for a Scrypt work share, With 1GH/s, diff to get a share every 5 secs is 5e9
-	MinPowDivisor     = big.NewInt(20)   // Minimum multiple of the target difficulty that a share must meet to be valid
+	InitialShaDiff          = big.NewInt(8e12) // Minimum difficulty for a SHA work share, With 4TH/s, diff to get a share every 5 secs 20e12
+	InitialScryptDiff       = big.NewInt(8e8)  // Minimum difficulty for a Scrypt work share, With 1GH/s, diff to get a share every 5 secs is 5e9
+	MinPowDivisor           = big.NewInt(2)    // Minimum multiple of the target difficulty that a share must meet to be valid
+	PowDiffAdjustmentFactor = big.NewInt(300000)
 
 	// Target number of shares per algo times 2^32
 	TargetShaShares = big.NewInt(12884901888)
@@ -285,11 +286,11 @@ var (
 	MaxScryptSharesCount = 8
 
 	// Maximum amount of hashrate allowed on subsidy chain
-	MaxSubsidyNumerator   = big.NewInt(4)
-	MaxSubsidyDenominator = big.NewInt(60) //This also includes the blocktime ratio between raven, ie (60s/5s = 12), and quai 5 * 12
+	MaxSubsidyNumerator   = big.NewInt(3)
+	MaxSubsidyDenominator = big.NewInt(4)
 
-	InitialKawpowDiff       = big.NewInt(5e12) // 5 TH
-	RavenQuaiBlockTimeRatio = big.NewInt(12)   // 60s/5s = 12
+	InitialKawpowDiff       = big.NewInt(1300000000) // Ravencoin testnet has 260Mh/s
+	RavenQuaiBlockTimeRatio = big.NewInt(12)         // 60s/5s = 12
 
 	RavencoinDiffPercentage  = big.NewInt(10000) // 100% in basis points
 	RavencoinDiffCutoffEnd   = big.NewInt(9000)  // 90%
@@ -297,7 +298,6 @@ var (
 	RavencoinDiffCutoffRange = big.NewInt(1500)
 
 	// The number of blocks to use in the exponential moving average
-	// TODO: Set this to the correct number
 	WorkShareEmaBlocks = big.NewInt(1000) // About 1 day worth of blocks
 
 	// MuSig2 2-of-3 public keys for AuxTemplate signing

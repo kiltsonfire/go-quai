@@ -666,6 +666,14 @@ func (evm *EVM) CreateETX(toAddr common.Address, fromAddr common.Address, gas ui
 		}
 		conversion = true
 	}
+	// If conversion, then disallow if the block number is within the hold
+	// interval after the KawPow fork
+	if conversion {
+		if evm.Context.PrimeTerminusNumber >= params.KawPowForkBlock &&
+			evm.Context.PrimeTerminusNumber < params.KawPowForkBlock+params.KQuaiChangeHoldInterval {
+			return []byte{}, 0, 0, fmt.Errorf("CreateETX error: ETX is not eligible to be sent to %x until block %d", toAddr, params.KawPowForkBlock+params.KQuaiChangeHoldInterval)
+		}
+	}
 	if toAddr.IsInQiLedgerScope() && !common.IsInChainScope(toAddr.Bytes(), evm.chainConfig.Location) {
 		return []byte{}, 0, 0, fmt.Errorf("%x is in qi scope and is not in the same location, but CreateETX was called", toAddr)
 	} else if conversion && value.Cmp(params.MinQuaiConversionAmount) < 0 {

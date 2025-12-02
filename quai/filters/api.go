@@ -331,7 +331,7 @@ func (api *PublicFilterAPI) NewWorkshares(ctx context.Context) (*rpc.Subscriptio
 					}
 				}
 
-				notifier.Notify(rpcSub.ID, w.RPCMarshalWorkObject())
+				notifier.Notify(rpcSub.ID, w.RPCMarshalWorkObject(api.backend.RpcVersion()))
 			case <-rpcSub.Err():
 				worksharesSub.Unsubscribe()
 				return
@@ -376,7 +376,7 @@ func (api *PublicFilterAPI) NewHeads(ctx context.Context) (*rpc.Subscription, er
 			select {
 			case h := <-headers:
 				// Marshal the header data
-				marshalHeader := h.RPCMarshalWorkObject()
+				marshalHeader := h.RPCMarshalWorkObject(api.backend.RpcVersion())
 				notifier.Notify(rpcSub.ID, marshalHeader)
 			case <-rpcSub.Err():
 				headersSub.Unsubscribe()

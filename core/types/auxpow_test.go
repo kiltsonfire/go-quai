@@ -66,6 +66,7 @@ func TestAuxPowProtoEncodeDecode(t *testing.T) {
 	for i := range original.MerkleBranch() {
 		require.Equal(t, original.MerkleBranch()[i], decoded.MerkleBranch()[i])
 	}
+	require.Equal(t, original.AuxPow2(), decoded.AuxPow2())
 	// Verify transaction was properly serialized/deserialized
 	require.NotNil(t, decoded.Transaction())
 }

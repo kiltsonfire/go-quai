@@ -174,6 +174,8 @@ type Backend interface {
 	ChainConfig() *params.ChainConfig
 	Engine(header *types.WorkObjectHeader) consensus.Engine
 
+	RpcVersion() string
+
 	// Logger
 	Logger() *log.Logger
 

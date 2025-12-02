@@ -328,7 +328,7 @@ func BuildWorkshareLRUDump(limit int) map[string]interface{} {
 		if hdr == nil {
 			return ""
 		}
-		js, err := json.Marshal(hdr.RPCMarshalWorkObjectHeader())
+		js, err := json.Marshal(hdr.RPCMarshalWorkObjectHeader("v2"))
 		if err != nil {
 			return ""
 		}

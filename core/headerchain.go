@@ -25,6 +25,7 @@ import (
 	"github.com/dominant-strategies/go-quai/params"
 	"github.com/dominant-strategies/go-quai/trie"
 	lru "github.com/hashicorp/golang-lru/v2"
+	"modernc.org/mathutil"
 )
 
 const (
@@ -230,6 +231,9 @@ func (hc *HeaderChain) GetEngineForHeader(header *types.WorkObjectHeader) consen
 	return hc.GetEngineForPowID(types.Progpow)
 }
 
+// NOTE: This function should not be used after the kawpow fork, only place this is
+// used before the fork is in the reward calculation for uncles and for print in
+// the slice.go.
 func (hc *HeaderChain) HeaderIntrinsicLogEntropy(ws *types.WorkObjectHeader) (*big.Int, error) {
 	// If auxpow is not nil and its not kawpow or progpow, we need to compute it directly as
 	// we dont have engine interface for sha and scrypt
@@ -247,11 +251,17 @@ func (hc *HeaderChain) HeaderIntrinsicLogEntropy(ws *types.WorkObjectHeader) (*b
 }
 
 func CalculateKawpowShareDiff(header *types.WorkObjectHeader) *big.Int {
+	if header.PrimeTerminusNumber().Uint64() < params.KawPowForkBlock {
+		return big.NewInt(0)
+	}
 	// kawpowsharetarget = max(0, 8 * 2^32 - (shaSharesAverage + scryptSharesAverage))
 	// kawpowShareDiff = difficulty * 2^32 / kawpowShareTarget
 
-	shaSharesAverage := header.ShaDiffAndCount().Count()
-	scryptSharesAverage := header.ScryptDiffAndCount().Count()
+	// If sha or scrypt target is less than the share target then use the count,
+	// otherwise use the target
+	shaSharesAverage := math.BigMin(header.ShaDiffAndCount().Count(), header.ShaShareTarget())
+	scryptSharesAverage := math.BigMin(header.ScryptDiffAndCount().Count(), header.ScryptShareTarget())
+
 	nonKawpowShareTarget := new(big.Int).Add(shaSharesAverage, scryptSharesAverage)
 
 	maxTarget := new(big.Int).Mul(big.NewInt(int64(params.ExpectedWorksharesPerBlock)), common.Big2e32)
@@ -263,8 +273,11 @@ func CalculateKawpowShareDiff(header *types.WorkObjectHeader) *big.Int {
 	}
 
 	// Calculate the kawpow share target by subtracting the non-kawpow share
-	// target from the max target
-	kawpowShareTarget := new(big.Int).Sub(maxTarget, nonKawpowShareTarget)
+	// target from the max target + 2^32 because on expectation to get x number
+	// of shares that are not block, the difficulty has to be divided by (x+1),
+	// so that on average the number of shares other than block is x and you
+	// have a normal block
+	kawpowShareTarget := new(big.Int).Sub(new(big.Int).Add(maxTarget, common.Big2e32), nonKawpowShareTarget)
 
 	// Precision is 1/100th of percent
 	// If the quai hash rate reaches 75% of the ravencoin hash rate then we
@@ -279,7 +292,7 @@ func CalculateKawpowShareDiff(header *types.WorkObjectHeader) *big.Int {
 		} else {
 			// Apply a linear discount
 			errInDiff := new(big.Int).Sub(params.RavencoinDiffCutoffEnd, quaiDiffAsPercentOfRavencoin)
-			kawpowShareTargetWithDiscount = new(big.Int).Mul(maxTarget, errInDiff)
+			kawpowShareTargetWithDiscount = new(big.Int).Mul(new(big.Int).Add(maxTarget, common.Big2e32), errInDiff)
 			kawpowShareTargetWithDiscount = new(big.Int).Div(kawpowShareTargetWithDiscount, params.RavencoinDiffCutoffRange)
 		}
 
@@ -287,7 +300,8 @@ func CalculateKawpowShareDiff(header *types.WorkObjectHeader) *big.Int {
 	}
 
 	// If the kawpow share target is less than 1, then the kawpow share diff is
-	// the block difficulty
+	// the block difficulty, This should never happen but adding it for sanity
+	// check
 	if kawpowShareTarget.Cmp(common.Big2e32) < 0 {
 		return header.Difficulty()
 	}
@@ -298,6 +312,9 @@ func CalculateKawpowShareDiff(header *types.WorkObjectHeader) *big.Int {
 	return kawpowShareDiff
 }
 
+// CalculateKawpowDifficulty calculates the average ravencoin difficulty
+// normalized to quai block time. This only updates if the auxpow used in the
+// block is lively
 func (hc *HeaderChain) CalculateKawpowDifficulty(parent, header *types.WorkObject) *big.Int {
 	if header.PrimeTerminusNumber().Uint64() == params.KawPowForkBlock {
 		return params.InitialKawpowDiff
@@ -308,14 +325,8 @@ func (hc *HeaderChain) CalculateKawpowDifficulty(parent, header *types.WorkObjec
 		// then update
 		scritSig := types.ExtractScriptSigFromCoinbaseTx(parent.AuxPow().Transaction())
 		signatureTime, err := types.ExtractSignatureTimeFromCoinbase(scritSig)
-		if err != nil {
-			// This should never happen, as its validated during header
-			// validation but if it does, we will just return the
-			// previous difficulty
-			return parent.KawpowDifficulty()
-		}
 		// If the share is unlive, return the previous difficulty
-		if signatureTime+params.ShareLivenessTime < uint32(parent.Time()) {
+		if err != nil || signatureTime+params.ShareLivenessTime < parent.AuxPow().Header().Timestamp() {
 			return parent.KawpowDifficulty()
 		}
 		// Compare the current kawpow difficulty with the subsidy chain difficulty
@@ -330,6 +341,8 @@ func (hc *HeaderChain) CalculateKawpowDifficulty(parent, header *types.WorkObjec
 		return newKawpowDiff
 
 	} else {
+		// If the parent is a transition progpow block, there is no information
+		// to update the kawpow difficulty
 		return parent.KawpowDifficulty()
 	}
 }
@@ -343,12 +356,16 @@ func (hc *HeaderChain) CalculateShareTarget(parent, header *types.WorkObject) (n
 	var newShareTarget *big.Int
 	// Compare the current kawpow difficulty with the subsidy chain difficulty
 	subsidyChainDiff := parent.KawpowDifficulty()
+	// maximum subsidy chain diff should be 75% of the parent difficulty
 	maximumSubsidyChainDiff := new(big.Int).Div(new(big.Int).Mul(subsidyChainDiff, params.MaxSubsidyNumerator), params.MaxSubsidyDenominator)
 
 	// calculate the difference
 	difference := new(big.Int).Sub(parent.Difficulty(), maximumSubsidyChainDiff)
+	// NOTE: Using shashare target in this calculation because sha and scrypt target
+	// are the same
 	newShareTarget = new(big.Int).Mul(difference, parent.ShaShareTarget())
 	newShareTarget = newShareTarget.Div(newShareTarget, parent.Difficulty())
+	newShareTarget = newShareTarget.Div(newShareTarget, new(big.Int).SetInt64(int64(params.BlocksPerDay)))
 	newShareTarget = newShareTarget.Add(newShareTarget, parent.ShaShareTarget())
 
 	// Make sure the new share target is within bounds
@@ -364,9 +381,9 @@ func (hc *HeaderChain) CalculatePowDiffAndCount(parent *types.WorkObject, header
 	if header.PrimeTerminusNumber().Uint64() == params.KawPowForkBlock {
 		switch powId {
 		case types.SHA_BTC, types.SHA_BCH:
-			return params.InitialShaDiff, new(big.Int).Set(params.TargetShaShares)
+			return params.InitialShaDiff, params.TargetShaShares
 		case types.Scrypt:
-			return params.InitialScryptDiff, new(big.Int).Set(params.TargetShaShares)
+			return params.InitialScryptDiff, params.TargetShaShares
 		default:
 			return big.NewInt(0), big.NewInt(0)
 		}
@@ -394,10 +411,9 @@ func (hc *HeaderChain) CalculatePowDiffAndCount(parent *types.WorkObject, header
 	var error *big.Int
 	switch powId {
 	case types.SHA_BTC, types.SHA_BCH:
-		// TODO: Set the initial count back to zero
-		error = new(big.Int).Sub(shares.Count(), parent.ShaShareTarget())
+		error = new(big.Int).Sub(numShares, parent.ShaShareTarget())
 	case types.Scrypt:
-		error = new(big.Int).Sub(shares.Count(), parent.ScryptShareTarget())
+		error = new(big.Int).Sub(numShares, parent.ScryptShareTarget())
 	default:
 		return big.NewInt(0), big.NewInt(0)
 	}
@@ -405,7 +421,15 @@ func (hc *HeaderChain) CalculatePowDiffAndCount(parent *types.WorkObject, header
 	// Calculate the new difficulty based on the error
 	// newDiff = prevDiff + (error * prevDiff)/(2^32 * c_difficultyAdjustDivisor)
 	newDiff = new(big.Int).Mul(error, shares.Difficulty())
-	newDiff = newDiff.Div(newDiff, params.WorkShareEmaBlocks)
+
+	// Multiplying by the binary log of the share diff, similar to the DAA, so
+	// that, the gain is correct for a several magnitudes of share difficulty
+	// Dividing by 30 here because the response of scrypt controller seems
+	// stable, so its a noop for scrypt, but for sha it scales appropriately
+	k, _ := mathutil.BinaryLog(new(big.Int).Set(shares.Difficulty()), common.MantBits)
+	newDiff = new(big.Int).Mul(newDiff, big.NewInt(int64(k)))
+	newDiff = new(big.Int).Div(newDiff, params.PowDiffAdjustmentFactor)
+
 	newDiff = newDiff.Div(newDiff, common.Big2e32)
 	newDiff = newDiff.Add(shares.Difficulty(), newDiff)
 

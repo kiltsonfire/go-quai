@@ -46,7 +46,13 @@ func CalculateBetaFromMiningChoiceAndConversions(hc *HeaderChain, block *types.W
 			}
 		}
 	} else {
-		// Logic for resetting the exchange rate needs to go here
+		// Resetting the exchange rate on the fork block and hold it for the kquai change hold interval
+		if currentBlock == params.KawPowForkBlock {
+			return params.ExchangeRate, nil
+		} else if currentBlock < params.KawPowForkBlock+params.KQuaiChangeHoldInterval {
+			exchangeRate := new(big.Int).Set(parentExchangeRate)
+			return exchangeRate, nil
+		}
 	}
 
 	// xbStar point of diff indicating the miners/speculators choice is done by

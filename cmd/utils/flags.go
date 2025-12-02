@@ -164,6 +164,7 @@ var RPCFlags = []Flag{
 	PreloadJSFlag,
 	RPCGlobalTxFeeCapFlag,
 	RPCGlobalGasCapFlag,
+	RpcVersion,
 }
 
 var PeersFlags = []Flag{
@@ -724,6 +725,12 @@ var (
 		Name:  c_RPCFlagPrefix + "gascap",
 		Value: quaiconfig.Defaults.RPCGasCap,
 		Usage: "Sets a cap on gas that can be used in eth_call/estimateGas (0=infinite)" + generateEnvDoc(c_RPCFlagPrefix+"gascap"),
+	}
+
+	RpcVersion = Flag{
+		Name:  c_RPCFlagPrefix + "version",
+		Value: "v1",
+		Usage: "RPC version to use (v1)" + generateEnvDoc(c_RPCFlagPrefix+"version"),
 	}
 )
 
@@ -1436,6 +1443,8 @@ func SetQuaiConfig(stack *node.Node, cfg *quaiconfig.Config, slicesRunning []com
 	cfg.IndexAddressUtxos = viper.GetBool(IndexAddressUtxos.Name)
 
 	cfg.TelemetryEnabled = viper.GetBool(Telemetry.Name)
+
+	cfg.RpcVersion = viper.GetString(RpcVersion.Name)
 
 	if viper.IsSet(RPCGlobalGasCapFlag.Name) {
 		cfg.RPCGasCap = viper.GetUint64(RPCGlobalGasCapFlag.Name)

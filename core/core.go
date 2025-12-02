@@ -594,10 +594,6 @@ func (c *Core) SubmitBlock(raw hexutil.Bytes, powId types.PowID) (*types.WorkObj
 		"data": hex.EncodeToString(data),
 	}).Info("SubmitBlock data")
 
-	// Determine block type based on header size
-	// Try SHA/Bitcoin (80 bytes) first, then fall back to KAWPOW (120 bytes)
-	// This is because DecodeRavencoinHeader can successfully parse the first 120 bytes
-	// of a SHA block, leading to false positives.
 	var (
 		auxHeader          *types.AuxPowHeader
 		sealHash           common.Hash
@@ -607,7 +603,8 @@ func (c *Core) SubmitBlock(raw hexutil.Bytes, powId types.PowID) (*types.WorkObj
 		coinbaseTx         []byte
 	)
 
-	if powId == types.Scrypt {
+	switch powId {
+	case types.Scrypt:
 		litecoinHeaderBytes := data[:bitcoinHeaderSize]
 		litecoinHeader := &ltcdwire.BlockHeader{}
 		litecoinErr := litecoinHeader.Deserialize(bytes.NewReader(litecoinHeaderBytes))
@@ -665,7 +662,7 @@ func (c *Core) SubmitBlock(raw hexutil.Bytes, powId types.PowID) (*types.WorkObj
 			auxHeader = types.NewAuxPowHeader(litecoinHeaderWrapper)
 			powType = types.Scrypt
 		}
-	} else if powId == types.SHA_BCH {
+	case types.SHA_BCH:
 		shaHeaderBytes := data[:bitcoinHeaderSize]
 		// Decode using btcd wire protocol
 		shaHeader := &bchdwire.BlockHeader{}
@@ -734,7 +731,7 @@ func (c *Core) SubmitBlock(raw hexutil.Bytes, powId types.PowID) (*types.WorkObj
 				}
 			}
 		}
-	} else if powId == types.Kawpow {
+	case types.Kawpow:
 		rvnHeaderBytes := data[:ravencoinHeaderSize]
 		ravencoinHeader, rvnErr := types.DecodeRavencoinHeader(rvnHeaderBytes)
 		if rvnErr == nil {
@@ -900,26 +897,6 @@ func (c *Core) SubmitBlock(raw hexutil.Bytes, powId types.PowID) (*types.WorkObj
 		"template_coinbaseOut":    hex.EncodeToString(reconTemplate.CoinbaseOut()),
 	}).Info("Received work object with auxpow2")
 
-	if len(workObjectCopy.AuxPow().AuxPow2()) == 32 {
-		expectedAuxMerkleRoot := types.CreateAuxMerkleRoot(common.Hash(workObjectCopy.AuxPow().AuxPow2()), workObjectCopy.SealHash())
-		if expectedAuxMerkleRoot != sealHash {
-			c.logger.WithFields(log.Fields{
-				"expected": expectedAuxMerkleRoot.Hex(),
-				"received": sealHash.Hex(),
-				"auxPow2":  hex.EncodeToString(workObjectCopy.AuxPow().AuxPow2()),
-				"sealHash": workObjectCopy.SealHash().Hex(),
-			}).Error("AuxMerkleRoot mismatch between work object and decoded auxMerkleRoot")
-			return nil, fmt.Errorf("auxMerkleRoot mismatch between work object and decoded auxMerkleRoot")
-		} else {
-			c.logger.WithFields(log.Fields{
-				"expected": expectedAuxMerkleRoot.Hex(),
-				"received": sealHash.Hex(),
-				"auxPow2":  hex.EncodeToString(workObjectCopy.AuxPow().AuxPow2()),
-				"sealHash": workObjectCopy.SealHash().Hex(),
-			}).Info("AuxMerkleRoot matches between work object and decoded auxMerkleRoot")
-		}
-	}
-
 	// Add signature check and merkle root check
 	if !workObjectCopy.AuxPow().ConvertToTemplate().VerifySignature() && !workObjectCopy.WorkObjectHeader().IsShaOrScryptShareWithInvalidAddress() {
 		return nil, fmt.Errorf("invalid auxpow signature")
@@ -936,6 +913,10 @@ func (c *Core) SubmitBlock(raw hexutil.Bytes, powId types.PowID) (*types.WorkObj
 	coinbaseSealHash, err := types.ExtractSealHashFromCoinbase(scryptSig)
 	if err != nil {
 		return nil, fmt.Errorf("coinbase seal hash not found in the auxpow: %v", err)
+	}
+
+	if err := types.ValidatePrevOutPointIndexAndSequenceOfCoinbase(workObjectCopy.AuxPow().Transaction()); err != nil {
+		return nil, fmt.Errorf("invalid prev out point index and sequence in coinbase transaction: %v", err)
 	}
 
 	switch workObjectCopy.AuxPow().PowID() {

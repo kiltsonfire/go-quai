@@ -638,7 +638,7 @@ func (s *PublicBlockChainQuaiAPI) GetProof(ctx context.Context, address common.A
 func (s *PublicBlockChainQuaiAPI) GetHeaderByNumber(ctx context.Context, number rpc.BlockNumber) (map[string]interface{}, error) {
 	header, err := s.b.HeaderByNumber(ctx, number)
 	if header != nil && err == nil {
-		response := header.RPCMarshalHeader()
+		response := header.RPCMarshalHeader(s.b.RpcVersion())
 		if number == rpc.PendingBlockNumber {
 			// Pending header need to nil out a few fields
 			for _, field := range []string{"hash", "nonce", "coinbase"} {
@@ -654,7 +654,7 @@ func (s *PublicBlockChainQuaiAPI) GetHeaderByNumber(ctx context.Context, number 
 func (s *PublicBlockChainQuaiAPI) GetHeaderByHash(ctx context.Context, hash common.Hash) map[string]interface{} {
 	header, _ := s.b.HeaderByHash(ctx, hash)
 	if header != nil {
-		return header.RPCMarshalHeader()
+		return header.RPCMarshalHeader(s.b.RpcVersion())
 	}
 	return nil
 }
@@ -713,7 +713,7 @@ func (s *PublicBlockChainQuaiAPI) GetUncleByBlockNumberAndIndex(ctx context.Cont
 			}).Debug("Requested uncle not found")
 			return nil, nil
 		}
-		return uncles[index].RPCMarshalWorkObjectHeader(), nil
+		return uncles[index].RPCMarshalWorkObjectHeader(s.b.RpcVersion()), nil
 	}
 	return nil, err
 }
@@ -732,7 +732,7 @@ func (s *PublicBlockChainQuaiAPI) GetUncleByBlockHashAndIndex(ctx context.Contex
 			}).Debug("Requested uncle not found")
 			return nil, nil
 		}
-		return uncles[index].RPCMarshalWorkObjectHeader(), nil
+		return uncles[index].RPCMarshalWorkObjectHeader(s.b.RpcVersion()), nil
 	}
 	pendBlock, _ := s.b.PendingBlockAndReceipts()
 	if pendBlock != nil && pendBlock.Hash() == blockHash {
@@ -745,7 +745,7 @@ func (s *PublicBlockChainQuaiAPI) GetUncleByBlockHashAndIndex(ctx context.Contex
 			}).Debug("Requested uncle not found in pending block")
 			return nil, nil
 		}
-		return uncles[index].RPCMarshalWorkObjectHeader(), nil
+		return uncles[index].RPCMarshalWorkObjectHeader(s.b.RpcVersion()), nil
 	}
 	return nil, err
 }
@@ -1008,7 +1008,7 @@ func RPCMarshalBlock(backend Backend, block *types.WorkObject, inclTx bool, full
 	fields := make(map[string]interface{})
 
 	fields["hash"] = block.Hash()
-	fields["woHeader"] = block.WorkObjectHeader().RPCMarshalWorkObjectHeader()
+	fields["woHeader"] = block.WorkObjectHeader().RPCMarshalWorkObjectHeader(backend.RpcVersion())
 	fields["header"] = block.Body().Header().RPCMarshalHeader()
 	fields["size"] = hexutil.Uint64(block.Size())
 	_, order, err := backend.CalcOrder(block)
@@ -1052,7 +1052,7 @@ func RPCMarshalBlock(backend Backend, block *types.WorkObject, inclTx bool, full
 	marshalUncles := make([]map[string]interface{}, 0)
 	marshalWorkShares := make([]map[string]interface{}, 0)
 	for _, uncle := range block.Uncles() {
-		rpcMarshalUncle := uncle.RPCMarshalWorkObjectHeader()
+		rpcMarshalUncle := uncle.RPCMarshalWorkObjectHeader(backend.RpcVersion())
 		validity := backend.UncleWorkShareClassification(uncle)
 
 		switch validity {

@@ -29,7 +29,7 @@ func NewBitcoinCashBlockHeader(version int32, prevBlockHash [32]byte, merkleRoot
 
 func (bch *BitcoinCashHeaderWrapper) PowHash() common.Hash {
 	blockHash := bch.BlockHeader.BlockHash()
-	return common.BytesToHash(reverseBytesCopy(blockHash[:]))
+	return common.BytesToHash(blockHash[:]).Reverse()
 }
 
 func (bch *BitcoinCashHeaderWrapper) Serialize(wr io.Writer) error {

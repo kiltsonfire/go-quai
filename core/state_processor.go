@@ -1146,18 +1146,20 @@ func (p *StateProcessor) Process(block *types.WorkObject, batch ethdb.Batch) (ty
 			for _, uncle := range uncles {
 				var uncleEntropy *big.Int
 				if uncle.NumberU64() == targetBlockNumber {
-					_, err := p.hc.VerifySeal(uncle)
-					if err != nil {
-						uncleEntropy, err = p.hc.HeaderIntrinsicLogEntropy(uncle)
+					if block.PrimeTerminusNumber().Uint64() < params.KawPowForkBlock {
+						_, err := p.hc.VerifySeal(uncle)
 						if err != nil {
-							return nil, nil, nil, nil, 0, 0, 0, nil, nil, errors.New("cannot compute intrinsic log entropy for the workshare")
+							uncleEntropy, err = p.hc.HeaderIntrinsicLogEntropy(uncle)
+							if err != nil {
+								return nil, nil, nil, nil, 0, 0, 0, nil, nil, errors.New("cannot compute intrinsic log entropy for the workshare")
+							}
+							totalEntropy = new(big.Int).Add(totalEntropy, uncleEntropy)
+						} else {
+							// Add the target weight into the uncles
+							target := new(big.Int).Div(common.Big2e256, uncle.Difficulty())
+							uncleEntropy = common.IntrinsicLogEntropy(common.BytesToHash(target.Bytes()))
+							totalEntropy = new(big.Int).Add(totalEntropy, uncleEntropy)
 						}
-						totalEntropy = new(big.Int).Add(totalEntropy, uncleEntropy)
-					} else {
-						// Add the target weight into the uncles
-						target := new(big.Int).Div(common.Big2e256, uncle.Difficulty())
-						uncleEntropy = common.IntrinsicLogEntropy(common.BytesToHash(target.Bytes()))
-						totalEntropy = new(big.Int).Add(totalEntropy, uncleEntropy)
 					}
 
 					if block.PrimeTerminusNumber().Uint64() >= params.KawPowForkBlock {
@@ -1204,7 +1206,7 @@ func (p *StateProcessor) Process(block *types.WorkObject, batch ethdb.Batch) (ty
 		// add half the fees generated in the block
 		blockRewardAtTargetBlock = new(big.Int).Add(blockRewardAtTargetBlock, new(big.Int).Div(targetBlock.TotalFees(), common.Big2))
 
-		rewardPerShare := new(big.Int).Div(blockRewardAtTargetBlock, big.NewInt(int64(params.ExpectedWorksharesPerBlock)))
+		rewardPerShare := new(big.Int).Div(blockRewardAtTargetBlock, big.NewInt(int64(params.ExpectedWorksharesPerBlock+1)))
 
 		// Add an etx for each workshare for it to be rewarded
 		for i, share := range sharesAtTargetBlockDepth {
@@ -1213,6 +1215,9 @@ func (p *StateProcessor) Process(block *types.WorkObject, batch ethdb.Batch) (ty
 			if block.PrimeTerminusNumber().Uint64() < params.KawPowForkBlock {
 				shareReward = new(big.Int).Mul(blockRewardAtTargetBlock, entropyOfSharesAtTargetBlockDepth[i])
 				shareReward = new(big.Int).Div(shareReward, totalEntropy)
+				if shareReward.Cmp(blockRewardAtTargetBlock) > 0 {
+					return nil, nil, nil, nil, 0, 0, 0, nil, nil, errors.New("share reward cannot be greater than the total block reward")
+				}
 			} else {
 
 				shareReward = new(big.Int).Set(rewardPerShare)
@@ -1238,16 +1243,12 @@ func (p *StateProcessor) Process(block *types.WorkObject, batch ethdb.Batch) (ty
 					// the expectation
 					scritSig := types.ExtractScriptSigFromCoinbaseTx(share.AuxPow().Transaction())
 					signatureTime, err := types.ExtractSignatureTimeFromCoinbase(scritSig)
-					if err != nil || signatureTime+params.ShareLivenessTime < uint32(targetBlock.Time()) {
+					if err != nil || signatureTime+params.ShareLivenessTime < share.AuxPow().Header().Timestamp() {
 						shareReward = new(big.Int).Mul(shareReward, params.UnlivelySharePenalty)
 						shareReward = new(big.Int).Div(shareReward, params.ShareRewardPenaltyDivisor)
 					}
 				}
 
-			}
-
-			if shareReward.Cmp(blockRewardAtTargetBlock) > 0 {
-				return nil, nil, nil, nil, 0, 0, 0, nil, nil, errors.New("share reward cannot be greater than the total block reward")
 			}
 
 			uncleCoinbase := share.PrimaryCoinbase()
@@ -1752,6 +1753,10 @@ func ValidateQiTxOutputsAndSignature(tx *types.Transaction, chain ChainContext, 
 	if txFeeInQuai.Cmp(minimumFeeInQuai) < 0 {
 		return nil, fmt.Errorf("tx %032x has insufficient fee for base fee, have %d want %d", tx.Hash(), txFeeInQuai.Uint64(), minimumFeeInQuai.Uint64())
 	}
+	if conversion && (currentHeader.PrimeTerminusNumber().Uint64() > params.KawPowForkBlock &&
+		currentHeader.PrimeTerminusNumber().Uint64() < params.KawPowForkBlock+params.KQuaiChangeHoldInterval) {
+		return nil, fmt.Errorf("tx %032x is a qi to quai conversion transaction  not allowed for kquai hold interval %d after the kawpow fork block", tx.Hash(), params.KQuaiChangeHoldInterval)
+	}
 	if conversion || wrapping {
 		if conversion && wrapping {
 			return nil, fmt.Errorf("tx %032x emits both a conversion and a wrapping UTXO", tx.Hash())
@@ -2033,6 +2038,10 @@ func ProcessQiTx(tx *types.Transaction, chain ChainContext, checkSig bool, isFir
 	txFeeInQuai := misc.QiToQuai(currentHeader, exchangeRate, currentHeader.Difficulty(), txFeeInQit)
 	if txFeeInQuai.Cmp(minimumFeeInQuai) < 0 {
 		return nil, nil, nil, fmt.Errorf("tx %032x has insufficient fee for base fee, have %d want %d", tx.Hash(), txFeeInQuai.Uint64(), minimumFeeInQuai.Uint64()), nil
+	}
+	if conversion && (currentHeader.PrimeTerminusNumber().Uint64() > params.KawPowForkBlock &&
+		currentHeader.PrimeTerminusNumber().Uint64() < params.KawPowForkBlock+params.KQuaiChangeHoldInterval) {
+		return nil, nil, nil, fmt.Errorf("tx %032x is a qi to quai conversion transaction  not allowed for kquai hold interval %d after the kawpow fork block", tx.Hash(), params.KQuaiChangeHoldInterval), nil
 	}
 	if conversion || wrapping {
 		if conversion && wrapping {

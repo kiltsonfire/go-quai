@@ -301,8 +301,8 @@ func TestWorkObjectHashComparison(t *testing.T) {
 		t.Error("Seal hashes should be the SAME (AuxPow is excluded from seal hash)")
 	}
 
-	if hashWithoutAuxPow == hashWithAuxPow {
-		t.Error("Hash cannot be the same as the the block is below the kawpow activation")
+	if hashWithoutAuxPow != hashWithAuxPow {
+		t.Error("Hash should be the same as the the block is below the kawpow activation")
 	}
 
 	t.Logf("Test passed: Seal Hashes are correctly the same (AuxPow excluded from hash)")
@@ -315,7 +315,7 @@ func TestWorkObjectProtoEncodeDecodeWithAuxPow(t *testing.T) {
 	parentHash := common.HexToHash("0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890")
 	number := big.NewInt(12345)
 	difficulty := big.NewInt(1000000)
-	primeTerminusNumber := big.NewInt(100)
+	primeTerminusNumber := big.NewInt(int64(params.KawPowForkBlock))
 	txHash := common.HexToHash("0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
 	nonce := BlockNonce{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
 	lock := uint8(1)
@@ -496,7 +496,7 @@ func TestThreeScenarioCompatibility(t *testing.T) {
 	parentHash := common.HexToHash("0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890")
 	number := big.NewInt(12345)
 	difficulty := big.NewInt(1000000)
-	primeTerminusNumber := big.NewInt(100)
+	primeTerminusNumber := big.NewInt(int64(params.KawPowForkBlock))
 	txHash := common.HexToHash("0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
 	nonce := BlockNonce{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
 	lock := uint8(1)

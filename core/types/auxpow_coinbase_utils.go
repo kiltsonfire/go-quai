@@ -302,42 +302,6 @@ func CalculateMerkleRoot(powId PowID, coinbaseTx []byte, merkleBranch [][]byte) 
 	}
 }
 
-// ExtractMerkleBranch extracts the merkle branch for the coinbase (index 0)
-// from a complete merkle tree
-func ExtractMerkleBranch(merkleTree []*chainhash.Hash, txCount int) [][]byte {
-	if len(merkleTree) == 0 || txCount == 0 {
-		return nil
-	}
-
-	var branch [][]byte
-
-	// blockchain.BuildMerkleTreeStore lays out the tree level-by-level using a
-	// power-of-two leaf width. Determine that width so we can walk the levels.
-	width := 1
-	for width < txCount {
-		width <<= 1
-	}
-
-	index := 0
-	levelOffset := 0
-	levelWidth := width
-
-	for levelWidth > 1 {
-		siblingIndex := index ^ 1
-		siblingPos := levelOffset + siblingIndex
-		if siblingIndex >= levelWidth || siblingPos >= len(merkleTree) || merkleTree[siblingPos] == nil {
-			siblingPos = levelOffset + index
-		}
-		branch = append(branch, merkleTree[siblingPos][:])
-
-		levelOffset += levelWidth
-		index >>= 1
-		levelWidth >>= 1
-	}
-
-	return branch
-}
-
 // encodeHeightForBIP34 encodes block height in minimal little-endian format
 // This matches Bitcoin's CScriptNum serialization used for BIP34 compliance.
 // The height must be encoded with the minimum number of bytes required.
@@ -362,7 +326,6 @@ func encodeHeightForBIP34(height uint32) []byte {
 	return result
 }
 
-// TODO: Replace with a method from btcd/ltcd/bchd if available
 // readVarInt decodes Bitcoin-style VarInts and returns the decoded value along with the number of bytes consumed.
 func readVarInt(buf *bytes.Reader) (uint64, int, error) {
 	b, err := buf.ReadByte()
@@ -474,6 +437,72 @@ func ExtractCoinbaseOutFromCoinbaseTx(coinbaseTx []byte) []byte {
 	return coinbaseTx[outputsStart:]
 }
 
+// ValidatePrevOutPointIndexAndSequenceOfCoinbase validates the tx in part of the coinbase transaction
+// 1) Number of inputs must be 1
+// 2) prev_txid must be all zeros
+// 3) prev_vout must be 0xffffffff
+// 4) sequence must be 0xffffffff
+func ValidatePrevOutPointIndexAndSequenceOfCoinbase(coinbaseTx []byte) error {
+	r := bytes.NewReader(coinbaseTx)
+
+	// Skip version
+	if _, err := r.Seek(4, io.SeekStart); err != nil {
+		return err
+	}
+
+	// Input count also has to be 1 for a valid coinbase transaction
+	inputCount, _, err := readVarInt(r)
+	if err != nil {
+		return err
+	}
+	if inputCount != 1 {
+		return errors.New("coinbase transaction must have exactly one input")
+	}
+
+	// Read prev_txid (32 bytes)
+	prevTxid := make([]byte, 32)
+	if _, err := io.ReadFull(r, prevTxid); err != nil {
+		return err
+	}
+	for _, b := range prevTxid {
+		if b != 0 {
+			return errors.New("prev_txid in coinbase input must be all zeros")
+		}
+	}
+
+	// Read prev_vout (4 bytes)
+	var prevVout uint32
+	if err := binary.Read(r, binary.LittleEndian, &prevVout); err != nil {
+		return err
+	}
+	if prevVout != 0xffffffff {
+		return errors.New("prev_vout in coinbase input must be 0xffffffff")
+	}
+
+	// Skip scriptSig
+	scriptLen, _, err := readVarInt(r)
+	if err != nil {
+		return err
+	}
+	if int64(scriptLen) < 0 || scriptLen > uint64(r.Len()) {
+		return errors.New("invalid scriptSig length in coinbase input")
+	}
+	if _, err := r.Seek(int64(scriptLen), io.SeekCurrent); err != nil {
+		return err
+	}
+
+	// Read sequence (4 bytes)
+	var sequence uint32
+	if err := binary.Read(r, binary.LittleEndian, &sequence); err != nil {
+		return err
+	}
+	if sequence != 0xffffffff {
+		return errors.New("sequence in coinbase input must be 0xffffffff")
+	}
+
+	return nil
+}
+
 // ExtractHeightFromCoinbase extracts the block height from the coinbase scriptSig.
 // The height is encoded at the beginning of the scriptSig using BIP34 minimal encoding.
 // Format:
@@ -569,8 +598,8 @@ func CreateAuxMerkleRoot(dogeHash common.Hash, quaiSealHash common.Hash) common.
 
 	// Reverse the bytes of each chain's block hash before inserting
 	// (This is required by the merged mining spec)
-	dogeHashReversed := reverseBytesCopy(dogeHash[:])
-	quaiHashReversed := reverseBytesCopy(quaiSealHash[:])
+	dogeHashReversed := dogeHash.Reverse().Bytes()
+	quaiHashReversed := quaiSealHash.Reverse().Bytes()
 
 	leaves[dogeSlot] = dogeHashReversed
 	leaves[quaiSlot] = quaiHashReversed
@@ -596,7 +625,7 @@ func CreateAuxMerkleRoot(dogeHash common.Hash, quaiSealHash common.Hash) common.
 
 	// Reverse the bytes of the merkle root before returning
 	// (Required by the merged mining spec for coinbase insertion)
-	merkleRootReversed := reverseBytesCopy(merkleRoot)
+	merkleRootReversed := common.BytesToHash(merkleRoot).Reverse().Bytes()
 
 	return common.BytesToHash(merkleRootReversed)
 }

@@ -376,7 +376,7 @@ func DefaultLighthouseGenesisBlock(consensusEngine string, nonce uint64, extra [
 		Nonce:      nonce,
 		ExtraData:  extra,
 		GasLimit:   12000000,
-		Difficulty: big.NewInt(300000000),
+		Difficulty: big.NewInt(750000000),
 	}
 	if consensusEngine == "blake3" {
 		genesis.Config = params.Blake3PowLighthouseChainConfig

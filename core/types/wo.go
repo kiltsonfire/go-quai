@@ -123,6 +123,19 @@ func (p *PowShareDiffAndCount) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+func (p *PowShareDiffAndCount) Cmp(other *PowShareDiffAndCount) bool {
+	if p == nil || other == nil {
+		return false
+	}
+	if p.difficulty == nil || other.difficulty == nil {
+		return false
+	}
+	if p.count == nil || other.count == nil {
+		return false
+	}
+	return p.difficulty.Cmp(other.difficulty) == 0 && p.count.Cmp(other.count) == 0
+}
+
 func (p *PowShareDiffAndCount) Clone() *PowShareDiffAndCount {
 	var difficulty *big.Int
 	if p.difficulty != nil {
@@ -1105,12 +1118,12 @@ func CopyWorkObject(wo *WorkObject) *WorkObject {
 	}
 	return newWo
 }
-func (wo *WorkObject) RPCMarshalWorkObject() map[string]interface{} {
+func (wo *WorkObject) RPCMarshalWorkObject(rpcVersion string) map[string]interface{} {
 	result := map[string]interface{}{
-		"woHeader": wo.woHeader.RPCMarshalWorkObjectHeader(),
+		"woHeader": wo.woHeader.RPCMarshalWorkObjectHeader(rpcVersion),
 	}
 	if wo.woBody != nil {
-		result["woBody"] = wo.woBody.RPCMarshalWorkObjectBody()
+		result["woBody"] = wo.woBody.RPCMarshalWorkObjectBody(rpcVersion)
 	}
 	if wo.tx != nil {
 		result["tx"] = wo.tx
@@ -1120,12 +1133,12 @@ func (wo *WorkObject) RPCMarshalWorkObject() map[string]interface{} {
 
 // RPCMarshalHeader returns a flattened header and woHeader as part of the
 // header response
-func (wo *WorkObject) RPCMarshalHeader() map[string]interface{} {
+func (wo *WorkObject) RPCMarshalHeader(rpcVersion string) map[string]interface{} {
 	result := make(map[string]interface{})
 	if wo.woBody != nil && wo.woBody.header != nil {
 		result = wo.woBody.Header().RPCMarshalHeader()
 	}
-	result["woHeader"] = wo.woHeader.RPCMarshalWorkObjectHeader()
+	result["woHeader"] = wo.woHeader.RPCMarshalWorkObjectHeader(rpcVersion)
 	return result
 }
 
@@ -1330,7 +1343,7 @@ func CopyWorkObjectHeader(wh *WorkObjectHeader) *WorkObjectHeader {
 	return &cpy
 }
 
-func (wh *WorkObjectHeader) RPCMarshalWorkObjectHeader() map[string]interface{} {
+func (wh *WorkObjectHeader) RPCMarshalWorkObjectHeader(rpcVersion string) map[string]interface{} {
 	result := map[string]interface{}{
 		"hash":                wh.Hash(),
 		"headerHash":          wh.HeaderHash(),
@@ -1348,24 +1361,31 @@ func (wh *WorkObjectHeader) RPCMarshalWorkObjectHeader() map[string]interface{} 
 		"data":                hexutil.Bytes(wh.Data()),
 	}
 
-	// Include AuxPow if present
-	if wh.AuxPow() != nil {
-		result["auxpow"] = wh.AuxPow().RPCMarshal()
+	// For v1 RPC, do not include AuxPow and related fields
+	if rpcVersion == "v1" {
+		return result
 	}
-	if wh.ShaDiffAndCount() != nil {
-		result["shaDiffAndCount"] = wh.ShaDiffAndCount().RPCMarshal()
-	}
-	if wh.ScryptDiffAndCount() != nil {
-		result["scryptDiffAndCount"] = wh.ScryptDiffAndCount().RPCMarshal()
-	}
-	if wh.ShaShareTarget() != nil {
-		result["shaShareTarget"] = (*hexutil.Big)(wh.ShaShareTarget())
-	}
-	if wh.ScryptShareTarget() != nil {
-		result["scryptShareTarget"] = (*hexutil.Big)(wh.ScryptShareTarget())
-	}
-	if wh.KawpowDifficulty() != nil {
-		result["kawpowDifficulty"] = (*hexutil.Big)(wh.KawpowDifficulty())
+
+	if rpcVersion == "v2" {
+		// Include AuxPow if present
+		if wh.AuxPow() != nil {
+			result["auxpow"] = wh.AuxPow().RPCMarshal()
+		}
+		if wh.ShaDiffAndCount() != nil {
+			result["shaDiffAndCount"] = wh.ShaDiffAndCount().RPCMarshal()
+		}
+		if wh.ScryptDiffAndCount() != nil {
+			result["scryptDiffAndCount"] = wh.ScryptDiffAndCount().RPCMarshal()
+		}
+		if wh.ShaShareTarget() != nil {
+			result["shaShareTarget"] = (*hexutil.Big)(wh.ShaShareTarget())
+		}
+		if wh.ScryptShareTarget() != nil {
+			result["scryptShareTarget"] = (*hexutil.Big)(wh.ScryptShareTarget())
+		}
+		if wh.KawpowDifficulty() != nil {
+			result["kawpowDifficulty"] = (*hexutil.Big)(wh.KawpowDifficulty())
+		}
 	}
 
 	return result
@@ -1751,7 +1771,7 @@ func (wb *WorkObjectBody) ProtoDecodeHeader(data *ProtoWorkObjectBody, location 
 	return wb.header.ProtoDecode(data.GetHeader(), location)
 }
 
-func (wb *WorkObjectBody) RPCMarshalWorkObjectBody() map[string]interface{} {
+func (wb *WorkObjectBody) RPCMarshalWorkObjectBody(rpcVersion string) map[string]interface{} {
 	result := map[string]interface{}{
 		"header":          wb.header.RPCMarshalHeader(),
 		"transactions":    wb.Transactions(),
@@ -1762,7 +1782,7 @@ func (wb *WorkObjectBody) RPCMarshalWorkObjectBody() map[string]interface{} {
 
 	workedUncles := make([]map[string]interface{}, len(wb.Uncles()))
 	for i, uncle := range wb.Uncles() {
-		workedUncles[i] = uncle.RPCMarshalWorkObjectHeader()
+		workedUncles[i] = uncle.RPCMarshalWorkObjectHeader(rpcVersion)
 	}
 	result["uncles"] = workedUncles
 

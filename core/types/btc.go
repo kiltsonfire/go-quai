@@ -20,7 +20,7 @@ func NewBitcoinHeaderWrapper(header *btcdwire.BlockHeader) *BitcoinHeaderWrapper
 
 func (bth *BitcoinHeaderWrapper) PowHash() common.Hash {
 	blockHash := bth.BlockHeader.BlockHash()
-	return common.BytesToHash(reverseBytesCopy(blockHash[:]))
+	return common.BytesToHash(blockHash[:]).Reverse()
 }
 
 func (bth *BitcoinHeaderWrapper) Serialize(wr io.Writer) error {

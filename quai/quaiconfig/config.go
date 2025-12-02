@@ -167,6 +167,9 @@ type Config struct {
 	// TelemetryEnabled enables or disables telemetry reporting
 	TelemetryEnabled bool
 
+	// RpcVersion is the RPC version to use
+	RpcVersion string
+
 	// DefaultGenesisHash is the hard coded genesis hash
 	DefaultGenesisHash common.Hash
 }

@@ -21,7 +21,7 @@ func NewLitecoinHeaderWrapper(header *ltcdwire.BlockHeader) *LitecoinHeaderWrapp
 
 func (ltc *LitecoinHeaderWrapper) PowHash() common.Hash {
 	blockHash := ltc.BlockHeader.PowHash()
-	return common.BytesToHash(reverseBytesCopy(blockHash[:]))
+	return common.BytesToHash(blockHash[:]).Reverse()
 }
 
 func (ltc *LitecoinHeaderWrapper) Serialize(wr io.Writer) error {
